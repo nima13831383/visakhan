@@ -24,7 +24,7 @@ class Didar_Ajax {
 		if ( ! current_user_can( 'create_didar_submissions' ) ) {
 			wp_send_json_error( array( 'message' => __( 'شما اجازه انجام این کار را ندارید.', 'didar' ) ), 403 );
 		}
-		$type = isset( $_POST['form_type'] ) ? sanitize_key( wp_unslash( $_POST['form_type'] ) ) : '';
+		$type = isset( $_POST['form_type'] ) && ! is_array( $_POST['form_type'] ) ? sanitize_key( wp_unslash( $_POST['form_type'] ) ) : '';
 		$form = $this->registry->get( $type );
 		if ( ! $form ) {
 			wp_send_json_error( array( 'message' => __( 'نوع فرم نامعتبر است.', 'didar' ) ), 400 );
@@ -43,8 +43,8 @@ class Didar_Ajax {
 			wp_send_json_error( array( 'message' => __( 'نشست شما منقضی شده است؛ صفحه را تازه‌سازی کنید.', 'didar' ) ), 403 );
 		}
 
-		$type       = isset( $_POST['form_type'] ) ? sanitize_key( wp_unslash( $_POST['form_type'] ) ) : '';
-		$field_name = isset( $_POST['field'] ) ? sanitize_key( wp_unslash( $_POST['field'] ) ) : '';
+		$type       = isset( $_POST['form_type'] ) && ! is_array( $_POST['form_type'] ) ? sanitize_key( wp_unslash( $_POST['form_type'] ) ) : '';
+		$field_name = isset( $_POST['field'] ) && ! is_array( $_POST['field'] ) ? sanitize_key( wp_unslash( $_POST['field'] ) ) : '';
 		$fields     = $this->registry->fields( $type );
 		if ( ! $this->registry->is_valid_type( $type ) || ! isset( $fields[ $field_name ] ) || 'file' !== $fields[ $field_name ]['type'] ) {
 			wp_send_json_error( array( 'message' => __( 'فیلد فایل معتبر نیست.', 'didar' ) ), 400 );

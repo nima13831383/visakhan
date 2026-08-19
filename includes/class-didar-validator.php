@@ -229,7 +229,10 @@ class Didar_Validator {
 			}
 		}
 		if ( 'admin' === $context && ! current_user_can( 'edit_post', $attachment_id ) && $owner !== get_current_user_id() ) {
-			return new WP_Error( 'invalid_attachment_owner', __( 'شما اجازه استفاده از این فایل را ندارید.', 'didar' ) );
+			$attached_submission = absint( get_post_meta( $attachment_id, '_didar_submission_id', true ) );
+			if ( ! $submission_id || $attached_submission !== (int) $submission_id || ! current_user_can( 'edit_post', $submission_id ) ) {
+				return new WP_Error( 'invalid_attachment_owner', __( 'شما اجازه استفاده از این فایل را ندارید.', 'didar' ) );
+			}
 		}
 		$allowed = isset( $field['mime_types'] ) ? (array) $field['mime_types'] : array( 'image/jpeg', 'image/png', 'application/pdf' );
 		if ( ! in_array( get_post_mime_type( $attachment_id ), $allowed, true ) ) {

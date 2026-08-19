@@ -54,30 +54,6 @@ class Didar_Post_Type {
 	}
 
 	public static function add_administrator_capabilities() {
-		$role = get_role( 'administrator' );
-		if ( ! $role ) {
-			return;
-		}
-
-		$caps = array(
-			'read_didar_submission',
-			'read_private_didar_submissions',
-			'edit_didar_submission',
-			'edit_didar_submissions',
-			'edit_others_didar_submissions',
-			'edit_private_didar_submissions',
-			'edit_published_didar_submissions',
-			'publish_didar_submissions',
-			'delete_didar_submission',
-			'delete_didar_submissions',
-			'delete_others_didar_submissions',
-			'delete_private_didar_submissions',
-			'delete_published_didar_submissions',
-			'create_didar_submissions',
-		);
-
-		foreach ( $caps as $cap ) {
-			$role->add_cap( $cap );
-		}
+		Didar_Access_Control::install_roles_and_capabilities();
 	}
 }

@@ -1947,3 +1947,27 @@ Extensible
 ```
 
 with `FORMS.txt` serving as the authoritative specification for the current forms and their business fields.
+
+---
+
+# 73. Didar Roles and Capabilities
+
+Didar authorization must use capabilities rather than direct role-name comparisons. The stable custom roles are `didar_colleague` and `didar_broker`. Brokers receive only Didar request-management access; Colleagues remain frontend-only. Role/capability upgrades must be idempotent and must also run for already-active installations.
+
+---
+
+# 74. Public and Internal Workflow Separation
+
+Public Status/Public Note and Internal Status/Internal Note are separate data classes. Normal customers may receive only public workflow data. A Colleague may receive internal workflow data only for a submission whose authenticated owner/creator is that Colleague. Enforce this separation while constructing server responses, not with CSS or JavaScript.
+
+---
+
+# 75. Ownership and Assignment
+
+Frontend authorization is based on authenticated WordPress ownership (`post_author` in the current architecture), never applicant form fields. Preserve immutable creator attribution separately where ownership may be administratively changed. Assignment is optional and a non-empty assignee must have the Didar capability that marks an authorized request recipient.
+
+---
+
+# 76. Append-Only Audit History
+
+Meaningful submission and workflow changes must create structured append-only audit events with a server-derived actor ID and server timestamp. Current submission metadata remains authoritative; do not convert the application to strict event sourcing. Do not store an indefinitely growing history in one serialized post-meta value or rewrite prior events during normal editing.
