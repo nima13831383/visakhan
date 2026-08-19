@@ -11,7 +11,7 @@ class Didar_Validator {
 		$this->registry = $registry;
 	}
 
-	public function validate( $form_type, $submitted, $context = 'frontend' ) {
+	public function validate( $form_type, $submitted, $context = 'frontend', $submission_id = 0 ) {
 		$form = $this->registry->get( $form_type );
 		if ( ! $form ) {
 			return array( 'valid' => false, 'data' => array(), 'errors' => array( '_form' => __( 'نوع فرم نامعتبر است.', 'didar' ) ) );
@@ -35,7 +35,7 @@ class Didar_Validator {
 				continue;
 			}
 
-			$result = $this->validate_field( $field, $raw, $context );
+			$result = $this->validate_field( $field, $raw, $context, $submission_id );
 			if ( is_wp_error( $result ) ) {
 				$errors[ $name ] = $result->get_error_message();
 				continue;
@@ -46,7 +46,7 @@ class Didar_Validator {
 		return array( 'valid' => empty( $errors ), 'data' => $data, 'errors' => $errors );
 	}
 
-	private function validate_field( $field, $raw, $context ) {
+	private function validate_field( $field, $raw, $context, $submission_id = 0 ) {
 		$type     = $field['type'];
 		$required = ! empty( $field['required'] );
 		$label    = $field['label'];
@@ -157,7 +157,7 @@ class Didar_Validator {
 			case 'repeater':
 				return $this->validate_repeater( $field, $raw );
 			case 'file':
-				return $this->validate_attachment( $field, $raw, $context );
+				return $this->validate_attachment( $field, $raw, $context, $submission_id );
 			case 'hidden':
 			case 'text':
 			default:
@@ -199,7 +199,7 @@ class Didar_Validator {
 		return $rows;
 	}
 
-	private function validate_attachment( $field, $raw, $context ) {
+	private function validate_attachment( $field, $raw, $context, $submission_id = 0 ) {
 		$attachment_id = absint( $raw );
 		if ( ! $attachment_id ) {
 			return '';
@@ -217,7 +217,16 @@ class Didar_Validator {
 			}
 		}
 		if ( 'admin' !== $context && $owner !== get_current_user_id() ) {
-			return new WP_Error( 'invalid_attachment_owner', __( 'شما اجازه استفاده از این فایل را ندارید.', 'didar' ) );
+			$attached_submission = absint( get_post_meta( $attachment_id, '_didar_submission_id', true ) );
+			$owned_submission    = $submission_id ? get_post( $submission_id ) : null;
+			if (
+				! $owned_submission ||
+				Didar_Post_Type::POST_TYPE !== $owned_submission->post_type ||
+				(int) $owned_submission->post_author !== get_current_user_id() ||
+				$attached_submission !== (int) $submission_id
+			) {
+				return new WP_Error( 'invalid_attachment_owner', __( 'شما اجازه استفاده از این فایل را ندارید.', 'didar' ) );
+			}
 		}
 		if ( 'admin' === $context && ! current_user_can( 'edit_post', $attachment_id ) && $owner !== get_current_user_id() ) {
 			return new WP_Error( 'invalid_attachment_owner', __( 'شما اجازه استفاده از این فایل را ندارید.', 'didar' ) );

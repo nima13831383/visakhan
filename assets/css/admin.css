@@ -26,6 +26,18 @@
   width: 100%;
 }
 
+.didar-admin-notes textarea {
+  border-color: #d7d7d7;
+  border-radius: 7px;
+  display: block;
+  margin: 7px 0;
+  max-width: 100%;
+  min-height: 120px;
+  width: 100%;
+}
+
+.didar-admin-notes .description { display: block; }
+
 .didar-admin-wrap .didar-section {
   background: var(--didar-admin-surface);
   border: 1px solid var(--didar-admin-border);
