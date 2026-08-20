@@ -9,6 +9,10 @@ class Didar_Form_Registry {
 
 	public function __construct() {
 		$this->forms = $this->build_forms();
+		foreach ( $this->forms as $type => &$form ) {
+			$form['type'] = $type;
+		}
+		unset( $form );
 	}
 
 	public function all() {
@@ -40,6 +44,25 @@ class Didar_Form_Registry {
 		return $fields;
 	}
 
+	/**
+	 * Return definitions used only to label and format inactive historical data.
+	 *
+	 * Legacy fields never participate in active rendering, validation, or saving.
+	 */
+	public function legacy_fields( $type ) {
+		$form = $this->get( $type );
+		if ( ! $form || empty( $form['legacy_fields'] ) || ! is_array( $form['legacy_fields'] ) ) {
+			return array();
+		}
+
+		$fields = array();
+		foreach ( $form['legacy_fields'] as $field ) {
+			$field['form_type']       = sanitize_key( $type );
+			$fields[ $field['name'] ] = $field;
+		}
+		return $fields;
+	}
+
 	private function field( $name, $label, $type = 'text', $required = false, $extra = array() ) {
 		return array_merge(
 			array(
@@ -61,6 +84,29 @@ class Didar_Form_Registry {
 
 	private function build_forms() {
 		$yes_no = Didar_Reference_Data::yes_no();
+		$visa_document_upload = array(
+			'multiple'     => true,
+			'max_files'    => 2,
+			'max_size'     => 5 * MB_IN_BYTES,
+			'accept'       => '.pdf,.doc,.docx,.jpg,.jpeg,.png,.webp',
+			'upload_mimes' => array(
+				'pdf'      => 'application/pdf',
+				'doc'      => 'application/msword',
+				'docx'     => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+				'jpg|jpeg' => 'image/jpeg',
+				'png'      => 'image/png',
+				'webp'     => 'image/webp',
+			),
+			'mime_types'  => array(
+				'application/pdf',
+				'application/msword',
+				'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+				'image/jpeg',
+				'image/png',
+				'image/webp',
+			),
+			'description' => 'فرمت‌های مجاز: PDF، Word، JPG، PNG و WEBP. حداکثر ۲ فایل و ۵ مگابایت برای هر فایل.',
+		);
 
 		$country_lists = array(
 			'embassy_appointment' => Didar_Reference_Data::countries_for_form( 'embassy_appointment' ),
@@ -69,7 +115,6 @@ class Didar_Form_Registry {
 		);
 		$occupation_lists = array(
 			'embassy_appointment' => Didar_Reference_Data::occupations_for_form( 'embassy_appointment' ),
-			'traveler_evaluation' => Didar_Reference_Data::occupations_for_form( 'traveler_evaluation' ),
 			'visa_request'        => Didar_Reference_Data::occupations_for_form( 'visa_request' ),
 		);
 		$academic_level_lists = array(
@@ -83,14 +128,20 @@ class Didar_Form_Registry {
 				'default_status' => 'pending_review',
 				'sections'       => array(
 					'main' => $this->section( 'اطلاعات مشاوره', array(
-						$this->field( 'input_1', 'نام و نام خانوادگی', 'text', true, array( 'autocomplete' => 'name' ) ),
+						$this->field( 'first_name', 'نام', 'text', true, array( 'autocomplete' => 'given-name', 'legacy_required_fallback' => 'input_1' ) ),
+						$this->field( 'last_name', 'نام خانوادگی', 'text', true, array( 'autocomplete' => 'family-name', 'legacy_required_fallback' => 'input_1' ) ),
 						$this->field( 'input_3', 'شماره همراه', 'text', true, array( 'autocomplete' => 'tel', 'inputmode' => 'tel' ) ),
-						$this->field( 'input_4', 'وضعیت تاهل', 'radio', true, array( 'options' => array( 'mojarad' => 'مجرد', 'motahal' => 'متاهل', 'motlage' => 'مطلقه', 'fothamsar' => 'همسر فوت شده' ) ) ),
-						$this->field( 'input_5', 'موضوع مشاوره', 'radio', true, array( 'options' => array( 'torist' => 'ویزای توریستی', 'tahsil' => 'ویزای تحصیلی', 'kari' => 'ویزای کاری', 'tamlik' => 'اقامت به شرط تملیک', 'sarmae' => 'اقامت به شرط سرمایه گذاری', 'melk' => 'اقامت خرید ملک' ) ) ),
-						$this->field( 'input_6', 'نوع مشاوره', 'radio', true, array( 'options' => array( 'hosori' => 'حضوری', 'telfoni' => 'غیرحضوری (تلفنی)' ) ) ),
-						$this->field( 'input_7', 'تاریخ مشاوره', 'date' ),
-						$this->field( 'input_8', 'زمان مشاوره', 'time', false, array( 'multiple' => true, 'max_items' => 8 ) ),
+						$this->field( 'email', 'ایمیل', 'email', false, array( 'autocomplete' => 'email' ) ),
+						$this->field( 'input_5', 'موضوع مشاوره', 'text', true, array( 'legacy_display_options' => array( 'torist' => 'ویزای توریستی', 'tahsil' => 'ویزای تحصیلی', 'kari' => 'ویزای کاری', 'tamlik' => 'اقامت به شرط تملیک', 'sarmae' => 'اقامت به شرط سرمایه گذاری', 'melk' => 'اقامت خرید ملک' ) ) ),
+						$this->field( 'description', 'توضیحات', 'textarea' ),
 					) ),
+				),
+				'legacy_fields'  => array(
+					$this->field( 'input_1', 'نام و نام خانوادگی', 'text', true ),
+					$this->field( 'input_4', 'وضعیت تاهل', 'radio', true, array( 'options' => array( 'mojarad' => 'مجرد', 'motahal' => 'متاهل', 'motlage' => 'مطلقه', 'fothamsar' => 'همسر فوت شده' ) ) ),
+					$this->field( 'input_6', 'نوع مشاوره', 'radio', true, array( 'options' => array( 'hosori' => 'حضوری', 'telfoni' => 'غیرحضوری (تلفنی)' ) ) ),
+					$this->field( 'input_7', 'تاریخ مشاوره', 'date' ),
+					$this->field( 'input_8', 'زمان مشاوره', 'time', false, array( 'multiple' => true, 'max_items' => 8 ) ),
 				),
 			),
 
@@ -152,7 +203,7 @@ class Didar_Form_Registry {
 						$this->field( 'secondary_email', 'ایمیل', 'email' ), $this->field( 'other_residency_passport', 'اقامت و پاسپورت کشور دیگر', 'select', false, array( 'options' => array( 'have' => 'دارم', 'do_not_have' => 'ندارم' ) ) ),
 					) ),
 					'employment' => $this->section( 'شغل و محل کار', array(
-						$this->field( 'current_job', 'شغل کنونی', 'select', false, array( 'options' => $occupation_lists['traveler_evaluation'], 'allow_legacy' => true, 'searchable' => true ) ), $this->field( 'work_address', 'نشانی محل کار', 'textarea' ), $this->field( 'employer_name', 'نام کارفرما/شرکت/ مدرسه' ), $this->field( 'work_postal_code', 'کدپستی محل کار', 'text', false, array( 'inputmode' => 'numeric' ) ), $this->field( 'employer_phone', 'تلفن کارفرما/شرکت/ مدرسه', 'text', false, array( 'inputmode' => 'tel' ) ), $this->field( 'employer_email', 'ایمیل کارفرما/شرکت/ مدرسه', 'email' ),
+						$this->field( 'current_job', 'شغل کنونی', 'text' ), $this->field( 'work_address', 'نشانی محل کار', 'textarea' ), $this->field( 'employer_name', 'نام کارفرما/شرکت/ مدرسه' ), $this->field( 'work_postal_code', 'کدپستی محل کار', 'text', false, array( 'inputmode' => 'numeric' ) ), $this->field( 'employer_phone', 'تلفن کارفرما/شرکت/ مدرسه', 'text', false, array( 'inputmode' => 'tel' ) ), $this->field( 'employer_email', 'ایمیل کارفرما/شرکت/ مدرسه', 'email' ),
 					) ),
 					'travel_purpose' => $this->section( 'هدف سفر', array(
 						$this->field( 'travel_purpose', 'هدف از سفر', 'checkbox', false, array( 'multiple' => true, 'options' => array( 'tourism' => 'توریستی', 'business' => 'تجاری', 'family_friends' => 'بازدید از خانواده و دوستان', 'historical' => 'تاریخی', 'sports' => 'ورزشی', 'official' => 'ملاقات رسمی', 'medical' => 'دلیل پزشکی', 'study' => 'تحصیلی', 'airport_transit' => 'ترانزیت فرودگاهی', 'other' => 'موارد دیگر' ) ) ),
@@ -206,6 +257,12 @@ class Didar_Form_Registry {
 					'travel_documents' => $this->section( 'مدارک سفر', array(
 						$this->field( 'passport_number', 'شماره گذرنامه' ), $this->field( 'passport_expiry', 'تاریخ انقضای گذرنامه', 'date' ), $this->field( 'passport_issuer_country', 'کشور صادرکننده پاسپورت', 'select', false, array( 'options' => $country_lists['visa_request'] ) ), $this->field( 'travel_destination', 'مقصد سفر', 'select', false, array( 'options' => $country_lists['visa_request'] ) ),
 					) ),
+					'documents' => $this->section( 'مدارک', array(
+						$this->field( 'personal_photo', 'عکس شخصی', 'file', false, $visa_document_upload ),
+						$this->field( 'passport_main_page', 'صفحه اصلی گذرنامه', 'file', false, $visa_document_upload ),
+						$this->field( 'round_trip_ticket', 'بلیط رفت و برگشت', 'file', false, $visa_document_upload ),
+						$this->field( 'other_documents', 'سایر مدارک', 'file', false, $visa_document_upload ),
+					) ),
 					'financial' => $this->section( 'وضعیت مالی و دارایی‌ها', array(
 						$this->field( 'account_balance', 'مانده حساب (تومان)', 'number', false, array( 'min' => 0 ) ), $this->field( 'six_month_turnover', 'مجموع گردش ۶ ماهه', 'number', false, array( 'min' => 0 ) ), $this->field( 'has_foreign_currency_account', 'دارای حساب ارزی هستید؟', 'radio', false, array( 'options' => $yes_no ) ), $this->field( 'has_property_deed', 'سند ملکی به نام متقاضی', 'radio', false, array( 'options' => $yes_no ) ),
 						$this->field( 'passive_income', 'درآمد غیرفعال', 'checkbox', false, array( 'multiple' => true, 'options' => array( 'rent' => 'اجاره ملک', 'bank_deposit' => 'سپرده بانکی', 'stock_market' => 'بورس', 'other' => 'سایر' ) ) ),
@@ -219,7 +276,14 @@ class Didar_Form_Registry {
 						$this->field( 'has_rejection', 'سابقه ریجکتی', 'radio', false, array( 'options' => $yes_no ) ), $this->field( 'rejection_embassy', 'نام سفارت ریجکت‌کننده' ), $this->field( 'rejection_date', 'تاریخ ریجکتی', 'date' ), $this->field( 'has_previous_schengen', 'سابقه ویزای شنگن قبلی', 'radio', false, array( 'options' => $yes_no ) ), $this->field( 'previous_schengen_country', 'نام کشور ویزای شنگن قبلی', 'select', false, array( 'options' => $country_lists['visa_request'] ) ), $this->field( 'previous_schengen_date', 'تاریخ ویزای شنگن قبلی', 'date' ), $this->field( 'estimated_travel_date', 'تاریخ حدودی سفر', 'date' ), $this->field( 'schengen_exit_place', 'محل خروج از شنگن (کشور/شهر)' ),
 					) ),
 					'companions' => $this->section( 'همراهان', array(
-						$this->field( 'companions', 'لیست همراهان', 'repeater', false, array( 'max_items' => 20, 'columns' => array( 'full_name' => 'نام و نام خانوادگی', 'age' => 'سن', 'occupation' => array( 'label' => 'شغل', 'type' => 'select', 'options' => $occupation_lists['visa_request'] ) ) ) ),
+						$this->field( 'companions', 'لیست همراهان', 'repeater', false, array( 'max_items' => 20, 'columns' => array(
+							'full_name'   => array( 'label' => 'نام و نام خانوادگی', 'type' => 'text' ),
+							'age'         => array( 'label' => 'سن', 'type' => 'text', 'inputmode' => 'numeric' ),
+							'occupation'  => array( 'label' => 'شغل', 'type' => 'select', 'options' => $occupation_lists['visa_request'] ),
+							'national_id' => array( 'label' => 'کد ملی', 'type' => 'text', 'inputmode' => 'numeric' ),
+							'email'       => array( 'label' => 'ایمیل', 'type' => 'email', 'autocomplete' => 'email' ),
+							'phone'       => array( 'label' => 'شماره تماس', 'type' => 'text', 'inputmode' => 'tel', 'autocomplete' => 'tel' ),
+						) ) ),
 					) ),
 				),
 			),

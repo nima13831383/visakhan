@@ -7,10 +7,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Didar_Submission_Service {
 	private $registry;
 	private $events;
+	private $settings;
 
-	public function __construct( Didar_Form_Registry $registry, Didar_Event_Log $events ) {
+	public function __construct( Didar_Form_Registry $registry, Didar_Event_Log $events, Didar_Settings $settings = null ) {
 		$this->registry = $registry;
 		$this->events   = $events;
+		$this->settings = $settings ? $settings : new Didar_Settings();
 	}
 
 	public function create( $form_type, $data, $author_id, $shared_note = '' ) {
@@ -82,6 +84,7 @@ class Didar_Submission_Service {
 		$is_creation = '' === $stored_type;
 		$old_fields  = $this->get_fields( $post_id );
 		$old_owner   = (int) $post->post_author;
+		$data        = $this->preserve_inactive_fields( $form_type, $old_fields, $data );
 
 		update_post_meta( $post_id, '_didar_form_type', $form_type );
 		update_post_meta( $post_id, '_didar_fields', $data );
@@ -153,6 +156,7 @@ class Didar_Submission_Service {
 		$old_fields = $this->get_fields( $post_id );
 		$old_note   = $this->get_shared_note( $post_id );
 		$new_note   = sanitize_textarea_field( $shared_note );
+		$data       = $this->preserve_inactive_fields( $form_type, $old_fields, $data );
 		update_post_meta( $post_id, '_didar_fields', $data );
 		update_post_meta( $post_id, '_didar_shared_note', $new_note );
 		$this->record_data_changes( $post_id, $form_type, $old_fields, $data );
@@ -312,7 +316,7 @@ class Didar_Submission_Service {
 		if ( current_user_can( 'didar_view_internal_workflow' ) && current_user_can( 'didar_view_requests' ) ) {
 			return true;
 		}
-		return current_user_can( 'didar_view_own_internal_workflow' ) && (int) $post->post_author === get_current_user_id();
+		return $this->settings->colleague_can_view_internal_history() && current_user_can( 'didar_view_own_internal_workflow' ) && (int) $post->post_author === get_current_user_id();
 	}
 
 	public function can_view_history( $post_id ) {
@@ -323,7 +327,7 @@ class Didar_Submission_Service {
 		if ( current_user_can( 'didar_view_request_history' ) && current_user_can( 'didar_view_requests' ) ) {
 			return true;
 		}
-		return current_user_can( 'didar_view_own_request_history' ) && (int) $post->post_author === get_current_user_id();
+		return $this->settings->colleague_can_view_internal_history() && current_user_can( 'didar_view_own_request_history' ) && (int) $post->post_author === get_current_user_id();
 	}
 
 	public function get_events( $post_id, $limit = 100 ) {
@@ -365,6 +369,7 @@ class Didar_Submission_Service {
 			'applicant_note_changed'   => __( 'یادداشت متقاضی تغییر کرد', 'didar' ),
 			'file_added'               => __( 'فایل افزوده شد', 'didar' ),
 			'file_replaced'            => __( 'فایل جایگزین شد', 'didar' ),
+			'file_removed'             => __( 'فایل حذف شد', 'didar' ),
 			'request_owner_changed'    => __( 'مالک درخواست تغییر کرد', 'didar' ),
 		);
 		return isset( $labels[ $event_type ] ) ? $labels[ $event_type ] : __( 'فعالیت درخواست', 'didar' );
@@ -381,6 +386,16 @@ class Didar_Submission_Service {
 		return __( 'سیستم', 'didar' );
 	}
 
+	public function get_event_context_label( $event ) {
+		if ( empty( $event['event_meta'] ) || ! is_array( $event['event_meta'] ) ) {
+			return '';
+		}
+		if ( ! empty( $event['event_meta']['field_label'] ) ) {
+			return (string) $event['event_meta']['field_label'];
+		}
+		return ! empty( $event['event_meta']['field_name'] ) ? (string) $event['event_meta']['field_name'] : '';
+	}
+
 	public function format_event_value( $event_type, $value ) {
 		if ( null === $value || '' === $value || array() === $value || 0 === $value ) {
 			return '—';
@@ -391,6 +406,9 @@ class Didar_Submission_Service {
 		if ( in_array( $event_type, array( 'request_assigned', 'request_reassigned', 'assignment_removed', 'request_owner_changed' ), true ) ) {
 			$user = get_user_by( 'id', absint( $value ) );
 			return $user ? $user->display_name : sprintf( __( 'کاربر #%d', 'didar' ), absint( $value ) );
+		}
+		if ( in_array( $event_type, array( 'file_added', 'file_replaced', 'file_removed' ), true ) && is_scalar( $value ) ) {
+			return sprintf( __( 'پیوست #%d', 'didar' ), absint( $value ) );
 		}
 		if ( is_array( $value ) ) {
 			return $this->format_event_array( $value );
@@ -427,10 +445,22 @@ class Didar_Submission_Service {
 			}
 			return isset( $options[ $value ] ) ? $options[ $value ] : (string) $value;
 		}
+		if ( is_scalar( $value ) && ! empty( $field['legacy_display_options'] ) && isset( $field['legacy_display_options'][ $value ] ) ) {
+			return $field['legacy_display_options'][ $value ];
+		}
 		if ( 'file' === $field['type'] ) {
-			$attachment_id = absint( $value );
-			$title         = $attachment_id ? get_the_title( $attachment_id ) : '';
-			return $title ? $title : sprintf( __( 'فایل شماره %d', 'didar' ), $attachment_id );
+			$attachment_ids = is_array( $value ) ? $value : array( $value );
+			$labels         = array();
+			foreach ( $attachment_ids as $attachment_id ) {
+				$attachment_id = absint( $attachment_id );
+				if ( ! $attachment_id ) {
+					continue;
+				}
+				$attached_file = get_attached_file( $attachment_id );
+				$title         = $attached_file ? wp_basename( $attached_file ) : get_the_title( $attachment_id );
+				$labels[]      = $title ? $title : sprintf( __( 'فایل شماره %d', 'didar' ), $attachment_id );
+			}
+			return $labels ? implode( '، ', $labels ) : '—';
 		}
 		if ( 'checkbox' === $field['type'] && is_array( $value ) ) {
 			$labels = array();
@@ -450,6 +480,18 @@ class Didar_Submission_Service {
 			return implode( '، ', array_map( 'strval', $value ) );
 		}
 		return (string) $value;
+	}
+
+	/**
+	 * Keep data that was loaded from storage but is no longer in the active schema.
+	 *
+	 * Submitted inactive keys are never accepted; only existing database values are
+	 * merged back into the validated active payload.
+	 */
+	private function preserve_inactive_fields( $form_type, $stored_fields, $active_data ) {
+		$active_definitions = $this->registry->fields( $form_type );
+		$inactive_data      = array_diff_key( (array) $stored_fields, $active_definitions );
+		return array_merge( $inactive_data, (array) $active_data );
 	}
 
 	private function ensure_workflow_defaults( $post_id, $default_status ) {
@@ -506,20 +548,79 @@ class Didar_Submission_Service {
 
 	private function attach_files( $post_id, $form_type, $data, $old_data = array(), $log_changes = false ) {
 		foreach ( $this->registry->fields( $form_type ) as $name => $field ) {
-			if ( 'file' !== $field['type'] || empty( $data[ $name ] ) ) {
+			if ( 'file' !== $field['type'] ) {
 				continue;
 			}
-			$attachment_id = absint( $data[ $name ] );
-			if ( ! $attachment_id || 'attachment' !== get_post_type( $attachment_id ) ) {
-				continue;
+			$new_ids = isset( $data[ $name ] ) ? (array) $data[ $name ] : array();
+			$old_ids = isset( $old_data[ $name ] ) ? (array) $old_data[ $name ] : array();
+			$new_ids = array_values( array_unique( array_filter( array_map( 'absint', $new_ids ) ) ) );
+			$old_ids = array_values( array_unique( array_filter( array_map( 'absint', $old_ids ) ) ) );
+			$added   = array_values( array_diff( $new_ids, $old_ids ) );
+			$removed = array_values( array_diff( $old_ids, $new_ids ) );
+
+			foreach ( $new_ids as $attachment_id ) {
+				if ( 'attachment' !== get_post_type( $attachment_id ) ) {
+					continue;
+				}
+				wp_update_post( array( 'ID' => $attachment_id, 'post_parent' => $post_id ) );
+				foreach ( array( '_didar_temp_owner', '_didar_temp_created', '_didar_temp_form_type', '_didar_temp_field', '_didar_temp_submission_id' ) as $temp_key ) {
+					delete_post_meta( $attachment_id, $temp_key );
+				}
+				update_post_meta( $attachment_id, '_didar_submission_id', $post_id );
+				update_post_meta( $attachment_id, '_didar_document_field', $name );
 			}
-			$old_attachment_id = isset( $old_data[ $name ] ) ? absint( $old_data[ $name ] ) : 0;
-			wp_update_post( array( 'ID' => $attachment_id, 'post_parent' => $post_id ) );
-			delete_post_meta( $attachment_id, '_didar_temp_owner' );
-			update_post_meta( $attachment_id, '_didar_submission_id', $post_id );
-			if ( $log_changes && $old_attachment_id !== $attachment_id ) {
-				$this->events->add( $post_id, $old_attachment_id ? 'file_replaced' : 'file_added', $old_attachment_id, $attachment_id, array( 'field_name' => $name, 'field_label' => $field['label'] ) );
+
+			if ( $log_changes && 1 === count( $added ) && 1 === count( $removed ) ) {
+				$this->events->add( $post_id, 'file_replaced', $removed[0], $added[0], array( 'field_name' => $name, 'field_label' => $field['label'], 'attachment_id' => $added[0] ) );
+				if ( absint( get_post_meta( $removed[0], '_didar_submission_id', true ) ) === absint( $post_id ) ) {
+					wp_delete_attachment( $removed[0], true );
+				}
+				$added   = array();
+				$removed = array();
+			}
+			foreach ( $added as $attachment_id ) {
+				if ( $log_changes ) {
+					$this->events->add( $post_id, 'file_added', null, $attachment_id, array( 'field_name' => $name, 'field_label' => $field['label'], 'attachment_id' => $attachment_id ) );
+				}
+			}
+			foreach ( $removed as $attachment_id ) {
+				if ( absint( get_post_meta( $attachment_id, '_didar_submission_id', true ) ) === absint( $post_id ) ) {
+					wp_delete_attachment( $attachment_id, true );
+				}
+				if ( $log_changes ) {
+					$this->events->add( $post_id, 'file_removed', $attachment_id, null, array( 'field_name' => $name, 'field_label' => $field['label'], 'attachment_id' => $attachment_id ) );
+				}
 			}
 		}
+	}
+
+	public function remove_document( $post_id, $form_type, $field_name, $attachment_id ) {
+		$post          = get_post( absint( $post_id ) );
+		$fields        = $this->registry->fields( $form_type );
+		$attachment_id = absint( $attachment_id );
+		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || ! isset( $fields[ $field_name ] ) || 'file' !== $fields[ $field_name ]['type'] || ! $attachment_id ) {
+			return new WP_Error( 'invalid_document', __( 'فایل یا درخواست معتبر نیست.', 'didar' ) );
+		}
+
+		$staff_can_edit = current_user_can( 'didar_edit_requests' ) && current_user_can( 'edit_post', $post_id );
+		$owner_can_edit = $this->is_owner_editable( $post_id, get_current_user_id() );
+		if ( ! $staff_can_edit && ! $owner_can_edit ) {
+			return new WP_Error( 'forbidden_document', __( 'شما اجازه حذف این فایل را ندارید.', 'didar' ) );
+		}
+
+		$data        = $this->get_fields( $post_id );
+		$current_ids = isset( $data[ $field_name ] ) ? (array) $data[ $field_name ] : array();
+		$current_ids = array_values( array_unique( array_filter( array_map( 'absint', $current_ids ) ) ) );
+		if ( ! in_array( $attachment_id, $current_ids, true ) || absint( get_post_meta( $attachment_id, '_didar_submission_id', true ) ) !== absint( $post_id ) ) {
+			return new WP_Error( 'forbidden_document', __( 'شما اجازه حذف این فایل را ندارید.', 'didar' ) );
+		}
+
+		$data[ $field_name ] = array_values( array_diff( $current_ids, array( $attachment_id ) ) );
+		update_post_meta( $post_id, '_didar_fields', $data );
+		wp_delete_attachment( $attachment_id, true );
+		$this->events->add( $post_id, 'file_removed', $attachment_id, null, array( 'field_name' => $field_name, 'field_label' => $fields[ $field_name ]['label'], 'attachment_id' => $attachment_id ) );
+		wp_update_post( array( 'ID' => $post_id ) );
+
+		return true;
 	}
 }

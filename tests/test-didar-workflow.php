@@ -11,6 +11,7 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 
 	public function set_up() {
 		parent::set_up();
+		delete_option( Didar_Settings::OPTION_NAME );
 		Didar_Post_Type::register();
 		Didar_Access_Control::install_roles_and_capabilities();
 		Didar_Event_Log::install_schema();
@@ -23,6 +24,7 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 			$wpdb->delete( Didar_Event_Log::table_name(), array( 'submission_id' => $submission_id ), array( '%d' ) );
 			wp_delete_post( $submission_id, true );
 		}
+		delete_option( Didar_Settings::OPTION_NAME );
 		parent::tear_down();
 	}
 
@@ -34,8 +36,10 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 		$this->assertFalse( $colleague->has_cap( 'didar_view_requests' ) );
 		$this->assertFalse( $colleague->has_cap( 'edit_posts' ) );
 		$this->assertTrue( $broker->has_cap( 'didar_view_requests' ) );
+		$this->assertTrue( $broker->has_cap( 'didar_view_request' ) );
 		$this->assertTrue( $broker->has_cap( 'didar_assign_requests' ) );
 		$this->assertFalse( $broker->has_cap( 'manage_options' ) );
+		$this->assertFalse( $broker->has_cap( 'didar_manage_settings' ) );
 		$this->assertFalse( $broker->has_cap( 'delete_others_didar_submissions' ) );
 	}
 
@@ -71,6 +75,9 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 		$second_id          = $this->create_submission( $other_colleague_id, 'متقاضی دوم' );
 
 		wp_set_current_user( $colleague_id );
+		$this->assertFalse( $this->service->can_view_internal( $first_id ) );
+		$this->assertFalse( $this->service->can_view_history( $first_id ) );
+		update_option( Didar_Settings::OPTION_NAME, array( 'colleague_can_view_internal_history' => 1 ) );
 		$this->assertTrue( $this->service->can_view_internal( $first_id ) );
 		$this->assertTrue( $this->service->can_view_history( $first_id ) );
 		$this->assertNotEmpty( $this->service->get_events( $first_id ) );
@@ -157,17 +164,17 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 	}
 
 	private function create_submission( $owner_id, $applicant_name = 'متقاضی آزمایشی' ) {
+		$name_parts = preg_split( '/\s+/u', trim( $applicant_name ), 2 );
 		wp_set_current_user( $owner_id );
 		$submission_id = $this->service->create(
 			'consultation',
 			array(
-				'input_1' => $applicant_name,
-				'input_3' => '09120000000',
-				'input_4' => 'mojarad',
-				'input_5' => 'torist',
-				'input_6' => 'telfoni',
-				'input_7' => '',
-				'input_8' => array(),
+				'first_name'  => isset( $name_parts[0] ) ? $name_parts[0] : 'متقاضی',
+				'last_name'   => isset( $name_parts[1] ) ? $name_parts[1] : 'آزمایشی',
+				'input_3'     => '09120000000',
+				'email'       => 'applicant@example.com',
+				'input_5'     => 'موضوع سفارشی آزمایشی',
+				'description' => "توضیحات سطر اول\nتوضیحات سطر دوم",
 			),
 			$owner_id
 		);

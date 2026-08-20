@@ -12,6 +12,7 @@ final class Didar_Plugin {
 	public $validator;
 	public $service;
 	public $event_log;
+	public $settings;
 
 	public static function instance() {
 		if ( null === self::$instance ) {
@@ -29,16 +30,17 @@ final class Didar_Plugin {
 		Didar_Access_Control::register_hooks();
 
 		$this->registry  = new Didar_Form_Registry();
-		$this->renderer  = new Didar_Field_Renderer();
-		$this->validator = new Didar_Validator( $this->registry );
+		$this->settings  = new Didar_Settings();
+		$this->renderer  = new Didar_Field_Renderer( $this->settings );
+		$this->validator = new Didar_Validator( $this->registry, $this->settings );
 		$this->event_log = new Didar_Event_Log();
-		$this->service   = new Didar_Submission_Service( $this->registry, $this->event_log );
+		$this->service   = new Didar_Submission_Service( $this->registry, $this->event_log, $this->settings );
 
-		new Didar_Shortcodes( $this->registry, $this->renderer, $this->validator, $this->service );
-		new Didar_Ajax( $this->registry, $this->renderer );
+		new Didar_Shortcodes( $this->registry, $this->renderer, $this->validator, $this->service, $this->settings );
+		new Didar_Ajax( $this->registry, $this->renderer, $this->service );
 
 		if ( is_admin() ) {
-			new Didar_Admin( $this->registry, $this->renderer, $this->validator, $this->service );
+			new Didar_Admin( $this->registry, $this->renderer, $this->validator, $this->service, $this->settings );
 		}
 	}
 

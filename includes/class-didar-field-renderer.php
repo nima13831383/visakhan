@@ -5,7 +5,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class Didar_Field_Renderer {
-	public function render_sections( $form, $values = array(), $errors = array(), $context = 'frontend' ) {
+	private $settings;
+
+	public function __construct( Didar_Settings $settings = null ) {
+		$this->settings = $settings ? $settings : new Didar_Settings();
+	}
+
+	public function render_sections( $form, $values = array(), $errors = array(), $context = 'frontend', $submission_id = 0 ) {
+		$form_type = isset( $form['type'] ) ? sanitize_key( $form['type'] ) : '';
 		foreach ( $form['sections'] as $section_key => $section ) {
 			$visible_fields = array_filter(
 				$section['fields'],
@@ -29,15 +36,24 @@ class Didar_Field_Renderer {
 
 			echo '<div class="didar-grid">';
 			foreach ( $visible_fields as $field ) {
+				$field['form_type'] = $form_type;
+				$field['required']  = $this->settings->is_required( $form_type, $field['name'], ! empty( $field['required'] ) );
 				$value = array_key_exists( $field['name'], $values ) ? $values[ $field['name'] ] : ( isset( $field['default'] ) ? $field['default'] : '' );
 				$error = isset( $errors[ $field['name'] ] ) ? $errors[ $field['name'] ] : '';
-				$this->render_field( $field, $value, $error, $context );
+				if ( ! empty( $field['required'] ) && '' === (string) $value && ! empty( $field['legacy_required_fallback'] ) && ! empty( $values[ $field['legacy_required_fallback'] ] ) ) {
+					$field['required']    = false;
+					$field['description'] = __( 'در این درخواست قدیمی، مقدار نام ترکیبی به‌صورت جداگانه در بخش اطلاعات تاریخی حفظ شده است.', 'didar' );
+				}
+				$this->render_field( $field, $value, $error, $context, $submission_id );
 			}
 			echo '</div></fieldset>';
 		}
 	}
 
-	public function render_field( $field, $value = '', $error = '', $context = 'frontend' ) {
+	public function render_field( $field, $value = '', $error = '', $context = 'frontend', $submission_id = 0 ) {
+		if ( ! empty( $field['form_type'] ) && ! empty( $field['name'] ) ) {
+			$field['required'] = $this->settings->is_required( $field['form_type'], $field['name'], ! empty( $field['required'] ) );
+		}
 		$name       = $field['name'];
 		$id         = 'didar-' . $context . '-' . sanitize_html_class( $name );
 		$type       = $field['type'];
@@ -83,7 +99,7 @@ class Didar_Field_Renderer {
 					$this->render_repeater( $field, $value, $id );
 					break;
 				case 'file':
-					$this->render_file( $field, $value, $id, $input_name );
+					$this->render_file( $field, $value, $id, $input_name, $submission_id );
 					break;
 				case 'time':
 					if ( ! empty( $field['multiple'] ) ) {
@@ -206,7 +222,14 @@ class Didar_Field_Renderer {
 					}
 					echo '</select>';
 				} else {
-					echo '<input type="text" id="' . esc_attr( $cell_id ) . '" name="didar_fields[' . esc_attr( $field['name'] ) . '][' . esc_attr( $row_index ) . '][' . esc_attr( $column ) . ']" value="' . esc_attr( $cell_value ) . '">';
+					$html_type = in_array( $column_type, array( 'text', 'email', 'number' ), true ) ? $column_type : 'text';
+					echo '<input type="' . esc_attr( $html_type ) . '" id="' . esc_attr( $cell_id ) . '" name="didar_fields[' . esc_attr( $field['name'] ) . '][' . esc_attr( $row_index ) . '][' . esc_attr( $column ) . ']" value="' . esc_attr( $cell_value ) . '"';
+					foreach ( array( 'inputmode', 'autocomplete', 'min', 'max', 'step' ) as $attribute ) {
+						if ( $is_structured && isset( $column_definition[ $attribute ] ) && '' !== $column_definition[ $attribute ] ) {
+							echo ' ' . esc_attr( $attribute ) . '="' . esc_attr( $column_definition[ $attribute ] ) . '"';
+						}
+					}
+					echo '>';
 				}
 				echo '</label>';
 			}
@@ -215,12 +238,22 @@ class Didar_Field_Renderer {
 		echo '<button type="button" class="didar-add-row">' . esc_html__( 'افزودن ردیف', 'didar' ) . '</button></div>';
 	}
 
-	private function render_file( $field, $value, $id, $name ) {
-		$attachment_id = absint( $value );
-		echo '<div class="didar-file-upload" data-didar-upload data-form-type="" data-field="' . esc_attr( $field['name'] ) . '">';
-		echo '<input type="file" id="' . esc_attr( $id ) . '-file"' . ( ! empty( $field['accept'] ) ? ' accept="' . esc_attr( $field['accept'] ) . '"' : '' ) . '>';
-		echo '<input type="hidden" id="' . esc_attr( $id ) . '" name="' . esc_attr( $name ) . '" value="' . esc_attr( $attachment_id ) . '">';
-		echo '<button type="button" class="didar-upload-button">' . esc_html__( 'بارگذاری فایل', 'didar' ) . '</button>';
-		echo '<span class="didar-upload-status" role="status" aria-live="polite"></span></div>';
+	private function render_file( $field, $value, $id, $name, $submission_id = 0 ) {
+		$attachment_ids = is_array( $value ) ? array_values( array_unique( array_filter( array_map( 'absint', $value ) ) ) ) : array_filter( array( absint( $value ) ) );
+		$max_files      = ! empty( $field['max_files'] ) ? absint( $field['max_files'] ) : 1;
+		$is_multiple    = ! empty( $field['multiple'] );
+		$hidden_name    = $is_multiple ? $name . '[]' : $name;
+
+		echo '<div class="didar-file-upload" data-didar-upload data-form-type="' . esc_attr( isset( $field['form_type'] ) ? $field['form_type'] : '' ) . '" data-submission-id="' . esc_attr( absint( $submission_id ) ) . '" data-field="' . esc_attr( $field['name'] ) . '" data-max-files="' . esc_attr( $max_files ) . '" data-required="' . esc_attr( ! empty( $field['required'] ) ? '1' : '0' ) . '">';
+		echo '<div class="didar-file-picker"><input type="file" id="' . esc_attr( $id ) . '-file"' . ( $is_multiple ? ' multiple' : '' ) . ( ! empty( $field['accept'] ) ? ' accept="' . esc_attr( $field['accept'] ) . '"' : '' ) . ( ! empty( $field['required'] ) && ! $attachment_ids ? ' required aria-required="true"' : '' ) . '>';
+		echo '<button type="button" class="didar-upload-button">' . esc_html__( 'بارگذاری فایل', 'didar' ) . '</button></div>';
+		echo '<ul class="didar-uploaded-files" aria-live="polite">';
+		foreach ( $attachment_ids as $attachment_id ) {
+			$attached_file = get_attached_file( $attachment_id );
+			$filename      = $attached_file ? wp_basename( $attached_file ) : get_the_title( $attachment_id );
+			$filename      = $filename ? $filename : sprintf( __( 'فایل شماره %d', 'didar' ), $attachment_id );
+			echo '<li data-didar-attachment="' . esc_attr( $attachment_id ) . '"><span>' . esc_html( $filename ) . '</span><input type="hidden" name="' . esc_attr( $hidden_name ) . '" value="' . esc_attr( $attachment_id ) . '"><button type="button" class="didar-remove-upload" data-attachment-id="' . esc_attr( $attachment_id ) . '">' . esc_html__( 'حذف', 'didar' ) . '</button></li>';
+		}
+		echo '</ul><span class="didar-upload-status" role="status" aria-live="polite"></span></div>';
 	}
 }

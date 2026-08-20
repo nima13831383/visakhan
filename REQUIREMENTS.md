@@ -13,6 +13,7 @@ Authorization is capability-based. Brokers receive only the custom-post-type cap
 
 ```text
 didar_view_requests
+didar_view_request
 didar_edit_requests
 didar_change_public_status
 didar_edit_public_notes
@@ -24,7 +25,7 @@ didar_receive_requests
 didar_view_request_history
 ```
 
-Administrators receive all required Didar capabilities and `didar_change_request_owner`. Colleagues receive only frontend/owned-request capabilities:
+Administrators receive all required Didar capabilities, `didar_change_request_owner`, and `didar_manage_settings`. Brokers, Colleagues, and Customers do not receive the settings capability. Colleagues receive only frontend/owned-request capabilities:
 
 ```text
 didar_colleague_access
@@ -63,7 +64,23 @@ For backward compatibility:
 - missing Public/Internal Status values resolve to `pending_review`.
 - missing notes and assignments resolve to empty/unassigned.
 
-Normal customers can receive only Public Status and Public Note for submissions they own. They cannot submit workflow fields. Colleagues can additionally receive Internal Status, Internal Note, and Activity only for submissions they own. Authorized Brokers and Administrators can view and update workflow fields according to their capabilities.
+Normal customers can receive only Public Status and Public Note for submissions they own. They cannot submit workflow fields. Colleagues can additionally receive Internal Status, Internal Note, and Activity only for submissions they own and only while `didar_settings[colleague_can_view_internal_history]` is enabled. The safe default is disabled. Authorized Brokers and Administrators can view and update workflow fields according to their capabilities.
+
+## Plugin settings
+
+The structured `didar_settings` option stores Colleague-history visibility, frontend requests per page, and sparse field-required overrides. Frontend pagination defaults to 10 results and is bounded to 1–100. An absent form/field override always means “use the Form Registry default”; rendering and server validation use the same centralized resolver.
+
+## Request search and pagination
+
+The wp-admin request search remains server-side and searches request IDs, request titles, and the `_didar_fields` payload used by all registered form types. Form type, status, and assignment constraints remain SQL-level filters, so they compose with search and native admin pagination. Frontend shortcode pagination uses a Didar-specific query parameter on the current containing page and applies ownership, optional form type, `posts_per_page`, and `paged` in `WP_Query`.
+
+## Visa request documents
+
+Visa companions include `national_id`, `email`, and `phone` in addition to the existing name, age, and occupation values. Identifiers and phone values remain strings.
+
+The Visa Request Registry defines four independent optional multi-file fields: `personal_photo`, `passport_main_page`, `round_trip_ticket`, and `other_documents`. Each accepts at most two PDF, DOC, DOCX, JPG/JPEG, PNG, or WEBP files, with a Didar technical limit of 5 MB per file (and any lower WordPress/PHP limit still applying).
+
+AJAX uploads create temporary WordPress attachments owned by the authenticated actor and scoped to form, field, and optional submission. Final validation rechecks ownership, context, count, and MIME before association. Temporary removals delete the pending attachment without creating a submission event; associated document additions, removals, and replacements create append-only audit events.
 
 ## Assignment
 
@@ -94,7 +111,7 @@ Schema:
 
 The table has indexes for submission/event order, event type, actor, and timestamp. Its schema version is stored in `didar_event_schema_version` and upgraded with `dbDelta()`.
 
-Each audit event is inserted independently. No update or delete API is exposed for normal submission editing. No-op saves do not create events. Implemented events include creation, public/internal status and note changes, applicant-note changes, assignment/reassignment/removal, owner changes, submitted-data changes, and file addition/replacement.
+Each audit event is inserted independently. No update or delete API is exposed for normal submission editing. No-op saves do not create events. Implemented events include creation, public/internal status and note changes, applicant-note changes, assignment/reassignment/removal, owner changes, submitted-data changes, and file addition/replacement/removal.
 
 History access uses the same server-side capability and ownership checks as workflow access. There is no public REST exposure, and normal customers do not receive the event stream.
 

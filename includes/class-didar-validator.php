@@ -6,9 +6,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Didar_Validator {
 	private $registry;
+	private $settings;
 
-	public function __construct( Didar_Form_Registry $registry ) {
+	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings = null ) {
 		$this->registry = $registry;
+		$this->settings = $settings ? $settings : new Didar_Settings();
 	}
 
 	public function validate( $form_type, $submitted, $context = 'frontend', $submission_id = 0 ) {
@@ -23,6 +25,7 @@ class Didar_Validator {
 		$data   = array();
 		$errors = array();
 		foreach ( $this->registry->fields( $form_type ) as $name => $field ) {
+			$field['required'] = $this->settings->is_required( $form_type, $name, ! empty( $field['required'] ) );
 			$raw = array_key_exists( $name, $submitted ) ? $submitted[ $name ] : null;
 
 			if ( 'honeypot' === $field['type'] ) {
@@ -51,7 +54,7 @@ class Didar_Validator {
 		$required = ! empty( $field['required'] );
 		$label    = $field['label'];
 
-		if ( in_array( $type, array( 'checkbox', 'repeater' ), true ) || ( 'time' === $type && ! empty( $field['multiple'] ) ) ) {
+		if ( in_array( $type, array( 'checkbox', 'repeater' ), true ) || ( in_array( $type, array( 'time', 'file' ), true ) && ! empty( $field['multiple'] ) ) ) {
 			if ( null !== $raw && ! is_array( $raw ) ) {
 				return new WP_Error( 'invalid_structure', sprintf( __( 'ساختار فیلد «%s» معتبر نیست.', 'didar' ), $label ) );
 			}
@@ -64,7 +67,7 @@ class Didar_Validator {
 				return new WP_Error( 'invalid_structure', sprintf( __( 'ساختار فیلد «%s» معتبر نیست.', 'didar' ), $label ) );
 			}
 			$raw = null === $raw ? '' : (string) $raw;
-			if ( $required && '' === trim( $raw ) ) {
+			if ( $required && '' === trim( $raw ) && ! $this->has_legacy_required_fallback( $field, $submission_id ) ) {
 				return $this->required_error( $label );
 			}
 		}
@@ -165,16 +168,31 @@ class Didar_Validator {
 		}
 	}
 
+	private function has_legacy_required_fallback( $field, $submission_id ) {
+		if ( ! $submission_id || empty( $field['legacy_required_fallback'] ) ) {
+			return false;
+		}
+		$stored = get_post_meta( absint( $submission_id ), '_didar_fields', true );
+		$key    = sanitize_key( $field['legacy_required_fallback'] );
+		return is_array( $stored ) && isset( $stored[ $key ] ) && is_scalar( $stored[ $key ] ) && '' !== trim( (string) $stored[ $key ] );
+	}
+
 	private function validate_repeater( $field, $raw ) {
 		$rows  = array();
 		$limit = isset( $field['max_items'] ) ? absint( $field['max_items'] ) : 20;
-		foreach ( array_slice( $raw, 0, $limit ) as $row ) {
+		if ( count( $raw ) > $limit ) {
+			return new WP_Error( 'too_many_repeater_items', sprintf( __( 'تعداد ردیف‌های «%s» بیش از حد مجاز است.', 'didar' ), $field['label'] ) );
+		}
+		foreach ( $raw as $row ) {
 			if ( ! is_array( $row ) ) {
 				return new WP_Error( 'invalid_repeater', sprintf( __( 'ساختار فیلد «%s» معتبر نیست.', 'didar' ), $field['label'] ) );
 			}
 			$clean = array();
 			foreach ( $field['columns'] as $column => $column_definition ) {
-				$value          = isset( $row[ $column ] ) && ! is_array( $row[ $column ] ) ? $row[ $column ] : '';
+				if ( isset( $row[ $column ] ) && ( is_array( $row[ $column ] ) || is_object( $row[ $column ] ) ) ) {
+					return new WP_Error( 'invalid_repeater_value', sprintf( __( 'ساختار مقدار «%s» معتبر نیست.', 'didar' ), is_array( $column_definition ) ? $column_definition['label'] : $column_definition ) );
+				}
+				$value          = isset( $row[ $column ] ) ? (string) $row[ $column ] : '';
 				$is_structured  = is_array( $column_definition );
 				$column_type    = $is_structured && isset( $column_definition['type'] ) ? $column_definition['type'] : 'text';
 				$column_label   = $is_structured && isset( $column_definition['label'] ) ? $column_definition['label'] : $column_definition;
@@ -188,6 +206,18 @@ class Didar_Validator {
 						return new WP_Error( 'invalid_repeater_option', sprintf( __( 'گزینه انتخاب‌شده برای «%s» معتبر نیست.', 'didar' ), $column_label ) );
 					}
 					$clean[ $column ] = $option;
+				} elseif ( 'email' === $column_type ) {
+					$email = sanitize_email( $value );
+					if ( '' !== trim( $value ) && ( '' === $email || ! is_email( $email ) ) ) {
+						return new WP_Error( 'invalid_repeater_email', sprintf( __( 'ایمیل واردشده در «%s» معتبر نیست.', 'didar' ), $column_label ) );
+					}
+					$clean[ $column ] = $email;
+				} elseif ( 'number' === $column_type ) {
+					$normalized = $this->normalize_digits( $value );
+					if ( '' !== trim( $normalized ) && ! is_numeric( $normalized ) ) {
+						return new WP_Error( 'invalid_repeater_number', sprintf( __( 'مقدار «%s» باید عددی باشد.', 'didar' ), $column_label ) );
+					}
+					$clean[ $column ] = '' === trim( $normalized ) ? '' : (string) ( 0 + $normalized );
 				} else {
 					$clean[ $column ] = sanitize_text_field( $value );
 				}
@@ -200,6 +230,38 @@ class Didar_Validator {
 	}
 
 	private function validate_attachment( $field, $raw, $context, $submission_id = 0 ) {
+		if ( ! empty( $field['multiple'] ) ) {
+			if ( ! is_array( $raw ) ) {
+				return new WP_Error( 'invalid_attachment_structure', __( 'ساختار فایل‌های انتخاب‌شده معتبر نیست.', 'didar' ) );
+			}
+			$max_files = ! empty( $field['max_files'] ) ? absint( $field['max_files'] ) : 1;
+			if ( count( $raw ) > $max_files ) {
+				return new WP_Error( 'too_many_files', sprintf( __( 'برای «%s» حداکثر %d فایل مجاز است.', 'didar' ), $field['label'], $max_files ) );
+			}
+			$attachment_ids = array();
+			foreach ( $raw as $attachment_id ) {
+				if ( is_array( $attachment_id ) || is_object( $attachment_id ) ) {
+					return new WP_Error( 'invalid_attachment_structure', __( 'ساختار فایل‌های انتخاب‌شده معتبر نیست.', 'didar' ) );
+				}
+				$validated = $this->validate_attachment_id( $field, $attachment_id, $context, $submission_id );
+				if ( is_wp_error( $validated ) ) {
+					return $validated;
+				}
+				if ( $validated ) {
+					$attachment_ids[] = $validated;
+				}
+			}
+			$attachment_ids = array_values( array_unique( $attachment_ids ) );
+			if ( count( $attachment_ids ) > $max_files ) {
+				return new WP_Error( 'too_many_files', sprintf( __( 'برای «%s» حداکثر %d فایل مجاز است.', 'didar' ), $field['label'], $max_files ) );
+			}
+			return $attachment_ids;
+		}
+
+		return $this->validate_attachment_id( $field, $raw, $context, $submission_id );
+	}
+
+	private function validate_attachment_id( $field, $raw, $context, $submission_id = 0 ) {
 		$attachment_id = absint( $raw );
 		if ( ! $attachment_id ) {
 			return '';
@@ -208,11 +270,17 @@ class Didar_Validator {
 		if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
 			return new WP_Error( 'invalid_attachment', __( 'فایل انتخاب‌شده معتبر نیست.', 'didar' ) );
 		}
+		$document_field = (string) get_post_meta( $attachment_id, '_didar_document_field', true );
+		if ( $document_field && $document_field !== $field['name'] ) {
+			return new WP_Error( 'invalid_attachment_context', __( 'این فایل برای فیلد دیگری بارگذاری شده است.', 'didar' ) );
+		}
 		$owner = absint( get_post_meta( $attachment_id, '_didar_temp_owner', true ) );
 		if ( $owner ) {
 			$temp_form  = get_post_meta( $attachment_id, '_didar_temp_form_type', true );
 			$temp_field = get_post_meta( $attachment_id, '_didar_temp_field', true );
-			if ( $temp_form !== $field['form_type'] || $temp_field !== $field['name'] ) {
+			$temp_submission_id = absint( get_post_meta( $attachment_id, '_didar_temp_submission_id', true ) );
+			$is_new_admin_submission = 'admin' === $context && $submission_id && ! $temp_submission_id && ! get_post_meta( $submission_id, '_didar_form_type', true );
+			if ( $temp_form !== $field['form_type'] || $temp_field !== $field['name'] || $owner !== get_current_user_id() || ( $submission_id && $temp_submission_id !== absint( $submission_id ) && ! $is_new_admin_submission ) || ( ! $submission_id && $temp_submission_id ) ) {
 				return new WP_Error( 'invalid_attachment_context', __( 'این فایل برای فیلد دیگری بارگذاری شده است.', 'didar' ) );
 			}
 		}
@@ -228,7 +296,7 @@ class Didar_Validator {
 				return new WP_Error( 'invalid_attachment_owner', __( 'شما اجازه استفاده از این فایل را ندارید.', 'didar' ) );
 			}
 		}
-		if ( 'admin' === $context && ! current_user_can( 'edit_post', $attachment_id ) && $owner !== get_current_user_id() ) {
+		if ( 'admin' === $context && ! $owner ) {
 			$attached_submission = absint( get_post_meta( $attachment_id, '_didar_submission_id', true ) );
 			if ( ! $submission_id || $attached_submission !== (int) $submission_id || ! current_user_can( 'edit_post', $submission_id ) ) {
 				return new WP_Error( 'invalid_attachment_owner', __( 'شما اجازه استفاده از این فایل را ندارید.', 'didar' ) );

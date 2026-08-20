@@ -7,7 +7,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Didar_Access_Control {
 	const ROLE_COLLEAGUE = 'didar_colleague';
 	const ROLE_BROKER    = 'didar_broker';
-	const VERSION        = '1.0.1';
+	const VERSION        = '1.1.0';
 	const VERSION_OPTION = 'didar_access_version';
 
 	public static function register_hooks() {
@@ -129,6 +129,7 @@ class Didar_Access_Control {
 				'delete_published_didar_submissions',
 				'create_didar_submissions',
 				'didar_change_request_owner',
+				'didar_manage_settings',
 			),
 			self::workflow_caps()
 		);
@@ -137,6 +138,7 @@ class Didar_Access_Control {
 	private static function workflow_caps() {
 		return array(
 			'didar_view_requests',
+			'didar_view_request',
 			'didar_edit_requests',
 			'didar_change_public_status',
 			'didar_edit_public_notes',
@@ -154,12 +156,11 @@ class Didar_Access_Control {
 			return;
 		}
 
-		if ( current_user_can( 'didar_colleague_access' ) || ( ! current_user_can( 'didar_view_requests' ) && ! current_user_can( 'edit_posts' ) ) ) {
-			wp_safe_redirect( home_url( '/' ) );
-			exit;
-		}
-
 		if ( ! current_user_can( 'didar_view_requests' ) ) {
+			if ( current_user_can( 'didar_colleague_access' ) || ! current_user_can( 'edit_posts' ) ) {
+				wp_safe_redirect( home_url( '/' ) );
+				exit;
+			}
 			return;
 		}
 
@@ -167,10 +168,10 @@ class Didar_Access_Control {
 		$allowed = false;
 		if ( 'edit.php' === $pagenow ) {
 			$post_type = isset( $_GET['post_type'] ) && ! is_array( $_GET['post_type'] ) ? sanitize_key( wp_unslash( $_GET['post_type'] ) ) : '';
-			$allowed   = Didar_Post_Type::POST_TYPE === $post_type;
+			$allowed   = Didar_Post_Type::POST_TYPE === $post_type && current_user_can( 'didar_view_requests' );
 		} elseif ( 'post.php' === $pagenow ) {
 			$post_id = isset( $_GET['post'] ) && ! is_array( $_GET['post'] ) ? absint( wp_unslash( $_GET['post'] ) ) : 0;
-			$allowed = $post_id && Didar_Post_Type::POST_TYPE === get_post_type( $post_id );
+			$allowed = $post_id && Didar_Post_Type::POST_TYPE === get_post_type( $post_id ) && current_user_can( 'didar_view_request' ) && current_user_can( 'edit_post', $post_id );
 		}
 
 		if ( ! $allowed ) {

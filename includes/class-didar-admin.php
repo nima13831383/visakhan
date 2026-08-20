@@ -9,14 +9,16 @@ class Didar_Admin {
 	private $renderer;
 	private $validator;
 	private $service;
+	private $settings;
 	private $state_cache = array();
 	private static $saving = false;
 
-	public function __construct( Didar_Form_Registry $registry, Didar_Field_Renderer $renderer, Didar_Validator $validator, Didar_Submission_Service $service ) {
+	public function __construct( Didar_Form_Registry $registry, Didar_Field_Renderer $renderer, Didar_Validator $validator, Didar_Submission_Service $service, Didar_Settings $settings = null ) {
 		$this->registry  = $registry;
 		$this->renderer  = $renderer;
 		$this->validator = $validator;
 		$this->service   = $service;
+		$this->settings  = $settings ? $settings : new Didar_Settings();
 
 		add_action( 'add_meta_boxes_' . Didar_Post_Type::POST_TYPE, array( $this, 'add_meta_boxes' ) );
 		add_action( 'save_post_' . Didar_Post_Type::POST_TYPE, array( $this, 'save_submission' ), 10, 3 );
@@ -28,15 +30,18 @@ class Didar_Admin {
 		add_action( 'manage_' . Didar_Post_Type::POST_TYPE . '_posts_custom_column', array( $this, 'column_content' ), 10, 2 );
 		add_action( 'restrict_manage_posts', array( $this, 'filters' ) );
 		add_action( 'pre_get_posts', array( $this, 'filter_query' ) );
+		add_filter( 'posts_search', array( $this, 'search_request_fields' ), 10, 2 );
+		add_filter( 'post_row_actions', array( $this, 'request_row_actions' ), 10, 2 );
 		add_filter( 'views_edit-' . Didar_Post_Type::POST_TYPE, array( $this, 'assignment_views' ) );
+		add_filter( 'option_page_capability_didar_page_settings', array( $this, 'settings_capability' ) );
 	}
 
 	public function add_settings_page() {
 		add_submenu_page(
 			'edit.php?post_type=' . Didar_Post_Type::POST_TYPE,
-			__( 'تنظیمات صفحات دیدار', 'didar' ),
-			__( 'تنظیمات صفحات', 'didar' ),
-			'manage_options',
+			__( 'تنظیمات دیدار', 'didar' ),
+			__( 'تنظیمات', 'didar' ),
+			'didar_manage_settings',
 			'didar-page-settings',
 			array( $this, 'render_settings_page' )
 		);
@@ -50,6 +55,15 @@ class Didar_Admin {
 				'type'              => 'array',
 				'default'           => array(),
 				'sanitize_callback' => array( $this, 'sanitize_page_settings' ),
+			)
+		);
+		register_setting(
+			'didar_page_settings',
+			Didar_Settings::OPTION_NAME,
+			array(
+				'type'              => 'array',
+				'default'           => array(),
+				'sanitize_callback' => array( $this, 'sanitize_didar_settings' ),
 			)
 		);
 
@@ -75,11 +89,89 @@ class Didar_Admin {
 			'didar_submission_pages',
 			array( 'key' => 'edit_page_id', 'shortcode' => '[didar_submission_edit]' )
 		);
+
+		add_settings_section(
+			'didar_behavior_settings',
+			__( 'تنظیمات دسترسی و فهرست درخواست‌ها', 'didar' ),
+			'__return_false',
+			'didar-page-settings'
+		);
+		add_settings_field(
+			'didar_colleague_history',
+			__( 'دسترسی همکار به سوابق داخلی', 'didar' ),
+			array( $this, 'render_colleague_history_setting' ),
+			'didar-page-settings',
+			'didar_behavior_settings'
+		);
+		add_settings_field(
+			'didar_frontend_requests_per_page',
+			__( 'تعداد درخواست‌ها در هر صفحه', 'didar' ),
+			array( $this, 'render_requests_per_page_setting' ),
+			'didar-page-settings',
+			'didar_behavior_settings'
+		);
+
+		add_settings_section(
+			'didar_field_requirement_settings',
+			__( 'تنظیمات فیلدهای فرم‌ها', 'didar' ),
+			array( $this, 'render_requirement_settings_description' ),
+			'didar-page-settings'
+		);
+		add_settings_field(
+			'didar_field_required_overrides',
+			__( 'ضروری / اختیاری', 'didar' ),
+			array( $this, 'render_field_requirement_settings' ),
+			'didar-page-settings',
+			'didar_field_requirement_settings'
+		);
+	}
+
+	public function settings_capability() {
+		return 'didar_manage_settings';
+	}
+
+	public function sanitize_didar_settings( $input ) {
+		$current = get_option( Didar_Settings::OPTION_NAME, array() );
+		$current = is_array( $current ) ? $current : array();
+		if ( ! current_user_can( 'didar_manage_settings' ) || ! is_array( $input ) ) {
+			return $current;
+		}
+
+		$output = array(
+			'colleague_can_view_internal_history' => empty( $input['colleague_can_view_internal_history'] ) ? 0 : 1,
+		);
+		$per_page = isset( $input['frontend_requests_per_page'] ) && ! is_array( $input['frontend_requests_per_page'] ) ? absint( $input['frontend_requests_per_page'] ) : Didar_Settings::DEFAULT_REQUESTS_PER_PAGE;
+		$output['frontend_requests_per_page'] = min( Didar_Settings::MAX_REQUESTS_PER_PAGE, max( Didar_Settings::MIN_REQUESTS_PER_PAGE, $per_page ) );
+
+		$submitted_overrides = isset( $input['field_required_overrides'] ) && is_array( $input['field_required_overrides'] ) ? $input['field_required_overrides'] : array();
+		$clean_overrides     = array();
+		foreach ( $this->registry->all() as $form_type => $form ) {
+			if ( empty( $submitted_overrides[ $form_type ] ) || ! is_array( $submitted_overrides[ $form_type ] ) ) {
+				continue;
+			}
+			foreach ( $this->registry->fields( $form_type ) as $field_key => $field ) {
+				if ( ! empty( $field['internal'] ) || 'honeypot' === $field['type'] || ! isset( $submitted_overrides[ $form_type ][ $field_key ] ) || is_array( $submitted_overrides[ $form_type ][ $field_key ] ) ) {
+					continue;
+				}
+				$state = sanitize_key( wp_unslash( $submitted_overrides[ $form_type ][ $field_key ] ) );
+				if ( 'required' === $state ) {
+					$clean_overrides[ $form_type ][ $field_key ] = true;
+				} elseif ( 'optional' === $state ) {
+					$clean_overrides[ $form_type ][ $field_key ] = false;
+				}
+			}
+		}
+		$output['field_required_overrides'] = $clean_overrides;
+
+		return $output;
 	}
 
 	public function sanitize_page_settings( $input ) {
 		$current = get_option( Didar_Shortcodes::PAGE_SETTINGS_OPTION, array() );
 		$current = is_array( $current ) ? $current : array();
+		if ( ! current_user_can( 'didar_manage_settings' ) ) {
+			return $current;
+		}
 		$output  = array();
 
 		foreach ( array( 'details_page_id', 'edit_page_id' ) as $key ) {
@@ -124,13 +216,55 @@ class Didar_Admin {
 		}
 	}
 
+	public function render_colleague_history_setting() {
+		$settings = $this->settings->all();
+		echo '<label><input type="checkbox" name="' . esc_attr( Didar_Settings::OPTION_NAME ) . '[colleague_can_view_internal_history]" value="1" ' . checked( ! empty( $settings['colleague_can_view_internal_history'] ), true, false ) . '> ' . esc_html__( 'اجازه مشاهده گردش کار داخلی و سوابق درخواست برای همکار', 'didar' ) . '</label>';
+		echo '<p class="description">' . esc_html__( 'این دسترسی فقط در فرانت‌اند و فقط برای درخواست متعلق به همان همکار اعمال می‌شود.', 'didar' ) . '</p>';
+	}
+
+	public function render_requests_per_page_setting() {
+		echo '<input type="number" class="small-text" name="' . esc_attr( Didar_Settings::OPTION_NAME ) . '[frontend_requests_per_page]" min="' . esc_attr( Didar_Settings::MIN_REQUESTS_PER_PAGE ) . '" max="' . esc_attr( Didar_Settings::MAX_REQUESTS_PER_PAGE ) . '" value="' . esc_attr( $this->settings->frontend_requests_per_page() ) . '">';
+		echo '<p class="description">' . esc_html( sprintf( __( 'برای فهرست فرانت‌اند [didar_submissions]. مقدار مجاز بین %1$d و %2$d است.', 'didar' ), Didar_Settings::MIN_REQUESTS_PER_PAGE, Didar_Settings::MAX_REQUESTS_PER_PAGE ) ) . '</p>';
+	}
+
+	public function render_requirement_settings_description() {
+		echo '<p>' . esc_html__( 'فقط وضعیت ضروری بودن قابل تغییر است. «پیش‌فرض» همیشه از تعریف فعلی Form Registry استفاده می‌کند.', 'didar' ) . '</p>';
+	}
+
+	public function render_field_requirement_settings() {
+		$settings  = $this->settings->all();
+		$overrides = isset( $settings['field_required_overrides'] ) && is_array( $settings['field_required_overrides'] ) ? $settings['field_required_overrides'] : array();
+		echo '<div class="didar-requirement-settings">';
+		foreach ( $this->registry->all() as $form_type => $form ) {
+			echo '<details><summary><strong>' . esc_html( $form['label'] ) . '</strong> <code>' . esc_html( $form_type ) . '</code></summary>';
+			echo '<table class="widefat striped"><thead><tr><th>' . esc_html__( 'فیلد', 'didar' ) . '</th><th>' . esc_html__( 'پیش‌فرض Registry', 'didar' ) . '</th><th>' . esc_html__( 'وضعیت مؤثر', 'didar' ) . '</th><th>' . esc_html__( 'Override', 'didar' ) . '</th></tr></thead><tbody>';
+			foreach ( $this->registry->fields( $form_type ) as $field_key => $field ) {
+				if ( ! empty( $field['internal'] ) || 'honeypot' === $field['type'] ) {
+					continue;
+				}
+				$default      = ! empty( $field['required'] );
+				$has_override = isset( $overrides[ $form_type ] ) && is_array( $overrides[ $form_type ] ) && array_key_exists( $field_key, $overrides[ $form_type ] );
+				$selected     = $has_override ? ( $overrides[ $form_type ][ $field_key ] ? 'required' : 'optional' ) : 'default';
+				$effective    = $this->settings->is_required( $form_type, $field_key, $default );
+				$name         = Didar_Settings::OPTION_NAME . '[field_required_overrides][' . $form_type . '][' . $field_key . ']';
+				echo '<tr><td><strong>' . esc_html( $field['label'] ) . '</strong><br><code>' . esc_html( $field_key ) . '</code></td><td>' . esc_html( $default ? __( 'ضروری', 'didar' ) : __( 'اختیاری', 'didar' ) ) . '</td><td>' . esc_html( $effective ? __( 'ضروری', 'didar' ) : __( 'اختیاری', 'didar' ) ) . '</td><td><select name="' . esc_attr( $name ) . '">';
+				echo '<option value="default" ' . selected( $selected, 'default', false ) . '>' . esc_html__( 'پیش‌فرض', 'didar' ) . '</option>';
+				echo '<option value="required" ' . selected( $selected, 'required', false ) . '>' . esc_html__( 'ضروری', 'didar' ) . '</option>';
+				echo '<option value="optional" ' . selected( $selected, 'optional', false ) . '>' . esc_html__( 'اختیاری', 'didar' ) . '</option>';
+				echo '</select></td></tr>';
+			}
+			echo '</tbody></table></details>';
+		}
+		echo '</div>';
+	}
+
 	public function render_settings_page() {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			return;
+		if ( ! current_user_can( 'didar_manage_settings' ) ) {
+			wp_die( esc_html__( 'شما اجازه دسترسی به تنظیمات دیدار را ندارید.', 'didar' ), '', array( 'response' => 403 ) );
 		}
 
-		echo '<div class="wrap"><h1>' . esc_html__( 'تنظیمات صفحات دیدار', 'didar' ) . '</h1>';
-		settings_errors( Didar_Shortcodes::PAGE_SETTINGS_OPTION );
+		echo '<div class="wrap didar-settings-page" dir="rtl"><h1>' . esc_html__( 'تنظیمات دیدار', 'didar' ) . '</h1>';
+		settings_errors();
 		echo '<form action="options.php" method="post">';
 		settings_fields( 'didar_page_settings' );
 		do_settings_sections( 'didar-page-settings' );
@@ -270,6 +404,10 @@ class Didar_Admin {
 		foreach ( $events as $event ) {
 			echo '<li><div class="didar-activity-heading"><strong>' . esc_html( $this->service->get_event_label( $event['event_type'] ) ) . '</strong><time datetime="' . esc_attr( $this->service->format_event_datetime_attribute( $event['created_at_gmt'] ) ) . '">' . esc_html( $this->service->format_event_time( $event['created_at_gmt'] ) ) . '</time></div>';
 			echo '<p class="didar-activity-actor">' . esc_html( sprintf( __( 'توسط %s', 'didar' ), $this->service->get_event_actor_label( $event ) ) ) . '</p>';
+			$context_label = $this->service->get_event_context_label( $event );
+			if ( $context_label ) {
+				echo '<p class="didar-activity-context">' . esc_html( sprintf( __( 'دسته مدرک: %s', 'didar' ), $context_label ) ) . '</p>';
+			}
 			if ( null !== $event['old_value'] || null !== $event['new_value'] ) {
 				echo '<div class="didar-activity-change"><span><b>' . esc_html__( 'مقدار قبلی:', 'didar' ) . '</b> ' . nl2br( esc_html( $this->service->format_event_value( $event['event_type'], $event['old_value'] ) ) ) . '</span><span><b>' . esc_html__( 'مقدار جدید:', 'didar' ) . '</b> ' . nl2br( esc_html( $this->service->format_event_value( $event['event_type'], $event['new_value'] ) ) ) . '</span></div>';
 			}
@@ -284,17 +422,44 @@ class Didar_Admin {
 		if ( ! $type && ! empty( $state['form_type'] ) ) {
 			$type = $state['form_type'];
 		}
-		$form   = $this->registry->get( $type );
-		$values = isset( $state['values'] ) ? $state['values'] : $this->service->get_fields( $post->ID );
-		$errors = isset( $state['errors'] ) ? $state['errors'] : array();
+		$form          = $this->registry->get( $type );
+		$stored_values = $this->service->get_fields( $post->ID );
+		$values        = isset( $state['values'] ) ? array_merge( $stored_values, $state['values'] ) : $stored_values;
+		$errors        = isset( $state['errors'] ) ? $state['errors'] : array();
 
 		echo '<div id="didar-admin-fields" class="didar-admin-wrap" dir="rtl">';
 		if ( $form ) {
-			$this->renderer->render_sections( $form, $values, $errors, 'admin' );
+			$this->renderer->render_sections( $form, $values, $errors, 'admin', $post->ID );
+			$this->render_historical_fields( $type, $stored_values );
 		} else {
 			echo '<div class="didar-admin-placeholder"><span class="dashicons dashicons-forms" aria-hidden="true"></span><p>' . esc_html__( 'ابتدا نوع فرم را انتخاب کنید تا فیلدهای مربوط نمایش داده شوند.', 'didar' ) . '</p></div>';
 		}
 		echo '</div>';
+	}
+
+	private function render_historical_fields( $form_type, $values ) {
+		$historical = array();
+		foreach ( $this->registry->legacy_fields( $form_type ) as $name => $field ) {
+			if ( ! array_key_exists( $name, $values ) || '' === $values[ $name ] || array() === $values[ $name ] ) {
+				continue;
+			}
+			$historical[] = array(
+				'label' => $field['label'],
+				'value' => $this->service->format_value( $field, $values[ $name ] ),
+			);
+		}
+
+		if ( ! $historical ) {
+			return;
+		}
+
+		echo '<section class="didar-historical-data" aria-labelledby="didar-historical-data-title">';
+		echo '<h3 id="didar-historical-data-title">' . esc_html__( 'اطلاعات تاریخی', 'didar' ) . '</h3>';
+		echo '<p class="description">' . esc_html__( 'این فیلدها متعلق به نسخه قبلی فرم هستند و فقط برای نگهداری سابقه نمایش داده می‌شوند.', 'didar' ) . '</p><dl>';
+		foreach ( $historical as $item ) {
+			echo '<div><dt>' . esc_html( $item['label'] ) . '</dt><dd>' . nl2br( esc_html( $item['value'] ) ) . '</dd></div>';
+		}
+		echo '</dl></section>';
 	}
 
 	public function render_details_box( $post ) {
@@ -497,12 +662,16 @@ class Didar_Admin {
 
 	public function enqueue_assets( $hook ) {
 		$screen = get_current_screen();
-		if ( ! $screen || Didar_Post_Type::POST_TYPE !== $screen->post_type ) {
+		$is_settings = $screen && false !== strpos( (string) $screen->id, 'didar-page-settings' );
+		if ( ! $screen || ( Didar_Post_Type::POST_TYPE !== $screen->post_type && ! $is_settings ) ) {
 			return;
 		}
 		wp_enqueue_style( 'didar-admin', DIDAR_URL . 'assets/css/admin.css', array(), DIDAR_VERSION );
+		if ( $is_settings ) {
+			return;
+		}
 		wp_enqueue_script( 'didar-admin', DIDAR_URL . 'assets/js/admin.js', array(), DIDAR_VERSION, true );
-		wp_localize_script( 'didar-admin', 'didarAdmin', array( 'ajaxUrl' => admin_url( 'admin-ajax.php' ), 'nonce' => wp_create_nonce( 'didar_admin_fields' ), 'loading' => __( 'در حال بارگذاری فیلدها…', 'didar' ), 'error' => __( 'بارگذاری فیلدها انجام نشد.', 'didar' ) ) );
+		wp_localize_script( 'didar-admin', 'didarAdmin', array( 'ajaxUrl' => admin_url( 'admin-ajax.php' ), 'nonce' => wp_create_nonce( 'didar_admin_fields' ), 'uploadNonce' => wp_create_nonce( 'didar_upload_file' ), 'removeNonce' => wp_create_nonce( 'didar_remove_file' ), 'loading' => __( 'در حال بارگذاری فیلدها…', 'didar' ), 'error' => __( 'بارگذاری فیلدها انجام نشد.', 'didar' ), 'messages' => array( 'uploading' => __( 'در حال بارگذاری…', 'didar' ), 'uploadInProgress' => __( 'تا پایان بارگذاری فایل صبر کنید.', 'didar' ), 'uploadError' => __( 'بارگذاری فایل انجام نشد.', 'didar' ), 'remove' => __( 'حذف', 'didar' ), 'removeError' => __( 'حذف فایل انجام نشد.', 'didar' ), 'fileLimit' => __( 'برای این فیلد حداکثر %d فایل مجاز است.', 'didar' ) ) ) );
 	}
 
 	public function columns( $columns ) {
@@ -593,6 +762,41 @@ class Didar_Admin {
 			}
 			$query->set( 'meta_query', $meta_query );
 		}
+	}
+
+	public function search_request_fields( $search, $query ) {
+		if ( ! is_admin() || ! $query->is_main_query() || Didar_Post_Type::POST_TYPE !== $query->get( 'post_type' ) || ! current_user_can( 'didar_view_requests' ) ) {
+			return $search;
+		}
+		$term = $query->get( 's' );
+		if ( ! is_scalar( $term ) || '' === trim( (string) $term ) ) {
+			return $search;
+		}
+
+		global $wpdb;
+		$term       = sanitize_text_field( (string) $term );
+		$like       = '%' . $wpdb->esc_like( $term ) . '%';
+		$conditions = array(
+			$wpdb->prepare( "{$wpdb->posts}.post_title LIKE %s", $like ),
+			$wpdb->prepare( "EXISTS (SELECT 1 FROM {$wpdb->postmeta} didar_search_meta WHERE didar_search_meta.post_id = {$wpdb->posts}.ID AND didar_search_meta.meta_key = %s AND didar_search_meta.meta_value LIKE %s)", '_didar_fields', $like ),
+		);
+		if ( ctype_digit( $term ) && absint( $term ) ) {
+			$conditions[] = $wpdb->prepare( "{$wpdb->posts}.ID = %d", absint( $term ) );
+		}
+
+		return ' AND (' . implode( ' OR ', $conditions ) . ') ';
+	}
+
+	public function request_row_actions( $actions, $post ) {
+		if ( Didar_Post_Type::POST_TYPE !== $post->post_type || ! current_user_can( 'didar_view_request' ) || ! current_user_can( 'edit_post', $post->ID ) ) {
+			return $actions;
+		}
+		$url = get_edit_post_link( $post->ID, '' );
+		if ( $url ) {
+			$actions['didar_view_details'] = '<a href="' . esc_url( $url ) . '">' . esc_html__( 'مشاهده جزئیات', 'didar' ) . '</a>';
+		}
+
+		return $actions;
 	}
 
 	public function assignment_views( $views ) {
