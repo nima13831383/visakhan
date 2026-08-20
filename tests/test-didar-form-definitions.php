@@ -9,18 +9,24 @@ class Test_Didar_Form_Definitions extends WP_UnitTestCase {
 	private $registry;
 	private $validator;
 	private $service;
+	private $file_service;
 	private $submission_ids = array();
-	private $attachment_ids = array();
+	private $file_ids = array();
 
 	public function set_up() {
 		parent::set_up();
 		Didar_Post_Type::register();
 		Didar_Access_Control::install_roles_and_capabilities();
 		Didar_Event_Log::install_schema();
+		Didar_File_Service::install_schema();
 		delete_option( Didar_Settings::OPTION_NAME );
-		$this->registry  = new Didar_Form_Registry();
-		$this->validator = new Didar_Validator( $this->registry );
-		$this->service   = new Didar_Submission_Service( $this->registry, new Didar_Event_Log() );
+		$this->registry     = new Didar_Form_Registry();
+		$settings           = new Didar_Settings();
+		$events             = new Didar_Event_Log();
+		$this->file_service = new Didar_File_Service( $this->registry, $settings, $events );
+		$this->validator    = new Didar_Validator( $this->registry, $settings, $this->file_service );
+		$this->service      = new Didar_Submission_Service( $this->registry, $events, $settings, $this->file_service );
+		$this->file_service->set_submission_service( $this->service );
 	}
 
 	public function tear_down() {
@@ -29,8 +35,8 @@ class Test_Didar_Form_Definitions extends WP_UnitTestCase {
 			$wpdb->delete( Didar_Event_Log::table_name(), array( 'submission_id' => $submission_id ), array( '%d' ) );
 			wp_delete_post( $submission_id, true );
 		}
-		foreach ( $this->attachment_ids as $attachment_id ) {
-			wp_delete_attachment( $attachment_id, true );
+		foreach ( $this->file_ids as $file_id ) {
+			$wpdb->delete( Didar_File_Service::table_name(), array( 'file_id' => $file_id ), array( '%d' ) );
 		}
 		delete_option( Didar_Settings::OPTION_NAME );
 		parent::tear_down();
@@ -231,7 +237,7 @@ class Test_Didar_Form_Definitions extends WP_UnitTestCase {
 		$this->assertFalse( $malformed['valid'] );
 	}
 
-	public function test_visa_document_definitions_and_attachment_limits_are_server_enforced() {
+	public function test_visa_document_definitions_and_private_file_limits_are_server_enforced() {
 		$fields = $this->registry->fields( 'visa_request' );
 		foreach ( array( 'personal_photo', 'passport_main_page', 'round_trip_ticket', 'other_documents' ) as $field_key ) {
 			$this->assertSame( 'file', $fields[ $field_key ]['type'] );
@@ -243,25 +249,76 @@ class Test_Didar_Form_Definitions extends WP_UnitTestCase {
 
 		$user_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
 		wp_set_current_user( $user_id );
+		$attachment_count = (int) wp_count_posts( 'attachment' )->inherit;
 		$ids = array();
 		for ( $index = 0; $index < 3; $index++ ) {
-			$attachment_id = wp_insert_attachment( array( 'post_title' => 'Didar test file', 'post_status' => 'inherit', 'post_mime_type' => 'application/pdf' ) );
-			$this->attachment_ids[] = $attachment_id;
-			$ids[]                  = $attachment_id;
-			update_post_meta( $attachment_id, '_didar_temp_owner', $user_id );
-			update_post_meta( $attachment_id, '_didar_temp_form_type', 'visa_request' );
-			update_post_meta( $attachment_id, '_didar_temp_field', 'personal_photo' );
-			update_post_meta( $attachment_id, '_didar_temp_submission_id', 0 );
+			$ids[] = $this->insert_file_record( $user_id, 0, 'personal_photo', 'temporary' );
 		}
+		$this->assertSame( $attachment_count, (int) wp_count_posts( 'attachment' )->inherit );
 		$this->assertTrue( $this->validator->validate( 'visa_request', array( 'personal_photo' => array_slice( $ids, 0, 2 ) ), 'frontend' )['valid'] );
 		$too_many = $this->validator->validate( 'visa_request', array( 'personal_photo' => $ids ), 'frontend' );
 		$this->assertFalse( $too_many['valid'] );
 		$this->assertArrayHasKey( 'personal_photo', $too_many['errors'] );
 
 		$other_user = self::factory()->user->create( array( 'role' => 'subscriber' ) );
-		update_post_meta( $ids[0], '_didar_temp_owner', $other_user );
+		global $wpdb;
+		$wpdb->update( Didar_File_Service::table_name(), array( 'owner_user_id' => $other_user ), array( 'file_id' => $ids[0] ), array( '%d' ), array( '%d' ) );
 		$forged = $this->validator->validate( 'visa_request', array( 'personal_photo' => array( $ids[0] ) ), 'frontend' );
 		$this->assertFalse( $forged['valid'] );
+	}
+
+	public function test_download_mode_defaults_secure_and_switches_urls_without_rewriting_file_records() {
+		$user_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		wp_set_current_user( $user_id );
+		$post_id = wp_insert_post( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'publish', 'post_author' => $user_id ) );
+		$this->submission_ids[] = $post_id;
+		update_post_meta( $post_id, '_didar_form_type', 'visa_request' );
+		$file_id = $this->insert_file_record( $user_id, $post_id, 'personal_photo', 'final' );
+		update_post_meta( $post_id, '_didar_fields', array( 'personal_photo' => array( $file_id ) ) );
+
+		$this->assertSame( 'secure', ( new Didar_Settings() )->file_download_mode() );
+		$secure_url = $this->file_service->get_download_url( $file_id );
+		$this->assertStringContainsString( 'admin-post.php', $secure_url );
+		$this->assertStringNotContainsString( 'didar-private', $secure_url );
+
+		$fields_before = get_post_meta( $post_id, '_didar_fields', true );
+		update_option( Didar_Settings::OPTION_NAME, array( 'file_download_mode' => 'direct' ) );
+		$direct_url = $this->file_service->get_download_url( $file_id );
+		$this->assertStringContainsString( 'didar-private', $direct_url );
+		$this->assertStringNotContainsString( 'admin-post.php', $direct_url );
+		$this->assertSame( $fields_before, get_post_meta( $post_id, '_didar_fields', true ) );
+		$this->assertSame( $file_id, $this->file_service->get( $file_id )['file_id'] );
+
+		update_option( Didar_Settings::OPTION_NAME, array( 'file_download_mode' => 'invalid' ) );
+		$this->assertSame( 'secure', ( new Didar_Settings() )->file_download_mode() );
+		$this->assertStringContainsString( 'admin-post.php', $this->file_service->get_download_url( $file_id ) );
+	}
+
+	private function insert_file_record( $owner_id, $submission_id, $field_key, $status ) {
+		global $wpdb;
+		$stored_name = wp_generate_uuid4() . '.pdf';
+		$wpdb->insert(
+			Didar_File_Service::table_name(),
+			array(
+				'original_name'  => 'passport.pdf',
+				'stored_name'    => $stored_name,
+				'relative_path'  => 'didar-private/tests/' . $stored_name,
+				'mime_type'      => 'application/pdf',
+				'extension'      => 'pdf',
+				'file_size'      => 100,
+				'owner_user_id'  => $owner_id,
+				'submission_id'  => $submission_id,
+				'form_type'      => 'visa_request',
+				'field_key'      => $field_key,
+				'file_status'    => $status,
+				'created_at_gmt' => current_time( 'mysql', true ),
+				'finalized_at_gmt' => 'final' === $status ? current_time( 'mysql', true ) : null,
+			),
+			array( '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s' )
+		);
+		$file_id          = (int) $wpdb->insert_id;
+		$this->file_ids[] = $file_id;
+		return $file_id;
 	}
 
 	private function valid_consultation_data() {

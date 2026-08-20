@@ -273,6 +273,12 @@ body.post-type-didar_submission #poststuff .postbox .hndle::before {
 .didar-admin-wrap .didar-file-picker { align-items: center; grid-template-columns: minmax(0, 1fr) auto; }
 .didar-admin-wrap .didar-uploaded-files { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
 .didar-admin-wrap .didar-uploaded-files li { align-items: center; background: #f7f7f7; border: 1px solid var(--didar-admin-border); border-radius: 6px; display: flex; gap: 10px; justify-content: space-between; padding: 8px 10px; }
+.didar-admin-wrap .didar-file-actions { align-items: center; display: inline-flex; flex-wrap: wrap; gap: 10px; }
+.didar-admin-wrap .didar-download-file { font-weight: 600; text-decoration: none; }
+.didar-download-mode { display: grid; gap: 12px; max-width: 760px; }
+.didar-download-mode > label { align-items: flex-start; display: grid; gap: 4px 8px; grid-template-columns: auto 1fr; }
+.didar-download-mode > label .description { grid-column: 2; }
+.didar-download-mode .notice { margin: 4px 0 0; padding: 10px 12px; }
 .didar-admin-wrap .didar-upload-status { color: var(--didar-admin-muted); }
 
 .didar-requirement-settings { display: grid; gap: 12px; max-width: 1050px; }

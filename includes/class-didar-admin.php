@@ -10,15 +10,19 @@ class Didar_Admin {
 	private $validator;
 	private $service;
 	private $settings;
+	private $files;
+	private $request_search;
 	private $state_cache = array();
 	private static $saving = false;
 
-	public function __construct( Didar_Form_Registry $registry, Didar_Field_Renderer $renderer, Didar_Validator $validator, Didar_Submission_Service $service, Didar_Settings $settings = null ) {
+	public function __construct( Didar_Form_Registry $registry, Didar_Field_Renderer $renderer, Didar_Validator $validator, Didar_Submission_Service $service, Didar_Settings $settings = null, Didar_File_Service $files = null, Didar_Request_Search $request_search = null ) {
 		$this->registry  = $registry;
 		$this->renderer  = $renderer;
 		$this->validator = $validator;
 		$this->service   = $service;
 		$this->settings  = $settings ? $settings : new Didar_Settings();
+		$this->files     = $files ? $files : new Didar_File_Service( $registry, $this->settings, new Didar_Event_Log() );
+		$this->request_search = $request_search ? $request_search : new Didar_Request_Search();
 
 		add_action( 'add_meta_boxes_' . Didar_Post_Type::POST_TYPE, array( $this, 'add_meta_boxes' ) );
 		add_action( 'save_post_' . Didar_Post_Type::POST_TYPE, array( $this, 'save_submission' ), 10, 3 );
@@ -30,7 +34,6 @@ class Didar_Admin {
 		add_action( 'manage_' . Didar_Post_Type::POST_TYPE . '_posts_custom_column', array( $this, 'column_content' ), 10, 2 );
 		add_action( 'restrict_manage_posts', array( $this, 'filters' ) );
 		add_action( 'pre_get_posts', array( $this, 'filter_query' ) );
-		add_filter( 'posts_search', array( $this, 'search_request_fields' ), 10, 2 );
 		add_filter( 'post_row_actions', array( $this, 'request_row_actions' ), 10, 2 );
 		add_filter( 'views_edit-' . Didar_Post_Type::POST_TYPE, array( $this, 'assignment_views' ) );
 		add_filter( 'option_page_capability_didar_page_settings', array( $this, 'settings_capability' ) );
@@ -112,6 +115,20 @@ class Didar_Admin {
 		);
 
 		add_settings_section(
+			'didar_file_settings',
+			__( 'تنظیمات فایل‌های درخواست', 'didar' ),
+			'__return_false',
+			'didar-page-settings'
+		);
+		add_settings_field(
+			'didar_file_download_mode',
+			__( 'نحوه دانلود فایل‌های درخواست', 'didar' ),
+			array( $this, 'render_file_download_mode_setting' ),
+			'didar-page-settings',
+			'didar_file_settings'
+		);
+
+		add_settings_section(
 			'didar_field_requirement_settings',
 			__( 'تنظیمات فیلدهای فرم‌ها', 'didar' ),
 			array( $this, 'render_requirement_settings_description' ),
@@ -142,6 +159,8 @@ class Didar_Admin {
 		);
 		$per_page = isset( $input['frontend_requests_per_page'] ) && ! is_array( $input['frontend_requests_per_page'] ) ? absint( $input['frontend_requests_per_page'] ) : Didar_Settings::DEFAULT_REQUESTS_PER_PAGE;
 		$output['frontend_requests_per_page'] = min( Didar_Settings::MAX_REQUESTS_PER_PAGE, max( Didar_Settings::MIN_REQUESTS_PER_PAGE, $per_page ) );
+		$download_mode = isset( $input['file_download_mode'] ) && ! is_array( $input['file_download_mode'] ) ? sanitize_key( wp_unslash( $input['file_download_mode'] ) ) : Didar_Settings::DEFAULT_FILE_DOWNLOAD_MODE;
+		$output['file_download_mode'] = in_array( $download_mode, array( 'secure', 'direct' ), true ) ? $download_mode : Didar_Settings::DEFAULT_FILE_DOWNLOAD_MODE;
 
 		$submitted_overrides = isset( $input['field_required_overrides'] ) && is_array( $input['field_required_overrides'] ) ? $input['field_required_overrides'] : array();
 		$clean_overrides     = array();
@@ -162,6 +181,11 @@ class Didar_Admin {
 			}
 		}
 		$output['field_required_overrides'] = $clean_overrides;
+		$protection = $this->files->sync_storage_protection( $output['file_download_mode'] );
+		if ( is_wp_error( $protection ) ) {
+			$output['file_download_mode'] = Didar_Settings::DEFAULT_FILE_DOWNLOAD_MODE;
+			add_settings_error( Didar_Settings::OPTION_NAME, 'didar_file_storage_protection', $protection->get_error_message(), 'error' );
+		}
 
 		return $output;
 	}
@@ -225,6 +249,17 @@ class Didar_Admin {
 	public function render_requests_per_page_setting() {
 		echo '<input type="number" class="small-text" name="' . esc_attr( Didar_Settings::OPTION_NAME ) . '[frontend_requests_per_page]" min="' . esc_attr( Didar_Settings::MIN_REQUESTS_PER_PAGE ) . '" max="' . esc_attr( Didar_Settings::MAX_REQUESTS_PER_PAGE ) . '" value="' . esc_attr( $this->settings->frontend_requests_per_page() ) . '">';
 		echo '<p class="description">' . esc_html( sprintf( __( 'برای فهرست فرانت‌اند [didar_submissions]. مقدار مجاز بین %1$d و %2$d است.', 'didar' ), Didar_Settings::MIN_REQUESTS_PER_PAGE, Didar_Settings::MAX_REQUESTS_PER_PAGE ) ) . '</p>';
+	}
+
+	public function render_file_download_mode_setting() {
+		$name = Didar_Settings::OPTION_NAME . '[file_download_mode]';
+		$mode = $this->settings->file_download_mode();
+		echo '<fieldset class="didar-download-mode">';
+		echo '<label><input type="radio" name="' . esc_attr( $name ) . '" value="secure" ' . checked( $mode, 'secure', false ) . '> <strong>' . esc_html__( 'دانلود امن', 'didar' ) . '</strong><span class="description">' . esc_html__( 'فایل فقط پس از ورود کاربر و بررسی دسترسی او به درخواست، توسط دیدار ارسال می‌شود.', 'didar' ) . '</span></label>';
+		echo '<label><input type="radio" name="' . esc_attr( $name ) . '" value="direct" ' . checked( $mode, 'direct', false ) . '> <strong>' . esc_html__( 'دانلود مستقیم', 'didar' ) . '</strong><span class="description">' . esc_html__( 'لینک مستقیم فایل ارائه می‌شود و کنترل دسترسی دیدار هنگام دانلود اعمال نمی‌شود.', 'didar' ) . '</span></label>';
+		echo '<p class="notice notice-warning inline"><strong>' . esc_html__( 'هشدار امنیتی:', 'didar' ) . '</strong> ' . esc_html__( 'در حالت دانلود مستقیم، هر شخصی که URL غیرقابل‌حدس فایل را در اختیار داشته باشد می‌تواند آن را دریافت کند. برای مدارک حساس حالت دانلود امن توصیه می‌شود.', 'didar' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'دیدار در حالت امن برای Apache و IIS قواعد منع دسترسی مستقیم ایجاد می‌کند. در Nginx یا وب‌سرورهایی که این فایل‌های پیکربندی را نادیده می‌گیرند، مدیر سرور باید دسترسی مستقیم به پوشه didar-private را مسدود کند.', 'didar' ) . '</p>';
+		echo '</fieldset>';
 	}
 
 	public function render_requirement_settings_description() {
@@ -729,6 +764,7 @@ class Didar_Admin {
 		if ( ! is_admin() || ! $query->is_main_query() || Didar_Post_Type::POST_TYPE !== $query->get( 'post_type' ) ) {
 			return;
 		}
+		$this->request_search->apply_to_query( $query, $query->get( 's' ) );
 		$meta_query = array();
 		if ( ! empty( $_GET['didar_form_type_filter'] ) && ! is_array( $_GET['didar_form_type_filter'] ) ) {
 			$type = sanitize_key( wp_unslash( $_GET['didar_form_type_filter'] ) );
@@ -762,29 +798,6 @@ class Didar_Admin {
 			}
 			$query->set( 'meta_query', $meta_query );
 		}
-	}
-
-	public function search_request_fields( $search, $query ) {
-		if ( ! is_admin() || ! $query->is_main_query() || Didar_Post_Type::POST_TYPE !== $query->get( 'post_type' ) || ! current_user_can( 'didar_view_requests' ) ) {
-			return $search;
-		}
-		$term = $query->get( 's' );
-		if ( ! is_scalar( $term ) || '' === trim( (string) $term ) ) {
-			return $search;
-		}
-
-		global $wpdb;
-		$term       = sanitize_text_field( (string) $term );
-		$like       = '%' . $wpdb->esc_like( $term ) . '%';
-		$conditions = array(
-			$wpdb->prepare( "{$wpdb->posts}.post_title LIKE %s", $like ),
-			$wpdb->prepare( "EXISTS (SELECT 1 FROM {$wpdb->postmeta} didar_search_meta WHERE didar_search_meta.post_id = {$wpdb->posts}.ID AND didar_search_meta.meta_key = %s AND didar_search_meta.meta_value LIKE %s)", '_didar_fields', $like ),
-		);
-		if ( ctype_digit( $term ) && absint( $term ) ) {
-			$conditions[] = $wpdb->prepare( "{$wpdb->posts}.ID = %d", absint( $term ) );
-		}
-
-		return ' AND (' . implode( ' OR ', $conditions ) . ') ';
 	}
 
 	public function request_row_actions( $actions, $post ) {

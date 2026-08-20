@@ -32,19 +32,19 @@
     });
   }
 
-  function appendUploadedFile(wrapper, attachmentId, filename) {
+  function appendUploadedFile(wrapper, fileId, filename) {
     var item = document.createElement('li');
     var label = document.createElement('span');
     var hidden = document.createElement('input');
     var remove = document.createElement('button');
-    item.setAttribute('data-didar-attachment', attachmentId);
+    item.setAttribute('data-didar-file', fileId);
     label.textContent = filename;
     hidden.type = 'hidden';
     hidden.name = 'didar_fields[' + wrapper.getAttribute('data-field') + '][]';
-    hidden.value = attachmentId;
+    hidden.value = fileId;
     remove.type = 'button';
     remove.className = 'button-link-delete didar-remove-upload';
-    remove.setAttribute('data-attachment-id', attachmentId);
+    remove.setAttribute('data-file-id', fileId);
     remove.textContent = window.didarAdmin.messages.remove;
     item.appendChild(label);
     item.appendChild(hidden);
@@ -60,7 +60,7 @@
     var status = wrapper && wrapper.querySelector('.didar-upload-status');
     if (!wrapper || !input || !input.files.length || !window.didarAdmin) return;
     var max = parseInt(wrapper.getAttribute('data-max-files') || '1', 10);
-    var current = wrapper.querySelectorAll('[data-didar-attachment]').length;
+    var current = wrapper.querySelectorAll('[data-didar-file]').length;
     var files = Array.prototype.slice.call(input.files);
     if (current + files.length > max) {
       status.textContent = window.didarAdmin.messages.fileLimit.replace('%d', max);
@@ -82,7 +82,7 @@
           .then(function (response) { return response.json(); })
           .then(function (response) {
             if (!response.success) throw new Error(response.data && response.data.message ? response.data.message : window.didarAdmin.messages.uploadError);
-            appendUploadedFile(wrapper, response.data.attachment_id, response.data.filename);
+            appendUploadedFile(wrapper, response.data.file_id, response.data.display_name);
             status.textContent = response.data.message;
           });
       });
@@ -97,7 +97,7 @@
 
   function removeFile(button) {
     var wrapper = button.closest('[data-didar-upload]');
-    var item = button.closest('[data-didar-attachment]');
+    var item = button.closest('[data-didar-file]');
     var status = wrapper && wrapper.querySelector('.didar-upload-status');
     if (!wrapper || !item || !window.didarAdmin) return;
     var data = new URLSearchParams();
@@ -106,7 +106,7 @@
     data.append('form_type', wrapper.getAttribute('data-form-type'));
     data.append('submission_id', wrapper.getAttribute('data-submission-id') || '0');
     data.append('field', wrapper.getAttribute('data-field'));
-    data.append('attachment_id', button.getAttribute('data-attachment-id'));
+    data.append('file_id', button.getAttribute('data-file-id'));
     button.disabled = true;
     fetch(window.didarAdmin.ajaxUrl, { method: 'POST', body: data, credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' } })
       .then(function (response) { return response.json(); })
@@ -114,7 +114,7 @@
         if (!response.success) throw new Error(response.data && response.data.message ? response.data.message : window.didarAdmin.messages.removeError);
         item.remove();
         var fileInput = wrapper.querySelector('input[type="file"]');
-        if (fileInput && wrapper.getAttribute('data-required') === '1' && !wrapper.querySelector('[data-didar-attachment]')) fileInput.required = true;
+        if (fileInput && wrapper.getAttribute('data-required') === '1' && !wrapper.querySelector('[data-didar-file]')) fileInput.required = true;
         status.textContent = response.data.message;
       })
       .catch(function (error) { status.textContent = error.message; button.disabled = false; });

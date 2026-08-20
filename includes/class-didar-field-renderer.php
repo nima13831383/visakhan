@@ -6,9 +6,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Didar_Field_Renderer {
 	private $settings;
+	private $files;
 
-	public function __construct( Didar_Settings $settings = null ) {
+	public function __construct( Didar_Settings $settings = null, Didar_File_Service $files = null ) {
 		$this->settings = $settings ? $settings : new Didar_Settings();
+		$this->files    = $files;
 	}
 
 	public function render_sections( $form, $values = array(), $errors = array(), $context = 'frontend', $submission_id = 0 ) {
@@ -239,21 +241,50 @@ class Didar_Field_Renderer {
 	}
 
 	private function render_file( $field, $value, $id, $name, $submission_id = 0 ) {
-		$attachment_ids = is_array( $value ) ? array_values( array_unique( array_filter( array_map( 'absint', $value ) ) ) ) : array_filter( array( absint( $value ) ) );
+		$file_ids       = is_array( $value ) ? array_values( array_unique( array_filter( array_map( 'absint', $value ) ) ) ) : array_filter( array( absint( $value ) ) );
 		$max_files      = ! empty( $field['max_files'] ) ? absint( $field['max_files'] ) : 1;
 		$is_multiple    = ! empty( $field['multiple'] );
 		$hidden_name    = $is_multiple ? $name . '[]' : $name;
 
 		echo '<div class="didar-file-upload" data-didar-upload data-form-type="' . esc_attr( isset( $field['form_type'] ) ? $field['form_type'] : '' ) . '" data-submission-id="' . esc_attr( absint( $submission_id ) ) . '" data-field="' . esc_attr( $field['name'] ) . '" data-max-files="' . esc_attr( $max_files ) . '" data-required="' . esc_attr( ! empty( $field['required'] ) ? '1' : '0' ) . '">';
-		echo '<div class="didar-file-picker"><input type="file" id="' . esc_attr( $id ) . '-file"' . ( $is_multiple ? ' multiple' : '' ) . ( ! empty( $field['accept'] ) ? ' accept="' . esc_attr( $field['accept'] ) . '"' : '' ) . ( ! empty( $field['required'] ) && ! $attachment_ids ? ' required aria-required="true"' : '' ) . '>';
+		echo '<div class="didar-file-picker"><input type="file" id="' . esc_attr( $id ) . '-file"' . ( $is_multiple ? ' multiple' : '' ) . ( ! empty( $field['accept'] ) ? ' accept="' . esc_attr( $field['accept'] ) . '"' : '' ) . ( ! empty( $field['required'] ) && ! $file_ids ? ' required aria-required="true"' : '' ) . '>';
 		echo '<button type="button" class="didar-upload-button">' . esc_html__( 'بارگذاری فایل', 'didar' ) . '</button></div>';
 		echo '<ul class="didar-uploaded-files" aria-live="polite">';
-		foreach ( $attachment_ids as $attachment_id ) {
-			$attached_file = get_attached_file( $attachment_id );
-			$filename      = $attached_file ? wp_basename( $attached_file ) : get_the_title( $attachment_id );
-			$filename      = $filename ? $filename : sprintf( __( 'فایل شماره %d', 'didar' ), $attachment_id );
-			echo '<li data-didar-attachment="' . esc_attr( $attachment_id ) . '"><span>' . esc_html( $filename ) . '</span><input type="hidden" name="' . esc_attr( $hidden_name ) . '" value="' . esc_attr( $attachment_id ) . '"><button type="button" class="didar-remove-upload" data-attachment-id="' . esc_attr( $attachment_id ) . '">' . esc_html__( 'حذف', 'didar' ) . '</button></li>';
+		foreach ( $file_ids as $file_id ) {
+			$file = $this->files ? $this->files->get_display_data( $file_id, $submission_id, $field['name'], true ) : null;
+			if ( ! $file ) {
+				continue;
+			}
+			echo '<li data-didar-file="' . esc_attr( $file_id ) . '"><span>' . esc_html( $file['file_name'] ) . '</span><span class="didar-file-actions">';
+			if ( $file['download_url'] ) {
+				echo '<a class="didar-download-file" href="' . esc_url( $file['download_url'] ) . '">' . esc_html__( 'دانلود', 'didar' ) . '</a>';
+			}
+			echo '<input type="hidden" name="' . esc_attr( $hidden_name ) . '" value="' . esc_attr( $file_id ) . '"><button type="button" class="didar-remove-upload" data-file-id="' . esc_attr( $file_id ) . '">' . esc_html__( 'حذف', 'didar' ) . '</button></span></li>';
 		}
 		echo '</ul><span class="didar-upload-status" role="status" aria-live="polite"></span></div>';
+	}
+
+	public function render_file_details( $field, $value, $submission_id ) {
+		$file_ids = is_array( $value ) ? array_values( array_unique( array_filter( array_map( 'absint', $value ) ) ) ) : array_filter( array( absint( $value ) ) );
+		$files    = array();
+		foreach ( $file_ids as $file_id ) {
+			$file = $this->files ? $this->files->get_display_data( $file_id, $submission_id, $field['name'], false ) : null;
+			if ( $file ) {
+				$files[] = $file;
+			}
+		}
+		if ( ! $files ) {
+			echo '—';
+			return;
+		}
+		echo '<ul class="didar-detail-files">';
+		foreach ( $files as $file ) {
+			echo '<li><span>' . esc_html( $file['file_name'] ) . '</span>';
+			if ( $file['download_url'] ) {
+				echo '<a class="didar-download-file" href="' . esc_url( $file['download_url'] ) . '">' . esc_html__( 'دانلود', 'didar' ) . '</a>';
+			}
+			echo '</li>';
+		}
+		echo '</ul>';
 	}
 }

@@ -274,7 +274,7 @@ Creation Date
 Last Modified Date
 Status
 Field Values
-Uploaded Attachment IDs
+Didar File IDs
 ```
 
 Do not trust client-supplied user IDs.
@@ -651,28 +651,11 @@ Some Didar fields are file uploads.
 
 Frontend file uploads must use AJAX.
 
-Prefer WordPress's native media/upload APIs.
+Use the dedicated `Didar_File_Service` and Didar file-record table for new uploads.
 
-Where appropriate, successful uploads should create WordPress attachments.
+New Didar documents must not create WordPress Attachment posts or appear in the Media Library. Store stable Didar file IDs in submission metadata; filesystem paths remain server-controlled file-record data and must never be accepted from the browser.
 
-Store:
-
-```text
-attachment ID
-```
-
-rather than raw arbitrary filesystem paths.
-
-Conceptually:
-
-```text
-field
-→ AJAX upload
-→ server validation
-→ WordPress Media API
-→ attachment ID
-→ submission metadata
-```
+The physical storage root is derived from `wp_upload_dir()` and uses the `didar-private` subdirectory. Do not hardcode an absolute upload path.
 
 ---
 
@@ -717,16 +700,16 @@ A file may be uploaded before the final submission post exists.
 
 Design this safely.
 
-Acceptable strategies include creating an unattached WordPress attachment temporarily and associating it with the final submission after successful submission.
+Temporary uploads must have a Didar file record before a submission exists. The record must include owner, form, field, creation time, and temporary state.
 
-If temporary uploads are implemented:
+When temporary uploads are implemented:
 
 * associate them with the current user
 * prevent another user from claiming them
-* validate attachment ownership before assignment
+* validate Didar file-record ownership before assignment
 * clean abandoned temporary uploads according to a safe cleanup strategy
 
-Do not expose arbitrary attachment IDs as trusted values.
+Do not expose arbitrary file IDs as trusted values.
 
 ---
 
@@ -1778,7 +1761,7 @@ unauthenticated request
 unauthorized admin action
 access to another user's submission
 invalid submission ID
-invalid attachment ID
+invalid Didar file ID
 disallowed file extension
 disallowed MIME
 oversized upload
@@ -1812,7 +1795,7 @@ Before considering a feature complete, verify:
 * [ ] File extensions are validated.
 * [ ] MIME types are validated.
 * [ ] File size limits are enforced.
-* [ ] Attachment ownership is verified.
+* [ ] Didar file-record ownership is verified.
 * [ ] Private submissions are not publicly queryable.
 * [ ] Sensitive data is not written to debug logs.
 * [ ] AJAX errors do not leak internal details.
@@ -1971,3 +1954,31 @@ Frontend authorization is based on authenticated WordPress ownership (`post_auth
 # 76. Append-Only Audit History
 
 Meaningful submission and workflow changes must create structured append-only audit events with a server-derived actor ID and server timestamp. Current submission metadata remains authoritative; do not convert the application to strict event sourcing. Do not store an indefinitely growing history in one serialized post-meta value or rewrite prior events during normal editing.
+
+---
+
+# 77. Private Didar File Architecture
+
+All new Didar documents use the dedicated Didar file-record table and `Didar_File_Service`. New uploads must not create `attachment` posts, use `media_handle_upload()`, or appear in the WordPress Media Library. The service owns validation, unpredictable stored names, path resolution, temporary ownership, final submission association, deletion, cleanup, and download URL generation.
+
+Submission form metadata stores stable Didar file IDs only. Original filenames are display metadata and never filesystem identities. Physical paths are always reconstructed from server-controlled relative paths under the upload directory and must be checked against traversal and absolute-path input.
+
+Legacy Media Library uploads are not migrated or bulk-deleted by this architecture.
+
+---
+
+# 78. File Download Modes
+
+The file-download mode is resolved centrally from Didar Settings. Only `secure` and `direct` are valid; absent, empty, or invalid values resolve to `secure`.
+
+Secure links use the authenticated Didar download controller. The controller must load the file record and associated submission, verify that the file ID is still stored under the recorded field, reuse request-view authorization, resolve a server-controlled path, and only then stream the file. A nonce may supplement but never replace authorization.
+
+Direct mode returns the physical URL for the same stored file and intentionally bypasses Didar authorization at download time. The Settings UI and documentation must disclose this risk. Switching modes must not copy files or rewrite submission metadata.
+
+Apache/IIS protection files may block direct access in Secure mode. Because this is not portable to every server, Nginx and other deployments that ignore `.htaccess`/`web.config` require an equivalent server rule for `didar-private`; never claim portable server-level privacy without that qualification.
+
+---
+
+# 79. File Deletion and Cleanup
+
+Download and delete permissions are separate. Final-file deletion requires request edit authorization plus a verified submission/field/file relationship. Temporary-file deletion requires the authenticated owner and exact temporary context. Final document changes create append-only file events using Didar file IDs; abandoned temporary records/files are removed by the bounded scheduled cleanup and must not create permanent request-history events.

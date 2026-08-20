@@ -12,16 +12,20 @@ class Didar_Shortcodes {
 	private $validator;
 	private $service;
 	private $settings;
+	private $files;
+	private $request_search;
 	private $assets_loaded = false;
 	private $edit_state = array();
 	private $submission_list_instance = 0;
 
-	public function __construct( Didar_Form_Registry $registry, Didar_Field_Renderer $renderer, Didar_Validator $validator, Didar_Submission_Service $service, Didar_Settings $settings = null ) {
+	public function __construct( Didar_Form_Registry $registry, Didar_Field_Renderer $renderer, Didar_Validator $validator, Didar_Submission_Service $service, Didar_Settings $settings = null, Didar_File_Service $files = null, Didar_Request_Search $request_search = null ) {
 		$this->registry  = $registry;
 		$this->renderer  = $renderer;
 		$this->validator = $validator;
 		$this->service   = $service;
 		$this->settings  = $settings ? $settings : new Didar_Settings();
+		$this->files     = $files;
+		$this->request_search = $request_search ? $request_search : new Didar_Request_Search();
 
 		add_shortcode( 'didar_form', array( $this, 'form_shortcode' ) );
 		add_shortcode( 'didar_submissions', array( $this, 'submissions_shortcode' ) );
@@ -129,15 +133,40 @@ class Didar_Shortcodes {
 		if ( ! is_user_logged_in() ) {
 			return $this->notice( __( 'برای مشاهده درخواست‌ها ابتدا وارد حساب کاربری خود شوید.', 'didar' ), 'warning' );
 		}
-		$atts = shortcode_atts( array( 'type' => '' ), $atts, 'didar_submissions' );
-		$type = sanitize_key( $atts['type'] );
-		if ( $type && ! $this->registry->is_valid_type( $type ) ) {
+		$atts = shortcode_atts(
+			array(
+				'type'   => '',
+				'search' => 'yes',
+				'filter' => 'yes',
+			),
+			$atts,
+			'didar_submissions'
+		);
+		$fixed_type = sanitize_key( $atts['type'] );
+		if ( $fixed_type && ! $this->registry->is_valid_type( $fixed_type ) ) {
 			return $this->notice( __( 'نوع فرم نامعتبر است.', 'didar' ), 'error' );
 		}
 
 		$this->enqueue_assets();
 		++$this->submission_list_instance;
-		$page_parameter = 1 === $this->submission_list_instance ? 'didar_page' : 'didar_page_' . $this->submission_list_instance;
+		$suffix           = 1 === $this->submission_list_instance ? '' : '_' . $this->submission_list_instance;
+		$page_parameter   = 'didar_page' . $suffix;
+		$search_parameter = 'didar_search' . $suffix;
+		$type_parameter   = 'didar_type' . $suffix;
+		$search_enabled   = $this->shortcode_control_enabled( $atts['search'] );
+		$filter_enabled   = $this->shortcode_control_enabled( $atts['filter'] );
+		$search_term      = $search_enabled ? $this->request_search->sanitize_term( $this->query_parameter_value( $search_parameter ) ) : '';
+		$frontend_type    = '';
+		$invalid_type     = false;
+		if ( ! $fixed_type && $filter_enabled ) {
+			$requested_type = sanitize_key( $this->query_parameter_value( $type_parameter ) );
+			if ( $requested_type && $this->registry->is_valid_type( $requested_type ) ) {
+				$frontend_type = $requested_type;
+			} elseif ( $requested_type ) {
+				$invalid_type = true;
+			}
+		}
+		$effective_type = $fixed_type ? $fixed_type : $frontend_type;
 		$page           = 1;
 		if ( isset( $_GET[ $page_parameter ] ) && ! is_array( $_GET[ $page_parameter ] ) ) {
 			$requested_page = sanitize_text_field( wp_unslash( $_GET[ $page_parameter ] ) );
@@ -145,7 +174,15 @@ class Didar_Shortcodes {
 				$page = min( 1000, max( 1, (int) $requested_page ) );
 			}
 		}
-		$list_url       = $this->current_shortcode_url();
+		$reset_url = remove_query_arg( array( $page_parameter, $search_parameter, $type_parameter ), $this->current_shortcode_url() );
+		$state_url = $reset_url;
+		if ( '' !== $search_term ) {
+			$state_url = add_query_arg( $search_parameter, $search_term, $state_url );
+		}
+		if ( $frontend_type ) {
+			$state_url = add_query_arg( $type_parameter, $frontend_type, $state_url );
+		}
+		$list_url = $page > 1 ? add_query_arg( $page_parameter, $page, $state_url ) : $state_url;
 		$args = array(
 			'post_type'           => Didar_Post_Type::POST_TYPE,
 			'post_status'         => 'publish',
@@ -157,9 +194,19 @@ class Didar_Shortcodes {
 			'ignore_sticky_posts' => true,
 			'no_found_rows'       => false,
 		);
-		if ( $type ) {
+		if ( $effective_type ) {
 			$args['meta_query'] = array(
-				array( 'key' => '_didar_form_type', 'value' => $type, 'compare' => '=' ),
+				array( 'key' => '_didar_form_type', 'value' => $effective_type, 'compare' => '=' ),
+			);
+		}
+		if ( '' !== $search_term ) {
+			$args[ Didar_Request_Search::QUERY_VAR ] = $search_term;
+		}
+		if ( $invalid_type ) {
+			$args['meta_query'] = array(
+				'relation' => 'AND',
+				array( 'key' => '_didar_form_type', 'compare' => 'EXISTS' ),
+				array( 'key' => '_didar_form_type', 'compare' => 'NOT EXISTS' ),
 			);
 		}
 		$query = new WP_Query( $args );
@@ -167,31 +214,56 @@ class Didar_Shortcodes {
 			$page          = (int) $query->max_num_pages;
 			$args['paged'] = $page;
 			$query         = new WP_Query( $args );
-			$list_url      = add_query_arg( $page_parameter, $page, remove_query_arg( $page_parameter, $list_url ) );
+			$list_url      = $page > 1 ? add_query_arg( $page_parameter, $page, $state_url ) : $state_url;
 		}
 
 		ob_start();
 		echo '<div class="didar-app didar-submissions" dir="rtl"><div class="didar-list-header"><div><p class="didar-eyebrow">' . esc_html__( 'پنل کاربری', 'didar' ) . '</p><h2>' . esc_html__( 'درخواست‌های من', 'didar' ) . '</h2></div><span class="didar-count">' . esc_html( sprintf( __( '%d درخواست', 'didar' ), $query->found_posts ) ) . '</span></div>';
+		$filters_active = '' !== $search_term || '' !== $frontend_type || $invalid_type;
+		if ( $search_enabled || ( $filter_enabled && ! $fixed_type ) ) {
+			$this->render_submission_filters(
+				array(
+					'action'            => $this->current_shortcode_base_url(),
+					'instance'          => $this->submission_list_instance,
+					'search_enabled'    => $search_enabled,
+					'filter_enabled'    => $filter_enabled && ! $fixed_type,
+					'search_parameter'  => $search_parameter,
+					'type_parameter'    => $type_parameter,
+					'page_parameter'    => $page_parameter,
+					'search_term'       => $search_term,
+					'frontend_type'     => $frontend_type,
+					'filters_active'    => $filters_active,
+					'reset_url'         => $reset_url,
+				)
+			);
+		}
 		if ( ! $query->have_posts() ) {
-			echo '<div class="didar-empty"><strong>' . esc_html__( 'هنوز درخواستی ثبت نکرده‌اید.', 'didar' ) . '</strong><p>' . esc_html__( 'درخواست‌های ثبت‌شده شما در این بخش نمایش داده می‌شوند.', 'didar' ) . '</p></div>';
+			if ( $filters_active ) {
+				echo '<div class="didar-empty"><strong>' . esc_html__( 'درخواستی با این مشخصات پیدا نشد.', 'didar' ) . '</strong><p>' . esc_html__( 'عبارت جستجو یا نوع درخواست را تغییر دهید.', 'didar' ) . '</p></div>';
+			} else {
+				echo '<div class="didar-empty"><strong>' . esc_html__( 'هنوز درخواستی ثبت نکرده‌اید.', 'didar' ) . '</strong><p>' . esc_html__( 'درخواست‌های ثبت‌شده شما در این بخش نمایش داده می‌شوند.', 'didar' ) . '</p></div>';
+			}
 		} else {
-			echo '<div class="didar-table-wrap"><table class="didar-table"><thead><tr><th scope="col">' . esc_html__( 'شماره', 'didar' ) . '</th><th scope="col">' . esc_html__( 'نوع فرم', 'didar' ) . '</th><th scope="col">' . esc_html__( 'تاریخ ثبت', 'didar' ) . '</th><th scope="col">' . esc_html__( 'وضعیت', 'didar' ) . '</th><th scope="col">' . esc_html__( 'عملیات', 'didar' ) . '</th></tr></thead><tbody>';
+			echo '<div class="didar-table-wrap"><table class="didar-table"><thead><tr><th scope="col">' . esc_html__( 'شماره', 'didar' ) . '</th><th scope="col">' . esc_html__( 'نام', 'didar' ) . '</th><th scope="col">' . esc_html__( 'نام خانوادگی', 'didar' ) . '</th><th scope="col">' . esc_html__( 'نوع فرم', 'didar' ) . '</th><th scope="col">' . esc_html__( 'تاریخ ثبت', 'didar' ) . '</th><th scope="col">' . esc_html__( 'وضعیت', 'didar' ) . '</th><th scope="col">' . esc_html__( 'عملیات', 'didar' ) . '</th></tr></thead><tbody>';
 			while ( $query->have_posts() ) {
 				$query->the_post();
 				$post_id   = get_the_ID();
 				$form_type = get_post_meta( $post_id, '_didar_form_type', true );
 				$form       = $this->registry->get( $form_type );
 				$status     = $this->service->get_public_status( $post_id );
+				$name_parts = $this->service->get_applicant_name_parts( $post_id );
+				$first_name = '' !== $name_parts['first_name'] ? $name_parts['first_name'] : '—';
+				$last_name  = '' !== $name_parts['last_name'] ? $name_parts['last_name'] : '—';
 				$details_url = $this->get_submission_page_url( 'details_page_id', $post_id, $list_url );
 				$action      = $details_url
 					? '<a class="didar-button didar-button--secondary" href="' . esc_url( $details_url ) . '">' . esc_html__( 'مشاهده جزئیات', 'didar' ) . '</a>'
 					: '<span class="didar-action-unavailable">' . esc_html__( 'صفحه جزئیات تنظیم نشده است.', 'didar' ) . '</span>';
-				echo '<tr><td data-label="' . esc_attr__( 'شماره', 'didar' ) . '"><strong>#' . esc_html( $post_id ) . '</strong></td><td data-label="' . esc_attr__( 'نوع فرم', 'didar' ) . '">' . esc_html( $form ? $form['label'] : $form_type ) . '</td><td data-label="' . esc_attr__( 'تاریخ ثبت', 'didar' ) . '"><time datetime="' . esc_attr( get_the_date( DATE_W3C ) ) . '">' . esc_html( get_the_date() ) . '</time></td><td data-label="' . esc_attr__( 'وضعیت', 'didar' ) . '"><span class="didar-status didar-status--' . esc_attr( sanitize_html_class( $status ) ) . '">' . esc_html( $this->service->get_status_label( $status ) ) . '</span></td><td data-label="' . esc_attr__( 'عملیات', 'didar' ) . '">' . wp_kses_post( $action ) . '</td></tr>';
+				echo '<tr><td data-label="' . esc_attr__( 'شماره', 'didar' ) . '"><strong>#' . esc_html( $post_id ) . '</strong></td><td data-label="' . esc_attr__( 'نام', 'didar' ) . '">' . esc_html( $first_name ) . '</td><td data-label="' . esc_attr__( 'نام خانوادگی', 'didar' ) . '">' . esc_html( $last_name ) . '</td><td data-label="' . esc_attr__( 'نوع فرم', 'didar' ) . '">' . esc_html( $form ? $form['label'] : $form_type ) . '</td><td data-label="' . esc_attr__( 'تاریخ ثبت', 'didar' ) . '"><time datetime="' . esc_attr( get_the_date( DATE_W3C ) ) . '">' . esc_html( get_the_date() ) . '</time></td><td data-label="' . esc_attr__( 'وضعیت', 'didar' ) . '"><span class="didar-status didar-status--' . esc_attr( sanitize_html_class( $status ) ) . '">' . esc_html( $this->service->get_status_label( $status ) ) . '</span></td><td data-label="' . esc_attr__( 'عملیات', 'didar' ) . '">' . wp_kses_post( $action ) . '</td></tr>';
 			}
 			echo '</tbody></table></div>';
 			if ( $query->max_num_pages > 1 ) {
 				echo '<nav class="didar-pagination" aria-label="' . esc_attr__( 'صفحه‌بندی درخواست‌ها', 'didar' ) . '">';
-				$pagination_base = str_replace( '999999999', '%#%', add_query_arg( $page_parameter, '999999999', remove_query_arg( $page_parameter, $list_url ) ) );
+				$pagination_base = str_replace( '999999999', '%#%', add_query_arg( $page_parameter, '999999999', $state_url ) );
 				echo wp_kses_post( paginate_links( array( 'base' => $pagination_base, 'format' => '', 'current' => $page, 'total' => $query->max_num_pages, 'prev_text' => __( 'قبلی', 'didar' ), 'next_text' => __( 'بعدی', 'didar' ) ) ) );
 				echo '</nav>';
 			}
@@ -199,6 +271,53 @@ class Didar_Shortcodes {
 		wp_reset_postdata();
 		echo '</div>';
 		return ob_get_clean();
+	}
+
+	private function render_submission_filters( $state ) {
+		$form_attributes = ! empty( $state['search_enabled'] ) ? ' role="search"' : '';
+		echo '<form class="didar-submissions-controls" method="get" action="' . esc_url( $state['action'] ) . '" aria-label="' . esc_attr__( 'جستجو و فیلتر درخواست‌ها', 'didar' ) . '"' . $form_attributes . '>';
+		$this->render_preserved_query_fields( array( $state['search_parameter'], $state['type_parameter'], $state['page_parameter'] ) );
+		echo '<div class="didar-submissions-controls__fields">';
+		if ( ! empty( $state['search_enabled'] ) ) {
+			$search_id = 'didar-submissions-search-' . absint( $state['instance'] );
+			echo '<div class="didar-control-field"><label for="' . esc_attr( $search_id ) . '">' . esc_html__( 'جستجو در درخواست‌ها', 'didar' ) . '</label><input type="search" id="' . esc_attr( $search_id ) . '" name="' . esc_attr( $state['search_parameter'] ) . '" value="' . esc_attr( $state['search_term'] ) . '" maxlength="' . esc_attr( Didar_Request_Search::MAX_TERM_LENGTH ) . '"></div>';
+		}
+		if ( ! empty( $state['filter_enabled'] ) ) {
+			$type_id = 'didar-submissions-type-' . absint( $state['instance'] );
+			echo '<div class="didar-control-field"><label for="' . esc_attr( $type_id ) . '">' . esc_html__( 'نوع درخواست', 'didar' ) . '</label><select id="' . esc_attr( $type_id ) . '" name="' . esc_attr( $state['type_parameter'] ) . '"><option value="">' . esc_html__( 'همه درخواست‌ها', 'didar' ) . '</option>';
+			foreach ( $this->registry->all() as $type => $form ) {
+				echo '<option value="' . esc_attr( $type ) . '" ' . selected( $state['frontend_type'], $type, false ) . '>' . esc_html( $form['label'] ) . '</option>';
+			}
+			echo '</select></div>';
+		}
+		echo '</div><div class="didar-submissions-controls__actions"><button type="submit" class="didar-button didar-button--primary">' . esc_html( ! empty( $state['search_enabled'] ) ? __( 'جستجو', 'didar' ) : __( 'اعمال فیلتر', 'didar' ) ) . '</button>';
+		if ( ! empty( $state['filters_active'] ) ) {
+			echo '<a class="didar-button didar-button--secondary" href="' . esc_url( $state['reset_url'] ) . '">' . esc_html__( 'پاک کردن فیلترها', 'didar' ) . '</a>';
+		}
+		echo '</div></form>';
+	}
+
+	private function render_preserved_query_fields( $excluded ) {
+		$excluded = array_merge( (array) $excluded, array( 'didar_submission', 'didar_return' ) );
+		foreach ( $_GET as $key => $value ) {
+			if ( is_array( $value ) ) {
+				continue;
+			}
+			$key = sanitize_key( $key );
+			if ( ! $key || in_array( $key, $excluded, true ) ) {
+				continue;
+			}
+			echo '<input type="hidden" name="' . esc_attr( $key ) . '" value="' . esc_attr( sanitize_text_field( wp_unslash( $value ) ) ) . '">';
+		}
+	}
+
+	private function shortcode_control_enabled( $value ) {
+		$value = is_scalar( $value ) ? sanitize_key( (string) $value ) : '';
+		return in_array( $value, array( 'yes', 'no' ), true ) ? 'yes' === $value : true;
+	}
+
+	private function query_parameter_value( $parameter ) {
+		return isset( $_GET[ $parameter ] ) && ! is_array( $_GET[ $parameter ] ) ? wp_unslash( $_GET[ $parameter ] ) : '';
 	}
 
 	public function submission_details_shortcode() {
@@ -332,7 +451,7 @@ class Didar_Shortcodes {
 			echo '<div class="didar-notice didar-notice--success" role="status">' . esc_html__( 'تغییرات درخواست با موفقیت ذخیره شد.', 'didar' ) . '</div>';
 		}
 		echo '<div class="didar-details-meta"><span><strong>' . esc_html__( 'تاریخ ثبت:', 'didar' ) . '</strong> ' . esc_html( get_the_date( '', $submission_id ) ) . '</span><span><strong>' . esc_html__( 'آخرین ویرایش:', 'didar' ) . '</strong> ' . esc_html( get_the_modified_date( '', $submission_id ) ) . '</span></div>';
-		$this->render_detail_sections( $form, $values );
+		$this->render_detail_sections( $form, $values, $submission_id );
 		$this->render_historical_section( $form_type, $values );
 		echo '<section class="didar-detail-section"><h3>' . esc_html__( 'پیام و وضعیت عمومی', 'didar' ) . '</h3><dl class="didar-detail-grid"><div class="didar-detail-item"><dt>' . esc_html__( 'وضعیت عمومی', 'didar' ) . '</dt><dd>' . esc_html( $this->service->get_status_label( $status ) ) . '</dd></div><div class="didar-detail-item"><dt>' . esc_html__( 'یادداشت عمومی', 'didar' ) . '</dt><dd>' . ( '' !== $public_note ? nl2br( esc_html( $public_note ) ) : '—' ) . '</dd></div></dl></section>';
 		echo '<section class="didar-detail-section"><h3>' . esc_html__( 'یادداشت متقاضی', 'didar' ) . '</h3><div class="didar-detail-note">' . ( '' !== $shared_note ? nl2br( esc_html( $shared_note ) ) : '—' ) . '</div></section>';
@@ -437,10 +556,7 @@ class Didar_Shortcodes {
 	}
 
 	private function current_shortcode_url() {
-		$url = get_permalink( get_queried_object_id() );
-		if ( ! $url ) {
-			$url = home_url( '/' );
-		}
+		$url = $this->current_shortcode_base_url();
 		foreach ( $_GET as $key => $value ) {
 			if ( is_array( $value ) || in_array( $key, array( 'didar_submission', 'didar_return' ), true ) ) {
 				continue;
@@ -450,7 +566,12 @@ class Didar_Shortcodes {
 		return $url;
 	}
 
-	private function render_detail_sections( $form, $values ) {
+	private function current_shortcode_base_url() {
+		$url = get_permalink( get_queried_object_id() );
+		return $url ? $url : home_url( '/' );
+	}
+
+	private function render_detail_sections( $form, $values, $submission_id ) {
 		foreach ( $form['sections'] as $section ) {
 			$visible_fields = array_filter(
 				$section['fields'],
@@ -465,8 +586,14 @@ class Didar_Shortcodes {
 			echo '<section class="didar-detail-section"><h3>' . esc_html( $section['label'] ) . '</h3><dl class="didar-detail-grid">';
 			foreach ( $visible_fields as $field ) {
 				$value     = array_key_exists( $field['name'], $values ) ? $values[ $field['name'] ] : '';
-				$formatted = $this->service->format_value( $field, $value );
-				echo '<div class="didar-detail-item"><dt>' . esc_html( $field['label'] ) . '</dt><dd>' . nl2br( esc_html( $formatted ) ) . '</dd></div>';
+				echo '<div class="didar-detail-item"><dt>' . esc_html( $field['label'] ) . '</dt><dd>';
+				if ( 'file' === $field['type'] ) {
+					$this->renderer->render_file_details( $field, $value, $submission_id );
+				} else {
+					$formatted = $this->service->format_value( $field, $value );
+					echo nl2br( esc_html( $formatted ) );
+				}
+				echo '</dd></div>';
 			}
 			echo '</dl></section>';
 		}

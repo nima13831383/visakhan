@@ -68,11 +68,15 @@ Normal customers can receive only Public Status and Public Note for submissions 
 
 ## Plugin settings
 
-The structured `didar_settings` option stores Colleague-history visibility, frontend requests per page, and sparse field-required overrides. Frontend pagination defaults to 10 results and is bounded to 1–100. An absent form/field override always means “use the Form Registry default”; rendering and server validation use the same centralized resolver.
+The structured `didar_settings` option stores Colleague-history visibility, frontend requests per page, sparse field-required overrides, and file download mode. Frontend pagination defaults to 10 results and is bounded to 1–100. An absent form/field override always means “use the Form Registry default”; rendering and server validation use the same centralized resolver. An absent, empty, or invalid download mode always resolves to `secure`.
 
 ## Request search and pagination
 
-The wp-admin request search remains server-side and searches request IDs, request titles, and the `_didar_fields` payload used by all registered form types. Form type, status, and assignment constraints remain SQL-level filters, so they compose with search and native admin pagination. Frontend shortcode pagination uses a Didar-specific query parameter on the current containing page and applies ownership, optional form type, `posts_per_page`, and `paged` in `WP_Query`.
+The shared `Didar_Request_Search` service provides the SQL-level search clause for both wp-admin and `[didar_submissions]`. It searches exact request IDs, request titles, and the `_didar_fields` payload used by all registered form types, which covers current and legacy names, mobile/phone values, and email values. Admin form type, status, and assignment constraints remain SQL-level filters, so they compose with search and native admin pagination.
+
+`[didar_submissions]` enables its GET-based search and registered Form Registry type dropdown by default. Its query always applies authenticated `post_author` ownership before optional search, frontend type, fixed shortcode `type`, `posts_per_page`, and `paged` constraints. A valid fixed `type` attribute takes precedence over URL input and hides the type dropdown. Invalid URL form types return no records rather than widening the query. The `search="no"` and `filter="no"` attributes independently hide and disable their URL controls.
+
+The first frontend list uses `didar_search`, `didar_type`, and `didar_page`; additional list instances on the same page use a numeric suffix such as `_2`. Search/filter submissions reset that instance to page one, pagination preserves the effective search/type on the containing page, and the reset action removes only that instance's Didar parameters while preserving unrelated page query state.
 
 ## Visa request documents
 
@@ -80,7 +84,17 @@ Visa companions include `national_id`, `email`, and `phone` in addition to the e
 
 The Visa Request Registry defines four independent optional multi-file fields: `personal_photo`, `passport_main_page`, `round_trip_ticket`, and `other_documents`. Each accepts at most two PDF, DOC, DOCX, JPG/JPEG, PNG, or WEBP files, with a Didar technical limit of 5 MB per file (and any lower WordPress/PHP limit still applying).
 
-AJAX uploads create temporary WordPress attachments owned by the authenticated actor and scoped to form, field, and optional submission. Final validation rechecks ownership, context, count, and MIME before association. Temporary removals delete the pending attachment without creating a submission event; associated document additions, removals, and replacements create append-only audit events.
+AJAX uploads create Didar-controlled private file records and physical files under the `didar-private` directory derived from `wp_upload_dir()`. New uploads do not create WordPress Attachment posts and do not appear in Media Library. Temporary records are owned by the authenticated actor and scoped to form, field, and optional submission. Final validation rechecks ownership, context, count, extension, MIME, and size before association. Temporary removals delete the pending file and record without creating a submission event; finalized additions, removals, and replacements create append-only audit events using Didar file IDs.
+
+## Private file storage and downloads
+
+Didar file metadata is stored in `{$wpdb->prefix}didar_files`; `_didar_fields` stores stable file IDs, never filesystem paths or generated download URLs. Stored filenames are cryptographically unpredictable while the sanitized original filename remains available for display and download headers.
+
+The structured `didar_settings[file_download_mode]` value accepts only `secure` or `direct` and defaults safely to `secure`. Secure links use the authenticated `admin-post.php?action=didar_download_file` controller, which verifies its nonce as an additional measure and independently checks the file record, final state, submission association, field membership, request type, and existing request-view authorization before streaming. Direct mode returns the physical URL for the same file and intentionally does not authorize at download time. Switching modes neither duplicates files nor rewrites submission metadata.
+
+The service writes Apache `.htaccess` and IIS `web.config` protection rules in Secure mode and non-listing rules in Direct mode. Nginx and other servers that ignore these files need an equivalent server-level deny rule for `didar-private`; otherwise unpredictable filenames and omission of direct URLs reduce exposure but cannot provide true portable server-level denial.
+
+Temporary records older than 24 hours are removed in bounded daily cleanup batches. Final records are never selected by that cleanup. Existing legacy Media Library files are not migrated or bulk-deleted.
 
 ## Assignment
 

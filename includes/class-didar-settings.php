@@ -12,6 +12,7 @@ class Didar_Settings {
 	const DEFAULT_REQUESTS_PER_PAGE = 10;
 	const MIN_REQUESTS_PER_PAGE     = 1;
 	const MAX_REQUESTS_PER_PAGE     = 100;
+	const DEFAULT_FILE_DOWNLOAD_MODE = 'secure';
 
 	public function all() {
 		$settings = get_option( self::OPTION_NAME, array() );
@@ -28,6 +29,12 @@ class Didar_Settings {
 		$value    = isset( $settings['frontend_requests_per_page'] ) ? absint( $settings['frontend_requests_per_page'] ) : self::DEFAULT_REQUESTS_PER_PAGE;
 
 		return min( self::MAX_REQUESTS_PER_PAGE, max( self::MIN_REQUESTS_PER_PAGE, $value ) );
+	}
+
+	public function file_download_mode() {
+		$settings = $this->all();
+		$mode     = isset( $settings['file_download_mode'] ) && is_scalar( $settings['file_download_mode'] ) ? sanitize_key( (string) $settings['file_download_mode'] ) : '';
+		return in_array( $mode, array( 'secure', 'direct' ), true ) ? $mode : self::DEFAULT_FILE_DOWNLOAD_MODE;
 	}
 
 	/**

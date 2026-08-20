@@ -8,11 +8,14 @@ class Didar_Submission_Service {
 	private $registry;
 	private $events;
 	private $settings;
+	private $files;
 
-	public function __construct( Didar_Form_Registry $registry, Didar_Event_Log $events, Didar_Settings $settings = null ) {
+	public function __construct( Didar_Form_Registry $registry, Didar_Event_Log $events, Didar_Settings $settings = null, Didar_File_Service $files = null ) {
 		$this->registry = $registry;
 		$this->events   = $events;
 		$this->settings = $settings ? $settings : new Didar_Settings();
+		$this->files    = $files ? $files : new Didar_File_Service( $registry, $this->settings, $events );
+		$this->files->set_submission_service( $this );
 	}
 
 	public function create( $form_type, $data, $author_id, $shared_note = '' ) {
@@ -274,6 +277,34 @@ class Didar_Submission_Service {
 		return is_array( $fields ) ? $fields : array();
 	}
 
+	public function get_applicant_name_parts( $post_id ) {
+		$fields     = $this->get_fields( $post_id );
+		$first_name = isset( $fields['first_name'] ) && is_scalar( $fields['first_name'] ) ? trim( sanitize_text_field( (string) $fields['first_name'] ) ) : '';
+		$last_name  = isset( $fields['last_name'] ) && is_scalar( $fields['last_name'] ) ? trim( sanitize_text_field( (string) $fields['last_name'] ) ) : '';
+		if ( '' !== $first_name || '' !== $last_name ) {
+			return array( 'first_name' => $first_name, 'last_name' => $last_name );
+		}
+
+		$combined = '';
+		foreach ( array( 'full_name', 'input_1' ) as $combined_key ) {
+			if ( isset( $fields[ $combined_key ] ) && is_scalar( $fields[ $combined_key ] ) ) {
+				$combined = trim( sanitize_text_field( (string) $fields[ $combined_key ] ) );
+				if ( '' !== $combined ) {
+					break;
+				}
+			}
+		}
+		if ( '' === $combined ) {
+			return array( 'first_name' => '', 'last_name' => '' );
+		}
+
+		$parts = preg_split( '/\s+/u', $combined, 2 );
+		return array(
+			'first_name' => isset( $parts[0] ) ? $parts[0] : '',
+			'last_name'  => isset( $parts[1] ) ? $parts[1] : '',
+		);
+	}
+
 	public function get_shared_note( $post_id ) {
 		return (string) get_post_meta( $post_id, '_didar_shared_note', true );
 	}
@@ -408,7 +439,8 @@ class Didar_Submission_Service {
 			return $user ? $user->display_name : sprintf( __( 'کاربر #%d', 'didar' ), absint( $value ) );
 		}
 		if ( in_array( $event_type, array( 'file_added', 'file_replaced', 'file_removed' ), true ) && is_scalar( $value ) ) {
-			return sprintf( __( 'پیوست #%d', 'didar' ), absint( $value ) );
+			$record = $this->files->get( absint( $value ) );
+			return $record ? $record['original_name'] : sprintf( __( 'فایل دیدار #%d', 'didar' ), absint( $value ) );
 		}
 		if ( is_array( $value ) ) {
 			return $this->format_event_array( $value );
@@ -449,16 +481,17 @@ class Didar_Submission_Service {
 			return $field['legacy_display_options'][ $value ];
 		}
 		if ( 'file' === $field['type'] ) {
-			$attachment_ids = is_array( $value ) ? $value : array( $value );
-			$labels         = array();
-			foreach ( $attachment_ids as $attachment_id ) {
-				$attachment_id = absint( $attachment_id );
-				if ( ! $attachment_id ) {
+			$file_ids = is_array( $value ) ? $value : array( $value );
+			$labels   = array();
+			foreach ( $file_ids as $file_id ) {
+				$file_id = absint( $file_id );
+				if ( ! $file_id ) {
 					continue;
 				}
-				$attached_file = get_attached_file( $attachment_id );
-				$title         = $attached_file ? wp_basename( $attached_file ) : get_the_title( $attachment_id );
-				$labels[]      = $title ? $title : sprintf( __( 'فایل شماره %d', 'didar' ), $attachment_id );
+				$record = $this->files->get( $file_id );
+				if ( $record ) {
+					$labels[] = $record['original_name'];
+				}
 			}
 			return $labels ? implode( '، ', $labels ) : '—';
 		}
@@ -547,80 +580,10 @@ class Didar_Submission_Service {
 	}
 
 	private function attach_files( $post_id, $form_type, $data, $old_data = array(), $log_changes = false ) {
-		foreach ( $this->registry->fields( $form_type ) as $name => $field ) {
-			if ( 'file' !== $field['type'] ) {
-				continue;
-			}
-			$new_ids = isset( $data[ $name ] ) ? (array) $data[ $name ] : array();
-			$old_ids = isset( $old_data[ $name ] ) ? (array) $old_data[ $name ] : array();
-			$new_ids = array_values( array_unique( array_filter( array_map( 'absint', $new_ids ) ) ) );
-			$old_ids = array_values( array_unique( array_filter( array_map( 'absint', $old_ids ) ) ) );
-			$added   = array_values( array_diff( $new_ids, $old_ids ) );
-			$removed = array_values( array_diff( $old_ids, $new_ids ) );
-
-			foreach ( $new_ids as $attachment_id ) {
-				if ( 'attachment' !== get_post_type( $attachment_id ) ) {
-					continue;
-				}
-				wp_update_post( array( 'ID' => $attachment_id, 'post_parent' => $post_id ) );
-				foreach ( array( '_didar_temp_owner', '_didar_temp_created', '_didar_temp_form_type', '_didar_temp_field', '_didar_temp_submission_id' ) as $temp_key ) {
-					delete_post_meta( $attachment_id, $temp_key );
-				}
-				update_post_meta( $attachment_id, '_didar_submission_id', $post_id );
-				update_post_meta( $attachment_id, '_didar_document_field', $name );
-			}
-
-			if ( $log_changes && 1 === count( $added ) && 1 === count( $removed ) ) {
-				$this->events->add( $post_id, 'file_replaced', $removed[0], $added[0], array( 'field_name' => $name, 'field_label' => $field['label'], 'attachment_id' => $added[0] ) );
-				if ( absint( get_post_meta( $removed[0], '_didar_submission_id', true ) ) === absint( $post_id ) ) {
-					wp_delete_attachment( $removed[0], true );
-				}
-				$added   = array();
-				$removed = array();
-			}
-			foreach ( $added as $attachment_id ) {
-				if ( $log_changes ) {
-					$this->events->add( $post_id, 'file_added', null, $attachment_id, array( 'field_name' => $name, 'field_label' => $field['label'], 'attachment_id' => $attachment_id ) );
-				}
-			}
-			foreach ( $removed as $attachment_id ) {
-				if ( absint( get_post_meta( $attachment_id, '_didar_submission_id', true ) ) === absint( $post_id ) ) {
-					wp_delete_attachment( $attachment_id, true );
-				}
-				if ( $log_changes ) {
-					$this->events->add( $post_id, 'file_removed', $attachment_id, null, array( 'field_name' => $name, 'field_label' => $field['label'], 'attachment_id' => $attachment_id ) );
-				}
-			}
-		}
+		$this->files->finalize_submission_files( $post_id, $form_type, $data, $old_data, $log_changes );
 	}
 
-	public function remove_document( $post_id, $form_type, $field_name, $attachment_id ) {
-		$post          = get_post( absint( $post_id ) );
-		$fields        = $this->registry->fields( $form_type );
-		$attachment_id = absint( $attachment_id );
-		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || ! isset( $fields[ $field_name ] ) || 'file' !== $fields[ $field_name ]['type'] || ! $attachment_id ) {
-			return new WP_Error( 'invalid_document', __( 'فایل یا درخواست معتبر نیست.', 'didar' ) );
-		}
-
-		$staff_can_edit = current_user_can( 'didar_edit_requests' ) && current_user_can( 'edit_post', $post_id );
-		$owner_can_edit = $this->is_owner_editable( $post_id, get_current_user_id() );
-		if ( ! $staff_can_edit && ! $owner_can_edit ) {
-			return new WP_Error( 'forbidden_document', __( 'شما اجازه حذف این فایل را ندارید.', 'didar' ) );
-		}
-
-		$data        = $this->get_fields( $post_id );
-		$current_ids = isset( $data[ $field_name ] ) ? (array) $data[ $field_name ] : array();
-		$current_ids = array_values( array_unique( array_filter( array_map( 'absint', $current_ids ) ) ) );
-		if ( ! in_array( $attachment_id, $current_ids, true ) || absint( get_post_meta( $attachment_id, '_didar_submission_id', true ) ) !== absint( $post_id ) ) {
-			return new WP_Error( 'forbidden_document', __( 'شما اجازه حذف این فایل را ندارید.', 'didar' ) );
-		}
-
-		$data[ $field_name ] = array_values( array_diff( $current_ids, array( $attachment_id ) ) );
-		update_post_meta( $post_id, '_didar_fields', $data );
-		wp_delete_attachment( $attachment_id, true );
-		$this->events->add( $post_id, 'file_removed', $attachment_id, null, array( 'field_name' => $field_name, 'field_label' => $fields[ $field_name ]['label'], 'attachment_id' => $attachment_id ) );
-		wp_update_post( array( 'ID' => $post_id ) );
-
-		return true;
+	public function remove_document( $post_id, $form_type, $field_name, $file_id ) {
+		return $this->files->remove( $file_id, $form_type, $field_name, $post_id );
 	}
 }

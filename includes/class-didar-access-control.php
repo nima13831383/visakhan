@@ -155,6 +155,11 @@ class Didar_Access_Control {
 		if ( wp_doing_ajax() || current_user_can( 'manage_options' ) ) {
 			return;
 		}
+		global $pagenow;
+		$admin_post_action = isset( $_REQUEST['action'] ) && ! is_array( $_REQUEST['action'] ) ? sanitize_key( wp_unslash( $_REQUEST['action'] ) ) : '';
+		if ( 'admin-post.php' === $pagenow && 'didar_download_file' === $admin_post_action ) {
+			return;
+		}
 
 		if ( ! current_user_can( 'didar_view_requests' ) ) {
 			if ( current_user_can( 'didar_colleague_access' ) || ! current_user_can( 'edit_posts' ) ) {
@@ -164,7 +169,6 @@ class Didar_Access_Control {
 			return;
 		}
 
-		global $pagenow;
 		$allowed = false;
 		if ( 'edit.php' === $pagenow ) {
 			$post_type = isset( $_GET['post_type'] ) && ! is_array( $_GET['post_type'] ) ? sanitize_key( wp_unslash( $_GET['post_type'] ) ) : '';

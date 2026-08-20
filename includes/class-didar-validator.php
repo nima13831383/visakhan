@@ -7,10 +7,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Didar_Validator {
 	private $registry;
 	private $settings;
+	private $files;
 
-	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings = null ) {
+	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings = null, Didar_File_Service $files = null ) {
 		$this->registry = $registry;
 		$this->settings = $settings ? $settings : new Didar_Settings();
+		$this->files    = $files ? $files : new Didar_File_Service( $registry, $this->settings, new Didar_Event_Log() );
 	}
 
 	public function validate( $form_type, $submitted, $context = 'frontend', $submission_id = 0 ) {
@@ -160,7 +162,7 @@ class Didar_Validator {
 			case 'repeater':
 				return $this->validate_repeater( $field, $raw );
 			case 'file':
-				return $this->validate_attachment( $field, $raw, $context, $submission_id );
+				return $this->validate_file( $field, $raw, $context, $submission_id );
 			case 'hidden':
 			case 'text':
 			default:
@@ -229,84 +231,40 @@ class Didar_Validator {
 		return $rows;
 	}
 
-	private function validate_attachment( $field, $raw, $context, $submission_id = 0 ) {
+	private function validate_file( $field, $raw, $context, $submission_id = 0 ) {
 		if ( ! empty( $field['multiple'] ) ) {
 			if ( ! is_array( $raw ) ) {
-				return new WP_Error( 'invalid_attachment_structure', __( 'ساختار فایل‌های انتخاب‌شده معتبر نیست.', 'didar' ) );
+				return new WP_Error( 'invalid_file_structure', __( 'ساختار فایل‌های انتخاب‌شده معتبر نیست.', 'didar' ) );
 			}
 			$max_files = ! empty( $field['max_files'] ) ? absint( $field['max_files'] ) : 1;
 			if ( count( $raw ) > $max_files ) {
 				return new WP_Error( 'too_many_files', sprintf( __( 'برای «%s» حداکثر %d فایل مجاز است.', 'didar' ), $field['label'], $max_files ) );
 			}
-			$attachment_ids = array();
-			foreach ( $raw as $attachment_id ) {
-				if ( is_array( $attachment_id ) || is_object( $attachment_id ) ) {
-					return new WP_Error( 'invalid_attachment_structure', __( 'ساختار فایل‌های انتخاب‌شده معتبر نیست.', 'didar' ) );
+			$file_ids = array();
+			foreach ( $raw as $file_id ) {
+				if ( is_array( $file_id ) || is_object( $file_id ) ) {
+					return new WP_Error( 'invalid_file_structure', __( 'ساختار فایل‌های انتخاب‌شده معتبر نیست.', 'didar' ) );
 				}
-				$validated = $this->validate_attachment_id( $field, $attachment_id, $context, $submission_id );
+				$validated = $this->validate_file_id( $field, $file_id, $context, $submission_id );
 				if ( is_wp_error( $validated ) ) {
 					return $validated;
 				}
 				if ( $validated ) {
-					$attachment_ids[] = $validated;
+					$file_ids[] = $validated;
 				}
 			}
-			$attachment_ids = array_values( array_unique( $attachment_ids ) );
-			if ( count( $attachment_ids ) > $max_files ) {
+			$file_ids = array_values( array_unique( $file_ids ) );
+			if ( count( $file_ids ) > $max_files ) {
 				return new WP_Error( 'too_many_files', sprintf( __( 'برای «%s» حداکثر %d فایل مجاز است.', 'didar' ), $field['label'], $max_files ) );
 			}
-			return $attachment_ids;
+			return $file_ids;
 		}
 
-		return $this->validate_attachment_id( $field, $raw, $context, $submission_id );
+		return $this->validate_file_id( $field, $raw, $context, $submission_id );
 	}
 
-	private function validate_attachment_id( $field, $raw, $context, $submission_id = 0 ) {
-		$attachment_id = absint( $raw );
-		if ( ! $attachment_id ) {
-			return '';
-		}
-		$attachment = get_post( $attachment_id );
-		if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
-			return new WP_Error( 'invalid_attachment', __( 'فایل انتخاب‌شده معتبر نیست.', 'didar' ) );
-		}
-		$document_field = (string) get_post_meta( $attachment_id, '_didar_document_field', true );
-		if ( $document_field && $document_field !== $field['name'] ) {
-			return new WP_Error( 'invalid_attachment_context', __( 'این فایل برای فیلد دیگری بارگذاری شده است.', 'didar' ) );
-		}
-		$owner = absint( get_post_meta( $attachment_id, '_didar_temp_owner', true ) );
-		if ( $owner ) {
-			$temp_form  = get_post_meta( $attachment_id, '_didar_temp_form_type', true );
-			$temp_field = get_post_meta( $attachment_id, '_didar_temp_field', true );
-			$temp_submission_id = absint( get_post_meta( $attachment_id, '_didar_temp_submission_id', true ) );
-			$is_new_admin_submission = 'admin' === $context && $submission_id && ! $temp_submission_id && ! get_post_meta( $submission_id, '_didar_form_type', true );
-			if ( $temp_form !== $field['form_type'] || $temp_field !== $field['name'] || $owner !== get_current_user_id() || ( $submission_id && $temp_submission_id !== absint( $submission_id ) && ! $is_new_admin_submission ) || ( ! $submission_id && $temp_submission_id ) ) {
-				return new WP_Error( 'invalid_attachment_context', __( 'این فایل برای فیلد دیگری بارگذاری شده است.', 'didar' ) );
-			}
-		}
-		if ( 'admin' !== $context && $owner !== get_current_user_id() ) {
-			$attached_submission = absint( get_post_meta( $attachment_id, '_didar_submission_id', true ) );
-			$owned_submission    = $submission_id ? get_post( $submission_id ) : null;
-			if (
-				! $owned_submission ||
-				Didar_Post_Type::POST_TYPE !== $owned_submission->post_type ||
-				(int) $owned_submission->post_author !== get_current_user_id() ||
-				$attached_submission !== (int) $submission_id
-			) {
-				return new WP_Error( 'invalid_attachment_owner', __( 'شما اجازه استفاده از این فایل را ندارید.', 'didar' ) );
-			}
-		}
-		if ( 'admin' === $context && ! $owner ) {
-			$attached_submission = absint( get_post_meta( $attachment_id, '_didar_submission_id', true ) );
-			if ( ! $submission_id || $attached_submission !== (int) $submission_id || ! current_user_can( 'edit_post', $submission_id ) ) {
-				return new WP_Error( 'invalid_attachment_owner', __( 'شما اجازه استفاده از این فایل را ندارید.', 'didar' ) );
-			}
-		}
-		$allowed = isset( $field['mime_types'] ) ? (array) $field['mime_types'] : array( 'image/jpeg', 'image/png', 'application/pdf' );
-		if ( ! in_array( get_post_mime_type( $attachment_id ), $allowed, true ) ) {
-			return new WP_Error( 'invalid_attachment_type', __( 'نوع فایل انتخاب‌شده مجاز نیست.', 'didar' ) );
-		}
-		return $attachment_id;
+	private function validate_file_id( $field, $raw, $context, $submission_id = 0 ) {
+		return $this->files->validate_file_id( $field, $raw, $context, $submission_id );
 	}
 
 	private function required_error( $label ) {

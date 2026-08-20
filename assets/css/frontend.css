@@ -328,6 +328,11 @@
 .didar-file-picker { align-items: center; display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr) auto; }
 .didar-uploaded-files { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
 .didar-uploaded-files li { align-items: center; background: var(--didar-bg); border: 1px solid var(--didar-border); border-radius: 8px; display: flex; gap: 10px; justify-content: space-between; padding: 9px 12px; }
+.didar-file-actions { align-items: center; display: inline-flex; flex-wrap: wrap; gap: 10px; }
+.didar-download-file { color: var(--didar-accent); font-weight: 700; text-decoration: none; }
+.didar-download-file:hover, .didar-download-file:focus { text-decoration: underline; }
+.didar-detail-files { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.didar-detail-files li { align-items: center; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
 .didar-uploaded-files li span { overflow-wrap: anywhere; }
 .didar-remove-upload { background: #fff; border: 1px solid #e3a7a2; border-radius: 6px; color: #9f2017; cursor: pointer; font: inherit; padding: 5px 10px; }
 .didar-remove-upload:disabled { cursor: wait; opacity: .6; }
@@ -357,8 +362,62 @@
   padding: 5px 13px;
 }
 
+.didar-submissions-controls {
+  background: #fff;
+  border: 1px solid var(--didar-border);
+  border-radius: 10px;
+  margin: 24px 24px 0;
+  padding: 18px;
+}
+
+.didar-submissions-controls__fields {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.didar-control-field label {
+  color: var(--didar-text);
+  display: block;
+  font-size: .88rem;
+  font-weight: 750;
+  margin: 0 0 8px;
+}
+
+.didar-control-field input,
+.didar-control-field select {
+  background: #fff;
+  border: 1px solid var(--didar-border-strong);
+  border-radius: 8px;
+  box-sizing: border-box;
+  color: var(--didar-text);
+  font: inherit;
+  min-height: 44px;
+  padding: 10px 13px;
+  width: 100%;
+}
+
+.didar-control-field input:hover,
+.didar-control-field select:hover { border-color: #bcbcbc; }
+
+.didar-control-field input:focus,
+.didar-control-field select:focus {
+  border-color: var(--didar-primary);
+  box-shadow: 0 0 0 4px rgba(255, 193, 0, .3);
+  outline: 2px solid var(--didar-primary);
+  outline-offset: 1px;
+}
+
+.didar-submissions-controls__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
 .didar-table-wrap { overflow-x: auto; padding: 24px; }
-.didar-table { background: #fff; border: 1px solid var(--didar-border); border-collapse: separate; border-radius: 10px; border-spacing: 0; min-width: 680px; overflow: hidden; width: 100%; }
+.didar-table { background: #fff; border: 1px solid var(--didar-border); border-collapse: separate; border-radius: 10px; border-spacing: 0; min-width: 860px; overflow: hidden; width: 100%; }
 .didar-table th, .didar-table td { border-bottom: 1px solid var(--didar-border); padding: 15px 16px; text-align: right; }
 .didar-table th { background: #f5f5f5; color: #5e5e5e; font-size: .84rem; font-weight: 750; }
 .didar-table tbody tr { transition: background-color .18s ease; }
@@ -511,6 +570,10 @@
   .didar-actions { align-items: stretch; flex-direction: column; margin: 22px 12px 0; padding-bottom: 20px; }
   .didar-submit { width: 100%; }
   .didar-list-header { align-items: flex-start; gap: 16px; }
+	.didar-submissions-controls { margin: 16px 12px 0; padding: 15px; }
+	.didar-submissions-controls__fields { grid-template-columns: 1fr; }
+	.didar-submissions-controls__actions { align-items: stretch; flex-direction: column; }
+	.didar-submissions-controls__actions .didar-button { width: 100%; }
 	.didar-details-header { flex-direction: column; }
   .didar-table-wrap { overflow: visible; padding: 12px; }
   .didar-table { background: transparent; border: 0; min-width: 0; overflow: visible; }
