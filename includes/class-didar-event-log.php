@@ -5,8 +5,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class Didar_Event_Log {
-	const SCHEMA_VERSION        = '1.0.0';
-	const SCHEMA_VERSION_OPTION = 'didar_event_schema_version';
+	const SCHEMA_VERSION         = '1.0.0';
+	const SCHEMA_VERSION_OPTION  = 'didar_event_schema_version';
+	const SCHEMA_VERIFIED_OPTION = 'didar_event_schema_verified_version';
 
 	public static function table_name() {
 		global $wpdb;
@@ -14,9 +15,15 @@ class Didar_Event_Log {
 	}
 
 	public static function maybe_upgrade() {
-		if ( self::SCHEMA_VERSION !== get_option( self::SCHEMA_VERSION_OPTION ) ) {
-			self::install_schema();
+		if (
+			self::SCHEMA_VERSION === get_option( self::SCHEMA_VERSION_OPTION ) &&
+			self::SCHEMA_VERSION === get_option( self::SCHEMA_VERIFIED_OPTION ) &&
+			self::schema_is_current()
+		) {
+			return true;
 		}
+
+		return self::install_schema();
 	}
 
 	public static function install_schema() {
@@ -42,7 +49,78 @@ class Didar_Event_Log {
 		) {$charset_collate};";
 
 		dbDelta( $sql );
+		$database_error = (string) $wpdb->last_error;
+
+		if ( ! self::table_exists() ) {
+			$create_sql = preg_replace( '/^CREATE TABLE /', 'CREATE TABLE IF NOT EXISTS ', $sql, 1 );
+			$created    = $wpdb->query( $create_sql ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+			if ( false === $created ) {
+				$database_error = (string) $wpdb->last_error;
+			}
+		}
+
+		if ( ! self::table_exists() ) {
+			$default_sql = str_replace( " {$charset_collate};", ';', $sql );
+			$default_sql = preg_replace( '/^CREATE TABLE /', 'CREATE TABLE IF NOT EXISTS ', $default_sql, 1 );
+			$created     = $wpdb->query( $default_sql ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+			if ( false === $created || '' !== (string) $wpdb->last_error ) {
+				$database_error = (string) $wpdb->last_error;
+			}
+		}
+
+		if ( ! self::schema_is_current() ) {
+			if ( '' === $database_error ) {
+				$database_error = 'The table creation query completed, but schema verification failed.';
+			}
+
+			delete_option( self::SCHEMA_VERIFIED_OPTION );
+			self::log_database_error( 'didar_event_schema_upgrade_failed', $database_error );
+
+			return new WP_Error(
+				'didar_event_database_error',
+				__( 'امکان آماده‌سازی جدول رویدادهای دیدار وجود ندارد.', 'didar' ),
+				array(
+					'table'          => $table_name,
+					'database_error' => sanitize_text_field( $database_error ),
+				)
+			);
+		}
+
 		update_option( self::SCHEMA_VERSION_OPTION, self::SCHEMA_VERSION, false );
+		update_option( self::SCHEMA_VERIFIED_OPTION, self::SCHEMA_VERSION, false );
+
+		return true;
+	}
+
+	public static function schema_is_current() {
+		global $wpdb;
+
+		if ( ! self::table_exists() ) {
+			return false;
+		}
+
+		$table_name = self::table_name();
+		$required_columns = array(
+			'event_id',
+			'submission_id',
+			'event_type',
+			'actor_user_id',
+			'old_value',
+			'new_value',
+			'event_meta',
+			'created_at_gmt',
+		);
+		$columns = $wpdb->get_col( "SHOW COLUMNS FROM {$table_name}", 0 );
+		if ( array_diff( $required_columns, (array) $columns ) ) {
+			return false;
+		}
+
+		$required_indexes = array( 'PRIMARY', 'submission_event', 'event_type', 'actor_user_id', 'created_at_gmt' );
+		$indexes          = wp_list_pluck( (array) $wpdb->get_results( "SHOW INDEX FROM {$table_name}", ARRAY_A ), 'Key_name' );
+
+		return ! array_diff( $required_indexes, array_unique( $indexes ) );
 	}
 
 	public function add( $submission_id, $event_type, $old_value = null, $new_value = null, $metadata = array() ) {
@@ -116,5 +194,40 @@ class Didar_Event_Log {
 	private function decode_value( $value ) {
 		$decoded = json_decode( (string) $value, true );
 		return is_array( $decoded ) && array_key_exists( 'value', $decoded ) ? $decoded['value'] : null;
+	}
+
+	private static function table_exists() {
+		global $wpdb;
+
+		$table_name = self::table_name();
+		$found_table = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
+				$table_name
+			)
+		);
+
+		return $table_name === $found_table;
+	}
+
+	private static function log_database_error( $code, $database_error = '' ) {
+		if ( ! defined( 'WP_DEBUG' ) || ! WP_DEBUG ) {
+			return;
+		}
+
+		global $wpdb;
+		if ( '' === $database_error ) {
+			$database_error = (string) $wpdb->last_error;
+		}
+
+		error_log(
+			'[Didar] ' . wp_json_encode(
+				array(
+					'code'           => sanitize_key( $code ),
+					'table'          => self::table_name(),
+					'database_error' => sanitize_text_field( $database_error ),
+				)
+			)
+		); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 	}
 }

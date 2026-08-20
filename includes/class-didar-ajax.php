@@ -54,8 +54,14 @@ class Didar_Ajax {
 		$file          = isset( $_FILES['file'] ) ? $_FILES['file'] : array();
 		$result        = $this->files->upload( $file, $type, $field_name, $submission_id );
 		if ( is_wp_error( $result ) ) {
-			$status = in_array( $result->get_error_code(), array( 'authentication_required', 'forbidden_upload' ), true ) ? 403 : 400;
-			wp_send_json_error( array( 'message' => $result->get_error_message() ), $status );
+			$error_code = $result->get_error_code();
+			$status     = 400;
+			if ( in_array( $error_code, array( 'authentication_required', 'forbidden_upload' ), true ) ) {
+				$status = 403;
+			} elseif ( in_array( $error_code, array( 'didar_database_error', 'didar_file_record_failed', 'storage_unavailable', 'storage_protection_failed' ), true ) ) {
+				$status = 500;
+			}
+			wp_send_json_error( array( 'code' => $error_code, 'message' => $result->get_error_message() ), $status );
 		}
 		$result['message'] = __( 'فایل با موفقیت بارگذاری شد.', 'didar' );
 		wp_send_json_success( $result );

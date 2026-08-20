@@ -174,7 +174,8 @@ class Didar_Shortcodes {
 				$page = min( 1000, max( 1, (int) $requested_page ) );
 			}
 		}
-		$reset_url = remove_query_arg( array( $page_parameter, $search_parameter, $type_parameter ), $this->current_shortcode_url() );
+		$base_url  = $this->current_shortcode_base_url();
+		$reset_url = remove_query_arg( array( $page_parameter, $search_parameter, $type_parameter ), $this->current_shortcode_url( $base_url ) );
 		$state_url = $reset_url;
 		if ( '' !== $search_term ) {
 			$state_url = add_query_arg( $search_parameter, $search_term, $state_url );
@@ -223,7 +224,7 @@ class Didar_Shortcodes {
 		if ( $search_enabled || ( $filter_enabled && ! $fixed_type ) ) {
 			$this->render_submission_filters(
 				array(
-					'action'            => $this->current_shortcode_base_url(),
+					'action'            => $base_url,
 					'instance'          => $this->submission_list_instance,
 					'search_enabled'    => $search_enabled,
 					'filter_enabled'    => $filter_enabled && ! $fixed_type,
@@ -555,8 +556,8 @@ class Didar_Shortcodes {
 		return wp_validate_redirect( esc_url_raw( $raw ), home_url( '/' ) );
 	}
 
-	private function current_shortcode_url() {
-		$url = $this->current_shortcode_base_url();
+	private function current_shortcode_url( $base_url = '' ) {
+		$url = $base_url ? $base_url : $this->current_shortcode_base_url();
 		foreach ( $_GET as $key => $value ) {
 			if ( is_array( $value ) || in_array( $key, array( 'didar_submission', 'didar_return' ), true ) ) {
 				continue;
@@ -567,7 +568,15 @@ class Didar_Shortcodes {
 	}
 
 	private function current_shortcode_base_url() {
-		$url = get_permalink( get_queried_object_id() );
+		global $wp;
+
+		if ( isset( $wp->request ) && is_string( $wp->request ) && '' !== trim( $wp->request, '/' ) ) {
+			$request_path = user_trailingslashit( trim( $wp->request, '/' ) );
+			return home_url( '/' . $request_path );
+		}
+
+		$page_id = get_queried_object_id();
+		$url     = $page_id ? get_permalink( $page_id ) : '';
 		return $url ? $url : home_url( '/' );
 	}
 

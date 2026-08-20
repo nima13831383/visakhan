@@ -28,8 +28,9 @@ final class Didar_Plugin {
 		add_action( 'plugins_loaded', array( $this, 'load_textdomain' ), 1 );
 		add_action( 'init', array( 'Didar_Post_Type', 'register' ) );
 		add_action( 'plugins_loaded', array( 'Didar_Access_Control', 'maybe_upgrade' ), 5 );
-		add_action( 'plugins_loaded', array( 'Didar_Event_Log', 'maybe_upgrade' ), 5 );
-		add_action( 'plugins_loaded', array( 'Didar_File_Service', 'maybe_upgrade' ), 5 );
+		add_action( 'plugins_loaded', array( 'Didar_Schema_Manager', 'maybe_repair' ), 5 );
+		add_action( 'admin_notices', array( 'Didar_Schema_Manager', 'render_admin_notice' ) );
+		add_action( 'network_admin_notices', array( 'Didar_Schema_Manager', 'render_admin_notice' ) );
 		Didar_Access_Control::register_hooks();
 
 		$this->registry  = new Didar_Form_Registry();
@@ -57,8 +58,28 @@ final class Didar_Plugin {
 	public static function activate() {
 		Didar_Post_Type::register();
 		Didar_Access_Control::install_roles_and_capabilities();
-		Didar_Event_Log::install_schema();
-		Didar_File_Service::install_schema();
+		$schema = Didar_Schema_Manager::install_and_verify();
+		if ( is_wp_error( $schema ) ) {
+			$message    = $schema->get_error_message();
+			$error_data = $schema->get_error_data();
+			if ( is_array( $error_data ) && ! empty( $error_data['database_error'] ) ) {
+				$message .= ' ' . sprintf(
+					/* translators: %s: sanitized database error visible during plugin activation. */
+					__( 'جزئیات فنی پایگاه داده: %s', 'didar' ),
+					sanitize_text_field( (string) $error_data['database_error'] )
+				);
+			}
+
+			wp_die(
+				esc_html( $message ),
+				esc_html__( 'فعال‌سازی دیدار انجام نشد', 'didar' ),
+				array(
+					'back_link' => true,
+					'response'  => 500,
+				)
+			);
+		}
+
 		self::instance()->file_service->sync_storage_protection();
 
 		if ( ! wp_next_scheduled( 'didar_cleanup_temporary_uploads' ) ) {

@@ -12,6 +12,7 @@ class Test_Didar_Frontend_Search extends WP_UnitTestCase {
 	private $search;
 	private $shortcodes;
 	private $post_ids = array();
+	private $original_request = '';
 
 	public function set_up() {
 		parent::set_up();
@@ -28,6 +29,8 @@ class Test_Didar_Frontend_Search extends WP_UnitTestCase {
 		$renderer       = new Didar_Field_Renderer( $this->settings, $this->files );
 		$validator      = new Didar_Validator( $this->registry, $this->settings, $this->files );
 		$this->shortcodes = new Didar_Shortcodes( $this->registry, $renderer, $validator, $this->service, $this->settings, $this->files, $this->search );
+		global $wp;
+		$this->original_request = isset( $wp->request ) ? $wp->request : '';
 		$_GET = array();
 	}
 
@@ -36,6 +39,8 @@ class Test_Didar_Frontend_Search extends WP_UnitTestCase {
 			wp_delete_post( $post_id, true );
 		}
 		delete_option( Didar_Settings::OPTION_NAME );
+		global $wp;
+		$wp->request = $this->original_request;
 		$_GET = array();
 		parent::tear_down();
 	}
@@ -126,6 +131,29 @@ class Test_Didar_Frontend_Search extends WP_UnitTestCase {
 		$disabled = new Didar_Shortcodes( $this->registry, new Didar_Field_Renderer( $this->settings, $this->files ), new Didar_Validator( $this->registry, $this->settings, $this->files ), $this->service, $this->settings, $this->files, $this->search );
 		$html = $disabled->submissions_shortcode( array( 'search' => 'no', 'filter' => 'no' ) );
 		$this->assertStringNotContainsString( 'didar-submissions-controls', $html );
+	}
+
+	public function test_controls_and_pagination_use_the_full_rewrite_endpoint_url() {
+		global $wp;
+
+		$owner_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		wp_set_current_user( $owner_id );
+		update_option( Didar_Settings::OPTION_NAME, array( 'frontend_requests_per_page' => 1 ) );
+		$this->create_submission( $owner_id, 'consultation', array( 'first_name' => 'EndpointNeedle' ) );
+		$this->create_submission( $owner_id, 'consultation', array( 'first_name' => 'EndpointNeedle' ) );
+		$wp->request          = 'login/view-requests';
+		$_GET['didar_search'] = 'EndpointNeedle';
+		$_GET['didar_type']   = 'consultation';
+
+		$html     = $this->shortcodes->submissions_shortcode( array() );
+		$base_url = home_url( '/login/view-requests/' );
+		$this->assertStringContainsString( 'method="get" action="' . esc_url( $base_url ) . '"', $html );
+		$this->assertStringContainsString( esc_url( $base_url ), $html );
+		$this->assertStringContainsString( 'didar_search=EndpointNeedle', $html );
+		$this->assertStringContainsString( 'didar_type=consultation', $html );
+		$this->assertStringContainsString( 'didar_page=2', $html );
+		$this->assertStringContainsString( 'href="' . esc_url( $base_url ) . '">پاک کردن فیلترها</a>', $html );
+		$this->assertStringNotContainsString( esc_url( home_url( '/login/' ) ) . '?didar_', $html );
 	}
 
 	public function test_submission_list_renders_first_and_last_name_columns_with_combined_name_fallbacks() {

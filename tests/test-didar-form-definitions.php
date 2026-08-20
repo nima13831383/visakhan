@@ -42,6 +42,30 @@ class Test_Didar_Form_Definitions extends WP_UnitTestCase {
 		parent::tear_down();
 	}
 
+	public function test_file_schema_version_is_saved_only_for_a_complete_schema() {
+		update_option( Didar_File_Service::SCHEMA_VERSION_OPTION, '0.9.0', false );
+		delete_option( Didar_File_Service::SCHEMA_VERIFIED_OPTION );
+
+		$this->assertTrue( Didar_File_Service::maybe_upgrade() );
+		$this->assertTrue( Didar_File_Service::schema_is_current() );
+		$this->assertSame( Didar_File_Service::SCHEMA_VERSION, get_option( Didar_File_Service::SCHEMA_VERSION_OPTION ) );
+		$this->assertSame( Didar_File_Service::SCHEMA_VERSION, get_option( Didar_File_Service::SCHEMA_VERIFIED_OPTION ) );
+	}
+
+	public function test_file_schema_upgrade_recreates_a_missing_table_with_a_stale_success_marker() {
+		global $wpdb;
+
+		$table_name = Didar_File_Service::table_name();
+		$wpdb->query( "DROP TABLE IF EXISTS {$table_name}" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		update_option( Didar_File_Service::SCHEMA_VERSION_OPTION, Didar_File_Service::SCHEMA_VERSION, false );
+		delete_option( Didar_File_Service::SCHEMA_VERIFIED_OPTION );
+
+		$this->assertFalse( Didar_File_Service::schema_is_current() );
+		$this->assertTrue( Didar_File_Service::maybe_upgrade() );
+		$this->assertTrue( Didar_File_Service::schema_is_current() );
+		$this->assertSame( Didar_File_Service::SCHEMA_VERSION, get_option( Didar_File_Service::SCHEMA_VERIFIED_OPTION ) );
+	}
+
 	public function test_consultation_active_schema_and_rendering() {
 		$fields = $this->registry->fields( 'consultation' );
 		$this->assertSame( array( 'first_name', 'last_name', 'input_3', 'email', 'input_5', 'description' ), array_keys( $fields ) );

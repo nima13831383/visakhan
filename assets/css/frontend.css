@@ -18,7 +18,7 @@
   font-family: Vazirmatn, IRANSans, Tahoma, Arial, sans-serif;
   font-size: 16px;
   line-height: 1.75;
-  margin: 28px auto;
+  margin: 0px;
   max-width: 1100px;
   text-align: right;
 }
@@ -267,7 +267,8 @@
   border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
-  font: inherit;
+  font-family: inherit;
+  font-size: 12px;
   font-weight: 750;
   min-height: 44px;
   padding: 9px 18px;

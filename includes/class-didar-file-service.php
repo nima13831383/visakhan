@@ -8,10 +8,11 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Owns Didar document storage, records, authorization, download, and cleanup.
  */
 class Didar_File_Service {
-	const SCHEMA_VERSION        = '1.0.0';
-	const SCHEMA_VERSION_OPTION = 'didar_file_schema_version';
-	const STORAGE_DIRECTORY     = 'didar-private';
-	const TEMPORARY_TTL         = DAY_IN_SECONDS;
+	const SCHEMA_VERSION         = '1.1.0';
+	const SCHEMA_VERSION_OPTION  = 'didar_file_schema_version';
+	const SCHEMA_VERIFIED_OPTION = 'didar_file_schema_verified_version';
+	const STORAGE_DIRECTORY      = 'didar-private';
+	const TEMPORARY_TTL          = DAY_IN_SECONDS;
 
 	private $registry;
 	private $settings;
@@ -41,9 +42,15 @@ class Didar_File_Service {
 	}
 
 	public static function maybe_upgrade() {
-		if ( self::SCHEMA_VERSION !== get_option( self::SCHEMA_VERSION_OPTION ) ) {
-			self::install_schema();
+		if (
+			self::SCHEMA_VERSION === get_option( self::SCHEMA_VERSION_OPTION ) &&
+			self::SCHEMA_VERSION === get_option( self::SCHEMA_VERIFIED_OPTION ) &&
+			self::schema_is_current()
+		) {
+			return true;
 		}
+
+		return self::install_schema();
 	}
 
 	public static function install_schema() {
@@ -75,7 +82,84 @@ class Didar_File_Service {
 		) {$charset_collate};";
 
 		dbDelta( $sql );
+		$database_error = (string) $wpdb->last_error;
+
+		if ( ! self::table_exists() ) {
+			$create_sql = preg_replace( '/^CREATE TABLE /', 'CREATE TABLE IF NOT EXISTS ', $sql, 1 );
+			$created    = $wpdb->query( $create_sql ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+			if ( false === $created ) {
+				$database_error = (string) $wpdb->last_error;
+			}
+		}
+
+		if ( ! self::table_exists() ) {
+			$default_sql = str_replace( " {$charset_collate};", ';', $sql );
+			$default_sql = preg_replace( '/^CREATE TABLE /', 'CREATE TABLE IF NOT EXISTS ', $default_sql, 1 );
+			$created     = $wpdb->query( $default_sql ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+			if ( false === $created || '' !== (string) $wpdb->last_error ) {
+				$database_error = (string) $wpdb->last_error;
+			}
+		}
+
+		if ( ! self::schema_is_current() ) {
+			if ( '' === $database_error ) {
+				$database_error = 'The table creation query completed, but schema verification failed.';
+			}
+
+			delete_option( self::SCHEMA_VERIFIED_OPTION );
+			self::log_database_error( 'didar_schema_upgrade_failed', $database_error );
+
+			return new WP_Error(
+				'didar_database_error',
+				__( 'امکان آماده‌سازی محل ثبت اطلاعات فایل وجود ندارد.', 'didar' ),
+				array(
+					'table'          => $table_name,
+					'database_error' => sanitize_text_field( $database_error ),
+				)
+			);
+		}
+
 		update_option( self::SCHEMA_VERSION_OPTION, self::SCHEMA_VERSION, false );
+		update_option( self::SCHEMA_VERIFIED_OPTION, self::SCHEMA_VERSION, false );
+
+		return true;
+	}
+
+	public static function schema_is_current() {
+		global $wpdb;
+
+		if ( ! self::table_exists() ) {
+			return false;
+		}
+
+		$table_name = self::table_name();
+		$required_columns = array(
+			'file_id',
+			'original_name',
+			'stored_name',
+			'relative_path',
+			'mime_type',
+			'extension',
+			'file_size',
+			'owner_user_id',
+			'submission_id',
+			'form_type',
+			'field_key',
+			'file_status',
+			'created_at_gmt',
+			'finalized_at_gmt',
+		);
+		$columns = $wpdb->get_col( "SHOW COLUMNS FROM {$table_name}", 0 );
+		if ( array_diff( $required_columns, (array) $columns ) ) {
+			return false;
+		}
+
+		$required_indexes = array( 'PRIMARY', 'relative_path', 'owner_status_created', 'submission_field', 'temp_context' );
+		$indexes          = wp_list_pluck( (array) $wpdb->get_results( "SHOW INDEX FROM {$table_name}", ARRAY_A ), 'Key_name' );
+
+		return ! array_diff( $required_indexes, array_unique( $indexes ) );
 	}
 
 	public function upload( $file, $form_type, $field_key, $submission_id = 0 ) {
@@ -94,6 +178,11 @@ class Didar_File_Service {
 		}
 		if ( $submission_id && ! $this->can_edit_submission( $submission_id, $form_type ) ) {
 			return new WP_Error( 'forbidden_upload', __( 'شما اجازه بارگذاری فایل برای این درخواست را ندارید.', 'didar' ) );
+		}
+
+		$schema = $this->ensure_schema_available();
+		if ( is_wp_error( $schema ) ) {
+			return $schema;
 		}
 
 		$max_files = ! empty( $field['max_files'] ) ? absint( $field['max_files'] ) : 1;
@@ -160,8 +249,9 @@ class Didar_File_Service {
 		);
 
 		if ( false === $inserted ) {
+			self::log_database_error( 'didar_file_record_failed' );
 			wp_delete_file( $moved['file'] );
-			return new WP_Error( 'file_record_failed', __( 'ثبت اطلاعات فایل انجام نشد.', 'didar' ) );
+			return new WP_Error( 'didar_file_record_failed', __( 'ثبت اطلاعات فایل انجام نشد.', 'didar' ) );
 		}
 
 		$file_id = (int) $wpdb->insert_id;
@@ -586,6 +676,53 @@ class Didar_File_Service {
 		$storage = $this->storage_info();
 		$path    = $storage['basedir'] . '/' . self::STORAGE_DIRECTORY . '/' . gmdate( 'Y/m' );
 		return wp_mkdir_p( $path ) ? $path : new WP_Error( 'storage_unavailable', __( 'مسیر ذخیره‌سازی فایل‌های دیدار در دسترس نیست.', 'didar' ) );
+	}
+
+	private function ensure_schema_available() {
+		if (
+			self::SCHEMA_VERSION === get_option( self::SCHEMA_VERSION_OPTION ) &&
+			self::SCHEMA_VERSION === get_option( self::SCHEMA_VERIFIED_OPTION ) &&
+			self::schema_is_current()
+		) {
+			return true;
+		}
+
+		return self::install_schema();
+	}
+
+	private static function table_exists() {
+		global $wpdb;
+
+		$table_name = self::table_name();
+		$found_table = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
+				$table_name
+			)
+		);
+
+		return $table_name === $found_table;
+	}
+
+	private static function log_database_error( $code, $database_error = '' ) {
+		if ( ! defined( 'WP_DEBUG' ) || ! WP_DEBUG ) {
+			return;
+		}
+
+		global $wpdb;
+		if ( '' === $database_error ) {
+			$database_error = (string) $wpdb->last_error;
+		}
+
+		error_log(
+			'[Didar] ' . wp_json_encode(
+				array(
+					'code'           => sanitize_key( $code ),
+					'table'          => self::table_name(),
+					'database_error' => sanitize_text_field( $database_error ),
+				)
+			)
+		); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 	}
 
 	private function storage_info() {
