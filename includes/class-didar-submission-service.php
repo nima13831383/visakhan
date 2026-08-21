@@ -72,7 +72,7 @@ class Didar_Submission_Service {
 		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || ! $form ) {
 			return new WP_Error( 'invalid_submission', __( 'درخواست معتبر نیست.', 'didar' ) );
 		}
-		if ( ! current_user_can( 'edit_post', $post_id ) || ! current_user_can( 'didar_edit_requests' ) ) {
+		if ( ! Didar_Access_Control::can_edit_request( $post_id ) ) {
 			return new WP_Error( 'forbidden', __( 'شما اجازه ویرایش این درخواست را ندارید.', 'didar' ) );
 		}
 		if ( current_user_can( 'didar_change_public_status' ) && ! isset( Didar_Reference_Data::statuses()[ $status ] ) ) {
@@ -138,8 +138,62 @@ class Didar_Submission_Service {
 		return $post;
 	}
 
+	public function user_can_view_all_requests( $user_id = 0 ) {
+		$user_id = absint( $user_id ? $user_id : get_current_user_id() );
+		$user    = $user_id ? get_userdata( $user_id ) : false;
+
+		return $user && user_can( $user, 'didar_view_all_requests' );
+	}
+
+	public function scope_query_args( $args, $user_id = 0 ) {
+		$user_id = absint( $user_id ? $user_id : get_current_user_id() );
+		if ( ! $this->user_can_view_all_requests( $user_id ) ) {
+			$args['author'] = $user_id;
+		}
+
+		return $args;
+	}
+
+	public function get_accessible_submission( $post_id, $user_id = 0 ) {
+		$user_id = absint( $user_id ? $user_id : get_current_user_id() );
+		$post    = get_post( absint( $post_id ) );
+		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || 'publish' !== $post->post_status ) {
+			return null;
+		}
+		if ( $this->user_can_view_all_requests( $user_id ) || (int) $post->post_author === $user_id ) {
+			return $post;
+		}
+
+		return null;
+	}
+
+	public function can_view_submission( $post_id, $user_id = 0 ) {
+		$user_id = absint( $user_id ? $user_id : get_current_user_id() );
+		$post    = get_post( absint( $post_id ) );
+		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || ! $user_id ) {
+			return false;
+		}
+
+		return $this->user_can_view_all_requests( $user_id ) || (int) $post->post_author === $user_id;
+	}
+
 	public function is_owner_editable( $post_id, $user_id ) {
 		return $this->get_owned_submission( $post_id, $user_id ) && 'completed' !== $this->get_public_status_raw( $post_id );
+	}
+
+	public function can_edit_from_frontend( $post_id, $user_id = 0 ) {
+		$user_id = absint( $user_id ? $user_id : get_current_user_id() );
+		$post    = $this->get_accessible_submission( $post_id, $user_id );
+		if ( ! $post ) {
+			return false;
+		}
+		if ( $this->user_can_view_all_requests( $user_id ) ) {
+			$user = get_userdata( $user_id );
+
+			return $user && user_can( $user, 'didar_edit_requests' ) && user_can( $user, 'edit_post', $post->ID );
+		}
+
+		return $this->is_owner_editable( $post_id, $user_id );
 	}
 
 	public function update_by_owner( $post_id, $data, $shared_note, $user_id ) {
@@ -151,6 +205,27 @@ class Didar_Submission_Service {
 			return new WP_Error( 'completed_submission', __( 'درخواست تکمیل‌شده دیگر قابل ویرایش نیست.', 'didar' ) );
 		}
 
+		return $this->update_frontend_data( $post_id, $data, $shared_note );
+	}
+
+	public function update_from_frontend( $post_id, $data, $shared_note, $user_id = 0 ) {
+		$current_user_id = get_current_user_id();
+		$user_id         = absint( $user_id ? $user_id : $current_user_id );
+		if ( ! $current_user_id || $user_id !== $current_user_id ) {
+			return new WP_Error( 'forbidden', __( 'این درخواست در دسترس شما نیست.', 'didar' ) );
+		}
+		$post            = $this->get_accessible_submission( $post_id, $user_id );
+		if ( ! $post ) {
+			return new WP_Error( 'forbidden', __( 'این درخواست در دسترس شما نیست.', 'didar' ) );
+		}
+		if ( ! $this->can_edit_from_frontend( $post_id, $user_id ) ) {
+			return new WP_Error( 'completed_submission', __( 'این درخواست قابل ویرایش نیست.', 'didar' ) );
+		}
+
+		return $this->update_frontend_data( $post_id, $data, $shared_note );
+	}
+
+	private function update_frontend_data( $post_id, $data, $shared_note ) {
 		$form_type = (string) get_post_meta( $post_id, '_didar_form_type', true );
 		if ( ! $this->registry->is_valid_type( $form_type ) ) {
 			return new WP_Error( 'invalid_submission', __( 'درخواست معتبر نیست.', 'didar' ) );
@@ -173,7 +248,7 @@ class Didar_Submission_Service {
 
 	public function update_workflow( $post_id, $changes ) {
 		$post = get_post( $post_id );
-		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || ! current_user_can( 'edit_post', $post_id ) || ! is_array( $changes ) ) {
+		if ( ! $post || ! Didar_Access_Control::can_edit_request( $post_id ) || ! is_array( $changes ) ) {
 			return new WP_Error( 'forbidden', __( 'شما اجازه انجام این کار را ندارید.', 'didar' ) );
 		}
 
@@ -255,7 +330,7 @@ class Didar_Submission_Service {
 
 	public function update_notes( $post_id, $shared_note, $admin_note = null ) {
 		$post = get_post( $post_id );
-		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || ! current_user_can( 'edit_post', $post_id ) || ! current_user_can( 'didar_edit_requests' ) ) {
+		if ( ! $post || ! Didar_Access_Control::can_edit_request( $post_id ) ) {
 			return false;
 		}
 
@@ -335,8 +410,7 @@ class Didar_Submission_Service {
 	}
 
 	public function can_view_public( $post_id ) {
-		$post = get_post( $post_id );
-		return $post && Didar_Post_Type::POST_TYPE === $post->post_type && ( current_user_can( 'didar_view_requests' ) || ( is_user_logged_in() && (int) $post->post_author === get_current_user_id() ) );
+		return $this->can_view_submission( $post_id, get_current_user_id() );
 	}
 
 	public function can_view_internal( $post_id ) {
@@ -344,7 +418,7 @@ class Didar_Submission_Service {
 		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type ) {
 			return false;
 		}
-		if ( current_user_can( 'didar_view_internal_workflow' ) && current_user_can( 'didar_view_requests' ) ) {
+		if ( current_user_can( 'didar_view_internal_workflow' ) && $this->can_view_submission( $post_id, get_current_user_id() ) ) {
 			return true;
 		}
 		return $this->settings->colleague_can_view_internal_history() && current_user_can( 'didar_view_own_internal_workflow' ) && (int) $post->post_author === get_current_user_id();
@@ -355,7 +429,7 @@ class Didar_Submission_Service {
 		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type ) {
 			return false;
 		}
-		if ( current_user_can( 'didar_view_request_history' ) && current_user_can( 'didar_view_requests' ) ) {
+		if ( current_user_can( 'didar_view_request_history' ) && $this->can_view_submission( $post_id, get_current_user_id() ) ) {
 			return true;
 		}
 		return $this->settings->colleague_can_view_internal_history() && current_user_can( 'didar_view_own_request_history' ) && (int) $post->post_author === get_current_user_id();

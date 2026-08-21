@@ -187,7 +187,6 @@ class Didar_Shortcodes {
 		$args = array(
 			'post_type'           => Didar_Post_Type::POST_TYPE,
 			'post_status'         => 'publish',
-			'author'              => get_current_user_id(),
 			'posts_per_page'      => $this->settings->frontend_requests_per_page(),
 			'paged'               => $page,
 			'orderby'             => 'date',
@@ -195,6 +194,7 @@ class Didar_Shortcodes {
 			'ignore_sticky_posts' => true,
 			'no_found_rows'       => false,
 		);
+		$args = $this->service->scope_query_args( $args, get_current_user_id() );
 		if ( $effective_type ) {
 			$args['meta_query'] = array(
 				array( 'key' => '_didar_form_type', 'value' => $effective_type, 'compare' => '=' ),
@@ -219,7 +219,8 @@ class Didar_Shortcodes {
 		}
 
 		ob_start();
-		echo '<div class="didar-app didar-submissions" dir="rtl"><div class="didar-list-header"><div><p class="didar-eyebrow">' . esc_html__( 'پنل کاربری', 'didar' ) . '</p><h2>' . esc_html__( 'درخواست‌های من', 'didar' ) . '</h2></div><span class="didar-count">' . esc_html( sprintf( __( '%d درخواست', 'didar' ), $query->found_posts ) ) . '</span></div>';
+		$list_title = $this->service->user_can_view_all_requests( get_current_user_id() ) ? __( 'همه درخواست‌ها', 'didar' ) : __( 'درخواست‌های من', 'didar' );
+		echo '<div class="didar-app didar-submissions" dir="rtl"><div class="didar-list-header"><div><p class="didar-eyebrow">' . esc_html__( 'پنل کاربری', 'didar' ) . '</p><h2>' . esc_html( $list_title ) . '</h2></div><span class="didar-count">' . esc_html( sprintf( __( '%d درخواست', 'didar' ), $query->found_posts ) ) . '</span></div>';
 		$filters_active = '' !== $search_term || '' !== $frontend_type || $invalid_type;
 		if ( $search_enabled || ( $filter_enabled && ! $fixed_type ) ) {
 			$this->render_submission_filters(
@@ -242,7 +243,9 @@ class Didar_Shortcodes {
 			if ( $filters_active ) {
 				echo '<div class="didar-empty"><strong>' . esc_html__( 'درخواستی با این مشخصات پیدا نشد.', 'didar' ) . '</strong><p>' . esc_html__( 'عبارت جستجو یا نوع درخواست را تغییر دهید.', 'didar' ) . '</p></div>';
 			} else {
-				echo '<div class="didar-empty"><strong>' . esc_html__( 'هنوز درخواستی ثبت نکرده‌اید.', 'didar' ) . '</strong><p>' . esc_html__( 'درخواست‌های ثبت‌شده شما در این بخش نمایش داده می‌شوند.', 'didar' ) . '</p></div>';
+				$empty_title = $this->service->user_can_view_all_requests( get_current_user_id() ) ? __( 'هنوز درخواستی ثبت نشده است.', 'didar' ) : __( 'هنوز درخواستی ثبت نکرده‌اید.', 'didar' );
+				$empty_text  = $this->service->user_can_view_all_requests( get_current_user_id() ) ? __( 'درخواست‌های ثبت‌شده در این بخش نمایش داده می‌شوند.', 'didar' ) : __( 'درخواست‌های ثبت‌شده شما در این بخش نمایش داده می‌شوند.', 'didar' );
+				echo '<div class="didar-empty"><strong>' . esc_html( $empty_title ) . '</strong><p>' . esc_html( $empty_text ) . '</p></div>';
 			}
 		} else {
 			echo '<div class="didar-table-wrap"><table class="didar-table"><thead><tr><th scope="col">' . esc_html__( 'شماره', 'didar' ) . '</th><th scope="col">' . esc_html__( 'نام', 'didar' ) . '</th><th scope="col">' . esc_html__( 'نام خانوادگی', 'didar' ) . '</th><th scope="col">' . esc_html__( 'نوع فرم', 'didar' ) . '</th><th scope="col">' . esc_html__( 'تاریخ ثبت', 'didar' ) . '</th><th scope="col">' . esc_html__( 'وضعیت', 'didar' ) . '</th><th scope="col">' . esc_html__( 'عملیات', 'didar' ) . '</th></tr></thead><tbody>';
@@ -368,7 +371,7 @@ class Didar_Shortcodes {
 		}
 
 		$user_id     = get_current_user_id();
-		$post        = $this->service->get_owned_submission( $submission_id, $user_id );
+		$post        = $this->service->get_accessible_submission( $submission_id, $user_id );
 		$form_type   = $post ? get_post_meta( $submission_id, '_didar_form_type', true ) : '';
 		$form        = $this->registry->get( $form_type );
 		$values      = $post ? $this->service->get_fields( $submission_id ) : array();
@@ -384,8 +387,8 @@ class Didar_Shortcodes {
 			$errors['_form'] = __( 'این درخواست یافت نشد یا در دسترس شما نیست.', 'didar' );
 		} elseif ( ! wp_verify_nonce( $nonce, 'didar_edit_submission_' . $submission_id ) ) {
 			$errors['_form'] = __( 'نشست شما منقضی شده است؛ صفحه را تازه‌سازی کنید.', 'didar' );
-		} elseif ( ! $this->service->is_owner_editable( $submission_id, $user_id ) ) {
-			$errors['_form'] = __( 'درخواست تکمیل‌شده دیگر قابل ویرایش نیست.', 'didar' );
+		} elseif ( ! $this->service->can_edit_from_frontend( $submission_id, $user_id ) ) {
+			$errors['_form'] = __( 'این درخواست قابل ویرایش نیست.', 'didar' );
 		} elseif ( ! $details_url ) {
 			$errors['_form'] = __( 'صفحه مشاهده جزئیات هنوز توسط مدیر تنظیم نشده است.', 'didar' );
 		} else {
@@ -400,7 +403,7 @@ class Didar_Shortcodes {
 			$values = array_intersect_key( $raw, $this->registry->fields( $form_type ) );
 			$errors = array_merge( $errors, $result['errors'] );
 			if ( $result['valid'] && empty( $errors['shared_note'] ) ) {
-				$saved = $this->service->update_by_owner( $submission_id, $result['data'], $shared_note, $user_id );
+				$saved = $this->service->update_from_frontend( $submission_id, $result['data'], $shared_note, $user_id );
 				if ( is_wp_error( $saved ) ) {
 					$errors['_form'] = $saved->get_error_message();
 				} else {
@@ -423,7 +426,7 @@ class Didar_Shortcodes {
 
 	private function render_submission_details( $submission_id ) {
 		$user_id = get_current_user_id();
-		$post    = $this->service->get_owned_submission( $submission_id, $user_id );
+		$post    = $this->service->get_accessible_submission( $submission_id, $user_id );
 		if ( ! $post ) {
 			return $this->notice( __( 'این درخواست یافت نشد یا در دسترس شما نیست.', 'didar' ), 'error' );
 		}
@@ -438,7 +441,7 @@ class Didar_Shortcodes {
 		$shared_note = $this->service->get_shared_note( $submission_id );
 		$status      = $this->service->get_public_status( $submission_id );
 		$public_note = $this->service->get_public_note( $submission_id );
-		$editable    = $this->service->is_owner_editable( $submission_id, $user_id );
+		$editable    = $this->service->can_edit_from_frontend( $submission_id, $user_id );
 		$back_url    = $this->requested_return_url();
 		$edit_url    = $this->get_submission_page_url( 'edit_page_id', $submission_id, $back_url );
 		$success_key = 'didar_edit_success_' . $user_id . '_' . $submission_id;
@@ -480,12 +483,12 @@ class Didar_Shortcodes {
 
 	private function render_submission_edit( $submission_id ) {
 		$user_id = get_current_user_id();
-		$post    = $this->service->get_owned_submission( $submission_id, $user_id );
+		$post    = $this->service->get_accessible_submission( $submission_id, $user_id );
 		if ( ! $post ) {
 			return $this->notice( __( 'این درخواست یافت نشد یا در دسترس شما نیست.', 'didar' ), 'error' );
 		}
-		if ( ! $this->service->is_owner_editable( $submission_id, $user_id ) ) {
-			return $this->notice( __( 'درخواست تکمیل‌شده دیگر قابل ویرایش نیست.', 'didar' ), 'warning' );
+		if ( ! $this->service->can_edit_from_frontend( $submission_id, $user_id ) ) {
+			return $this->notice( __( 'این درخواست قابل ویرایش نیست.', 'didar' ), 'warning' );
 		}
 
 		$form_type   = get_post_meta( $submission_id, '_didar_form_type', true );

@@ -9,7 +9,21 @@ Didar defines two stable roles:
 - Colleague: `didar_colleague` (`همکار`)
 - Broker: `didar_broker` (`کارگزار`)
 
-Authorization is capability-based. Brokers receive only the custom-post-type capabilities needed to read and edit Didar requests plus these workflow capabilities:
+Authorization is capability-based. Broker is a full Didar operator without being a WordPress Administrator. Broker receives every Didar custom-post-type, workflow, request-scope, assignment, file-management-through-request, and settings capability required to:
+
+- enter wp-admin and use the complete Didar section;
+- create, view, edit, publish, and delete any Didar request;
+- manage public/internal workflow, notes, assignments, files, and event history;
+- manage Didar-only settings; and
+- view, search, filter, and paginate all requests through `[didar_submissions]`.
+
+The dedicated request-scope capability is:
+
+```text
+didar_view_all_requests
+```
+
+The Didar workflow capabilities are:
 
 ```text
 didar_view_requests
@@ -25,7 +39,7 @@ didar_receive_requests
 didar_view_request_history
 ```
 
-Administrators receive all required Didar capabilities, `didar_change_request_owner`, and `didar_manage_settings`. Brokers, Colleagues, and Customers do not receive the settings capability. Colleagues receive only frontend/owned-request capabilities:
+Both Administrators and Brokers receive all required Didar capabilities, including `didar_change_request_owner` and `didar_manage_settings`. Broker does not receive `manage_options`, normal post/page capabilities, plugin/theme/user management, or other broad WordPress administration capabilities. Colleagues receive only frontend/owned-request capabilities:
 
 ```text
 didar_colleague_access
@@ -35,11 +49,13 @@ didar_view_own_request_history
 
 Role and capability installation is idempotent, runs on activation, and is also version-checked on ordinary plugin load for existing installations. Deactivation does not remove roles, capabilities, submissions, assignments, or history.
 
-Colleagues and frontend-only users are denied wp-admin access. Brokers are restricted to the Didar request list and Didar request edit screens; menu hiding is supplemental to server-side capability enforcement.
+Colleagues and frontend-only users are denied wp-admin access. Brokers may access only authorized Didar wp-admin routes: request lists and form-type/assignment views, request creation/editing, Didar settings, Didar AJAX, and Didar secure file downloads. Opening wp-admin sends Broker to the Didar request list. Unrelated WordPress admin routes remain inaccessible; menu hiding is supplemental to the route and capability checks.
+
+The wp-admin request update route resolves the target from WordPress's POST `post_ID`, verifies the Didar edit capability and mapped CPT object capability, and verifies the request-specific Didar nonce before WordPress begins persistence. Failed or forged write requests return an explicit error rather than being redirected to the request list as if they succeeded.
 
 ## Ownership and creator identity
 
-`post_author` remains the authorization boundary for frontend submission ownership. It is always derived from the authenticated user for frontend creation and is applied inside frontend queries. Applicant names, email addresses, phone numbers, and other form values never confer access.
+`post_author` remains the authorization boundary for Customers and Colleagues. It is always derived from the authenticated user for frontend creation and is applied inside frontend queries for users without `didar_view_all_requests`. A user with `didar_view_all_requests` may access all Didar submissions without an author restriction. Applicant names, email addresses, phone numbers, and other form values never confer access.
 
 `_didar_created_by_user_id` records the authenticated actor that initially created/configured the submission and is not changed when an administrator changes the legacy owner field. Existing submissions fall back to `post_author` when this metadata does not exist.
 
@@ -68,13 +84,13 @@ Normal customers can receive only Public Status and Public Note for submissions 
 
 ## Plugin settings
 
-The structured `didar_settings` option stores Colleague-history visibility, frontend requests per page, sparse field-required overrides, and file download mode. Frontend pagination defaults to 10 results and is bounded to 1–100. An absent form/field override always means “use the Form Registry default”; rendering and server validation use the same centralized resolver. An absent, empty, or invalid download mode always resolves to `secure`.
+The structured `didar_settings` option stores Colleague-history visibility, frontend requests per page, sparse field-required overrides, and file download mode. The Didar settings submenu, callback, Settings API save route, and sanitizers require `didar_manage_settings`, which is granted to Broker and Administrator without granting Broker `manage_options`. Frontend pagination defaults to 10 results and is bounded to 1–100. An absent form/field override always means “use the Form Registry default”; rendering and server validation use the same centralized resolver. An absent, empty, or invalid download mode always resolves to `secure`.
 
 ## Request search and pagination
 
 The shared `Didar_Request_Search` service provides the SQL-level search clause for both wp-admin and `[didar_submissions]`. It searches exact request IDs, request titles, and the `_didar_fields` payload used by all registered form types, which covers current and legacy names, mobile/phone values, and email values. Admin form type, status, and assignment constraints remain SQL-level filters, so they compose with search and native admin pagination.
 
-`[didar_submissions]` enables its GET-based search and registered Form Registry type dropdown by default. Its query always applies authenticated `post_author` ownership before optional search, frontend type, fixed shortcode `type`, `posts_per_page`, and `paged` constraints. A valid fixed `type` attribute takes precedence over URL input and hides the type dropdown. Invalid URL form types return no records rather than widening the query. The `search="no"` and `filter="no"` attributes independently hide and disable their URL controls.
+`[didar_submissions]` enables its GET-based search and registered Form Registry type dropdown by default. Its query uses one centralized scope rule: users with `didar_view_all_requests` receive no author restriction; all other users receive `post_author = current user`. Optional search, frontend type, fixed shortcode `type`, `posts_per_page`, and `paged` constraints are applied inside the same database query. A valid fixed `type` attribute takes precedence over URL input and hides the type dropdown. Invalid URL form types return no records rather than widening the query. The `search="no"` and `filter="no"` attributes independently hide and disable their URL controls.
 
 The first frontend list uses `didar_search`, `didar_type`, and `didar_page`; additional list instances on the same page use a numeric suffix such as `_2`. Search/filter submissions reset that instance to page one, pagination preserves the effective search/type on the containing page, and the reset action removes only that instance's Didar parameters while preserving unrelated page query state.
 
@@ -90,7 +106,7 @@ AJAX uploads create Didar-controlled private file records and physical files und
 
 Didar file metadata is stored in `{$wpdb->prefix}didar_files`; `_didar_fields` stores stable file IDs, never filesystem paths or generated download URLs. Stored filenames are cryptographically unpredictable while the sanitized original filename remains available for display and download headers.
 
-The structured `didar_settings[file_download_mode]` value accepts only `secure` or `direct` and defaults safely to `secure`. Secure links use the authenticated `admin-post.php?action=didar_download_file` controller, which verifies its nonce as an additional measure and independently checks the file record, final state, submission association, field membership, request type, and existing request-view authorization before streaming. Direct mode returns the physical URL for the same file and intentionally does not authorize at download time. Switching modes neither duplicates files nor rewrites submission metadata.
+The structured `didar_settings[file_download_mode]` value accepts only `secure` or `direct` and defaults safely to `secure`. Secure links use the authenticated `admin-post.php?action=didar_download_file` controller, which verifies its nonce as an additional measure and independently checks the file record, final state, submission association, field membership, request type, and centralized request-view authorization before streaming. Consequently, Broker can download files belonging to any request while Customer and Colleague remain owner-scoped. Direct mode returns the physical URL for the same file and intentionally does not authorize at download time. Switching modes neither duplicates files nor rewrites submission metadata.
 
 The service writes Apache `.htaccess` and IIS `web.config` protection rules in Secure mode and non-listing rules in Direct mode. Nginx and other servers that ignore these files need an equivalent server-level deny rule for `didar-private`; otherwise unpredictable filenames and omission of direct URLs reduce exposure but cannot provide true portable server-level denial.
 
@@ -144,7 +160,7 @@ The submission edit screen separates:
 
 - All changes require a Didar nonce and independent capability/ownership checks.
 - Form fields and option values remain registry allowlisted and field-appropriately sanitized.
-- Frontend detail/edit access validates post ID, post type, publication state, and ownership.
+- Frontend detail/edit access validates post ID, post type, publication state, and either `didar_view_all_requests` or ownership. Full-scope editing additionally requires the Didar edit and mapped CPT object capabilities.
 - Internal workflow values are excluded while server responses for normal customers are constructed.
 - Assignment and actor IDs are resolved and authorized server-side.
 - The submission CPT remains non-public and unavailable through REST.

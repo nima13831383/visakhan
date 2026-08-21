@@ -36,11 +36,68 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 		$this->assertFalse( $colleague->has_cap( 'didar_view_requests' ) );
 		$this->assertFalse( $colleague->has_cap( 'edit_posts' ) );
 		$this->assertTrue( $broker->has_cap( 'didar_view_requests' ) );
+		$this->assertTrue( $broker->has_cap( 'didar_view_all_requests' ) );
 		$this->assertTrue( $broker->has_cap( 'didar_view_request' ) );
 		$this->assertTrue( $broker->has_cap( 'didar_assign_requests' ) );
+		$this->assertTrue( $broker->has_cap( 'create_didar_submissions' ) );
+		$this->assertTrue( $broker->has_cap( 'publish_didar_submissions' ) );
+		$this->assertTrue( $broker->has_cap( 'delete_others_didar_submissions' ) );
+		$this->assertTrue( $broker->has_cap( 'didar_change_request_owner' ) );
+		$this->assertTrue( $broker->has_cap( 'didar_manage_settings' ) );
 		$this->assertFalse( $broker->has_cap( 'manage_options' ) );
-		$this->assertFalse( $broker->has_cap( 'didar_manage_settings' ) );
-		$this->assertFalse( $broker->has_cap( 'delete_others_didar_submissions' ) );
+		$this->assertFalse( $broker->has_cap( 'edit_posts' ) );
+		$this->assertFalse( $colleague->has_cap( 'didar_view_all_requests' ) );
+	}
+
+	public function test_woocommerce_admin_restriction_does_not_block_broker() {
+		$broker_id   = self::factory()->user->create( array( 'role' => Didar_Access_Control::ROLE_BROKER ) );
+		$customer_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+
+		wp_set_current_user( $broker_id );
+		$this->assertTrue( Didar_Access_Control::can_access_didar_admin() );
+		$this->assertFalse( apply_filters( 'woocommerce_disable_admin_bar', true ) );
+		$this->assertFalse( apply_filters( 'woocommerce_prevent_admin_access', true ) );
+		$this->assertFalse( current_user_can( 'edit_posts' ) );
+		$this->assertFalse( current_user_can( 'manage_woocommerce' ) );
+		$this->assertFalse( current_user_can( 'view_admin_dashboard' ) );
+
+		wp_set_current_user( $customer_id );
+		$this->assertFalse( Didar_Access_Control::can_access_didar_admin() );
+		$this->assertTrue( apply_filters( 'woocommerce_disable_admin_bar', true ) );
+		$this->assertTrue( apply_filters( 'woocommerce_prevent_admin_access', true ) );
+	}
+
+	public function test_broker_receives_assigned_requests_submenu() {
+		if ( ! function_exists( 'add_submenu_page' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+
+		global $menu, $submenu, $_registered_pages, $_parent_pages;
+
+		$original_menu             = $menu;
+		$original_submenu          = $submenu;
+		$original_registered_pages = $_registered_pages;
+		$original_parent_pages     = $_parent_pages;
+		$parent                    = 'edit.php?post_type=' . Didar_Post_Type::POST_TYPE;
+		$menu                      = array( array( 'دیدار', 'edit_didar_submissions', $parent ) );
+		$submenu                   = array(
+			$parent => array(
+				array( 'همه درخواست‌ها', 'edit_didar_submissions', $parent ),
+			),
+		);
+
+		$broker_id = self::factory()->user->create( array( 'role' => Didar_Access_Control::ROLE_BROKER ) );
+		wp_set_current_user( $broker_id );
+		Didar_Access_Control::add_assigned_requests_submenu();
+		$broker_submenu = $submenu[ $parent ];
+
+		$menu              = $original_menu;
+		$submenu           = $original_submenu;
+		$_registered_pages = $original_registered_pages;
+		$_parent_pages     = $original_parent_pages;
+
+		$this->assertCount( 2, $broker_submenu );
+		$this->assertSame( $parent . '&didar_assignment=mine', $broker_submenu[1][2] );
 	}
 
 	public function test_customer_receives_public_but_not_internal_data_or_history() {
@@ -96,6 +153,62 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 		$this->assertFalse( $this->service->can_view_public( $submission_id ) );
 		$this->assertSame( '', $this->service->get_public_status( $submission_id ) );
 		$this->assertSame( '', $this->service->get_public_note( $submission_id ) );
+	}
+
+	public function test_broker_can_view_and_edit_another_users_request_through_central_scope() {
+		$customer_id   = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		$broker_id     = self::factory()->user->create( array( 'role' => Didar_Access_Control::ROLE_BROKER ) );
+		$admin_id      = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		$colleague_id  = self::factory()->user->create( array( 'role' => Didar_Access_Control::ROLE_COLLEAGUE ) );
+		$unrelated_id  = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		$submission_id = $this->create_submission( $customer_id );
+
+		wp_set_current_user( $broker_id );
+		$this->assertTrue( $this->service->user_can_view_all_requests( $broker_id ) );
+		$this->assertTrue( Didar_Access_Control::can_edit_request( $submission_id ) );
+		$this->assertSame( $submission_id, $this->service->get_accessible_submission( $submission_id, $broker_id )->ID );
+		$this->assertTrue( $this->service->can_edit_from_frontend( $submission_id, $broker_id ) );
+		$this->assertTrue( $this->service->can_view_internal( $submission_id ) );
+		$this->assertTrue( $this->service->can_view_history( $submission_id ) );
+
+		$fields               = $this->service->get_fields( $submission_id );
+		$fields['description'] = 'ویرایش کارگزار';
+		$result                = $this->service->update_from_frontend( $submission_id, $fields, 'یادداشت کارگزار', $broker_id );
+		$this->assertTrue( $result );
+		$this->assertSame( 'ویرایش کارگزار', $this->service->get_fields( $submission_id )['description'] );
+		$this->assertSame( $broker_id, $this->service->get_events( $submission_id )[0]['actor_user_id'] );
+
+		wp_set_current_user( $admin_id );
+		$this->assertTrue( Didar_Access_Control::can_edit_request( $submission_id ) );
+
+		wp_set_current_user( $colleague_id );
+		$this->assertFalse( Didar_Access_Control::can_edit_request( $submission_id ) );
+
+		wp_set_current_user( $unrelated_id );
+		$this->assertFalse( Didar_Access_Control::can_edit_request( $submission_id ) );
+		$this->assertFalse( $this->service->user_can_view_all_requests( $unrelated_id ) );
+		$this->assertNull( $this->service->get_accessible_submission( $submission_id, $unrelated_id ) );
+		$this->assertFalse( $this->service->can_edit_from_frontend( $submission_id, $unrelated_id ) );
+		$this->assertWPError( $this->service->update_from_frontend( $submission_id, $fields, '', $broker_id ) );
+	}
+
+	public function test_failed_admin_save_redirect_does_not_report_wordpress_success() {
+		$broker_id     = self::factory()->user->create( array( 'role' => Didar_Access_Control::ROLE_BROKER ) );
+		$submission_id = $this->create_submission( $broker_id );
+		$registry      = new Didar_Form_Registry();
+		$admin         = new Didar_Admin( $registry, new Didar_Field_Renderer(), new Didar_Validator( $registry ), $this->service );
+
+		wp_set_current_user( $broker_id );
+		set_transient(
+			'didar_admin_errors_' . $broker_id . '_' . $submission_id,
+			array( 'errors' => array( '_form' => 'invalid' ) ),
+			MINUTE_IN_SECONDS
+		);
+		$location = $admin->filter_save_redirect( admin_url( 'post.php?post=' . $submission_id . '&action=edit&message=4' ), $submission_id );
+
+		$this->assertStringNotContainsString( 'message=4', $location );
+		$this->assertStringContainsString( 'didar_save_error=1', $location );
+		delete_transient( 'didar_admin_errors_' . $broker_id . '_' . $submission_id );
 	}
 
 	public function test_assignment_is_validated_and_append_only_events_ignore_noops() {

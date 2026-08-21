@@ -37,6 +37,7 @@ class Didar_Admin {
 		add_filter( 'post_row_actions', array( $this, 'request_row_actions' ), 10, 2 );
 		add_filter( 'views_edit-' . Didar_Post_Type::POST_TYPE, array( $this, 'assignment_views' ) );
 		add_filter( 'option_page_capability_didar_page_settings', array( $this, 'settings_capability' ) );
+		add_filter( 'redirect_post_location', array( $this, 'filter_save_redirect' ), 10, 2 );
 	}
 
 	public function add_settings_page() {
@@ -537,7 +538,7 @@ class Didar_Admin {
 		if ( ! isset( $_POST['didar_admin_nonce'] ) || is_array( $_POST['didar_admin_nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['didar_admin_nonce'] ) ), 'didar_admin_save_submission_' . $post_id ) ) {
 			return;
 		}
-		if ( ! current_user_can( 'edit_post', $post_id ) ) {
+		if ( ! Didar_Access_Control::can_edit_request( $post_id ) ) {
 			return;
 		}
 
@@ -606,7 +607,9 @@ class Didar_Admin {
 
 		if ( ! $form ) {
 			$this->store_admin_state( $post_id, $form_type, $raw, array( '_form' => __( 'نوع فرم نامعتبر است.', 'didar' ) ), $shared_note );
-			$this->force_draft( $post_id, $post );
+			if ( ! $stored_type ) {
+				$this->force_draft( $post_id, $post );
+			}
 			return;
 		}
 		if ( $note_errors ) {
@@ -617,7 +620,9 @@ class Didar_Admin {
 		$result = $this->validator->validate( $form_type, $raw, 'admin', $post_id );
 		if ( ! $result['valid'] ) {
 			$this->store_admin_state( $post_id, $form_type, $raw, $result['errors'], $shared_note );
-			$this->force_draft( $post_id, $post );
+			if ( ! $stored_type ) {
+				$this->force_draft( $post_id, $post );
+			}
 			return;
 		}
 
@@ -674,6 +679,16 @@ class Didar_Admin {
 		delete_transient( $key );
 		$this->state_cache[ $post_id ] = is_array( $state ) ? $state : array();
 		return $this->state_cache[ $post_id ];
+	}
+
+	public function filter_save_redirect( $location, $post_id ) {
+		$key   = 'didar_admin_errors_' . get_current_user_id() . '_' . absint( $post_id );
+		$state = get_transient( $key );
+		if ( ! is_array( $state ) || empty( $state['errors'] ) ) {
+			return $location;
+		}
+
+		return add_query_arg( 'didar_save_error', 1, remove_query_arg( 'message', $location ) );
 	}
 
 	public function admin_notices() {
@@ -801,7 +816,7 @@ class Didar_Admin {
 	}
 
 	public function request_row_actions( $actions, $post ) {
-		if ( Didar_Post_Type::POST_TYPE !== $post->post_type || ! current_user_can( 'didar_view_request' ) || ! current_user_can( 'edit_post', $post->ID ) ) {
+		if ( Didar_Post_Type::POST_TYPE !== $post->post_type || ! Didar_Access_Control::can_edit_request( $post->ID ) ) {
 			return $actions;
 		}
 		$url = get_edit_post_link( $post->ID, '' );

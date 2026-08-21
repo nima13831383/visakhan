@@ -93,6 +93,49 @@ class Test_Didar_Frontend_Search extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'value="consultation" selected=', $html );
 	}
 
+	public function test_broker_search_filter_fixed_type_and_pagination_use_all_request_scope() {
+		$customer_a_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		$customer_b_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		$colleague_id  = self::factory()->user->create( array( 'role' => Didar_Access_Control::ROLE_COLLEAGUE ) );
+		$broker_id     = self::factory()->user->create( array( 'role' => Didar_Access_Control::ROLE_BROKER ) );
+		$consultations = array(
+			$this->create_submission( $customer_a_id, 'consultation', array( 'first_name' => 'BrokerScopeNeedle' ) ),
+			$this->create_submission( $customer_b_id, 'consultation', array( 'first_name' => 'BrokerScopeNeedle' ) ),
+			$this->create_submission( $colleague_id, 'consultation', array( 'first_name' => 'BrokerScopeNeedle' ) ),
+		);
+		$visa_id = $this->create_submission( $broker_id, 'visa_request', array( 'first_name' => 'BrokerScopeNeedle' ) );
+
+		wp_set_current_user( $broker_id );
+		update_option( Didar_Settings::OPTION_NAME, array( 'frontend_requests_per_page' => 2 ) );
+		$_GET = array( 'didar_search' => 'BrokerScopeNeedle', 'didar_type' => 'consultation' );
+		$first_page = $this->shortcodes->submissions_shortcode( array() );
+
+		$_GET = array( 'didar_search' => 'BrokerScopeNeedle', 'didar_type' => 'consultation', 'didar_page' => 2 );
+		$second_page = $this->new_shortcodes()->submissions_shortcode( array() );
+		$all_pages   = $first_page . $second_page;
+		foreach ( $consultations as $submission_id ) {
+			$this->assertStringContainsString( '#' . $submission_id, $all_pages );
+		}
+		$this->assertStringNotContainsString( '#' . $visa_id, $all_pages );
+		$this->assertStringContainsString( '3 درخواست', $first_page );
+		$this->assertStringContainsString( 'didar_page=2', $first_page );
+
+		update_option( Didar_Settings::OPTION_NAME, array( 'frontend_requests_per_page' => 10 ) );
+		$_GET = array( 'didar_search' => 'BrokerScopeNeedle', 'didar_type' => 'visa_request' );
+		$fixed = $this->new_shortcodes()->submissions_shortcode( array( 'type' => 'consultation' ) );
+		foreach ( $consultations as $submission_id ) {
+			$this->assertStringContainsString( '#' . $submission_id, $fixed );
+		}
+		$this->assertStringNotContainsString( '#' . $visa_id, $fixed );
+
+		wp_set_current_user( $customer_a_id );
+		$_GET = array( 'didar_search' => 'BrokerScopeNeedle' );
+		$customer_html = $this->new_shortcodes()->submissions_shortcode( array() );
+		$this->assertStringContainsString( '#' . $consultations[0], $customer_html );
+		$this->assertStringNotContainsString( '#' . $consultations[1], $customer_html );
+		$this->assertStringNotContainsString( '#' . $consultations[2], $customer_html );
+	}
+
 	public function test_fixed_shortcode_type_cannot_be_overridden_by_query_parameter() {
 		$owner_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
 		$consultation_id = $this->create_submission( $owner_id, 'consultation', array( 'first_name' => 'FixedTypeNeedle' ) );
@@ -190,5 +233,17 @@ class Test_Didar_Frontend_Search extends WP_UnitTestCase {
 		update_post_meta( $post_id, '_didar_fields', $fields );
 		update_post_meta( $post_id, '_didar_public_status', 'pending_review' );
 		return $post_id;
+	}
+
+	private function new_shortcodes() {
+		return new Didar_Shortcodes(
+			$this->registry,
+			new Didar_Field_Renderer( $this->settings, $this->files ),
+			new Didar_Validator( $this->registry, $this->settings, $this->files ),
+			$this->service,
+			$this->settings,
+			$this->files,
+			$this->search
+		);
 	}
 }

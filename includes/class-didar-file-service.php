@@ -609,7 +609,7 @@ class Didar_File_Service {
 		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || (string) get_post_meta( $post->ID, '_didar_form_type', true ) !== $form_type ) {
 			return false;
 		}
-		return ( current_user_can( 'didar_edit_requests' ) && current_user_can( 'edit_post', $post->ID ) ) || ( $this->submission_service && $this->submission_service->is_owner_editable( $post->ID, get_current_user_id() ) );
+		return Didar_Access_Control::can_edit_request( $post->ID ) || ( $this->submission_service && $this->submission_service->is_owner_editable( $post->ID, get_current_user_id() ) );
 	}
 
 	private function count_context_files( $owner_user_id, $form_type, $field_key, $submission_id ) {
