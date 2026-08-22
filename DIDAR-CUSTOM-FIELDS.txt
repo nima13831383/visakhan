@@ -1,0 +1,251 @@
+Didar CRM Custom Field Setup Plan
+=================================
+
+Generated from the current Didar_Form_Registry for:
+consultation, embassy_appointment, traveler_evaluation, complaint_suggestion,
+and visa_request.
+
+The registry is the source of truth. This file does not contain generated
+Didar IDs. After manually creating a field in Didar, enter its returned Key
+(for example Field_xxx_xxx) beside the matching mapping in the Didar settings.
+An empty mapping intentionally means “do not synchronize”.
+
+OFFICIAL NATIVE FIELDS — NO CUSTOM FIELD REQUIRED
+-------------------------------------------------
+
+These shared fields should normally be mapped to the Didar Person entity:
+
+- first_name / نام → Person.FirstName — NO CUSTOM FIELD REQUIRED
+- last_name / نام خانوادگی → Person.LastName — NO CUSTOM FIELD REQUIRED
+- mobile, input_3 / شماره همراه or موبایل → Person.MobilePhone — NO CUSTOM FIELD REQUIRED
+- email / ایمیل → Person.Email — NO CUSTOM FIELD REQUIRED
+- birth_date / تاریخ تولد → Person.BirthDate — NO CUSTOM FIELD REQUIRED
+- national_id / کد ملی → Person.NationalCode — NO CUSTOM FIELD REQUIRED
+- postal_code / کد پستی → Person.ZipCode — NO CUSTOM FIELD REQUIRED
+- job_title / سمت شغلی → Person.Position — NO CUSTOM FIELD REQUIRED
+
+The same semantic field may be shared across forms. Do not create duplicate
+Person fields when the meaning is identical. Confirm each native mapping in
+the settings screen before enabling it.
+
+REQUEST-SYNC RULE: form submissions are snapshots. During request
+synchronization, first name, last name, mobile, email, passport data, and
+other submitted values belong on the Deal when mapped there. An existing
+Person is resolved by the submission mobile and is not updated by the form.
+
+SYSTEM / INTEGRATION DEAL FIELDS — RECOMMENDED CUSTOM FIELDS
+------------------------------------------------------------
+
+Create these once on Deal. They are required for reliable inbound matching
+and must be configured in the corresponding system-field settings:
+
+1. WordPress Submission ID
+   Suggested type: Text
+   Setting: Deal submission-ID field
+   Custom Field ID: [ENTER AFTER CREATION]
+
+2. WordPress Form Type
+   Suggested type: Text or Select
+   Setting: Deal form-type field; required to resolve a Didar-created Deal
+   Custom Field ID: [ENTER AFTER CREATION]
+
+3. WordPress User ID
+   Suggested type: Text or Number
+   Purpose: additional diagnostic linkage to the existing WordPress user
+   Custom Field ID: [ENTER AFTER CREATION]
+
+4. WordPress Public Status
+   Suggested type: Text or Select
+   Setting: Public Status Deal Custom Field
+   Custom Field ID: [ENTER AFTER CREATION]
+
+Do not create a Pipeline Stage custom field. Internal Status maps to the
+official Deal.PipelineStageId instead.
+
+CONSULTATION — FIELD CLASSIFICATION
+-----------------------------------
+
+Request snapshot fields (do not update an existing Person from a submission):
+
+- first_name — Deal Custom Field — request snapshot
+- last_name — Deal Custom Field — request snapshot
+- input_3 — Deal Custom Field — request mobile snapshot; also used only to resolve the linked Person
+- email — Deal Custom Field — request snapshot
+
+The submitted mobile is the request Person matching key. Existing Person
+profile fields are never updated during request synchronization. Configure
+these mappings in Didar settings after the corresponding Deal Custom Fields
+are created; empty mappings intentionally skip the field.
+
+Recommended additional Deal Custom Fields:
+
+- input_5 — موضوع مشاوره — Text or Select — WordPress key: input_5 — Custom Field ID: [ENTER AFTER CREATION]
+- description — توضیحات — Long Text — WordPress key: description — Custom Field ID: [ENTER AFTER CREATION]
+
+No Didar field needed by default: none. The request title and internal/public
+statuses are handled by the Deal title, Pipeline Stage, and configured public
+status field. The local event log remains local.
+
+EMBASSY APPOINTMENT — FIELD CLASSIFICATION
+-------------------------------------------
+
+Native Person fields: first_name, last_name, mobile, email, birth_date.
+
+Recommended Person Custom Fields:
+
+- current_nationality — ملیت فعلی — Text — key: current_nationality — ID: [ENTER AFTER CREATION]
+- passport_number — شماره گذرنامه — Text — key: passport_number — ID: [ENTER AFTER CREATION]
+- birth_country — کشور محل تولد — Select — key: birth_country — ID: [ENTER AFTER CREATION]
+- gender — جنسیت — Select — key: gender — ID: [ENTER AFTER CREATION]
+- passport_issue_place — محل صدور گذرنامه — Text — key: passport_issue_place — ID: [ENTER AFTER CREATION]
+- father_name — نام پدر — Text — key: father_name — ID: [ENTER AFTER CREATION]
+- mother_name — نام مادر — Text — key: mother_name — ID: [ENTER AFTER CREATION]
+
+Recommended Deal Custom Fields:
+
+- request_for — ثبت درخواست برای خود یا شخص دیگر — Select — key: request_for — ID: [ENTER AFTER CREATION]
+- country — انتخاب کشور — Select — key: country — ID: [ENTER AFTER CREATION]
+- service_type — نوع خدمات — Select — key: service_type — ID: [ENTER AFTER CREATION]
+- profession — شغل (حرفه و تخصص) — Select — key: profession — ID: [ENTER AFTER CREATION]
+- appointment_date — تاریخ — Date — key: appointment_date — ID: [ENTER AFTER CREATION]
+- urgency — نوع وقت سفارت — Select — key: urgency — ID: [ENTER AFTER CREATION]
+- personal_details — مشخصات شخصی — Long Text or JSON-compatible text — internal repeater; create only if business users need it — ID: [ENTER AFTER CREATION]
+
+No Didar field needed: twitter (internal honeypot). The internal repeater
+may remain local if it is not useful in CRM.
+
+TRAVELER EVALUATION — FIELD CLASSIFICATION
+-------------------------------------------
+
+Native Person fields: first_name, last_name, mobile, email, birth_date,
+national_id, postal_code. Consider Person.Position for current_job only if
+the business accepts the native free-text meaning.
+
+Recommended Person Custom Fields:
+
+- mother_name — نام مادر — Text — ID: [ENTER AFTER CREATION]
+- father_name — نام پدر — Text — ID: [ENTER AFTER CREATION]
+- former_names — هرگونه نام سابق — Text — ID: [ENTER AFTER CREATION]
+- nationality — ملیت — Select — ID: [ENTER AFTER CREATION]
+- birth_place — محل تولد — Text — ID: [ENTER AFTER CREATION]
+- gender — جنسیت — Select — ID: [ENTER AFTER CREATION]
+- marital_status — وضعیت تاهل — Select — ID: [ENTER AFTER CREATION]
+- children_count — تعداد فرزندان — Number — ID: [ENTER AFTER CREATION]
+- children_ages — سن فرزندان — Text — ID: [ENTER AFTER CREATION]
+- passport_type — نوع پاسپورت — Select — ID: [ENTER AFTER CREATION]
+- passport_number — شماره پاسپورت — Text — ID: [ENTER AFTER CREATION]
+- passport_issue_date — تاریخ صدور پاسپورت — Date — ID: [ENTER AFTER CREATION]
+- passport_expiry_date — تاریخ انقضا پاسپورت — Date — ID: [ENTER AFTER CREATION]
+- passport_issuer_country — کشور صادر کننده — Select — ID: [ENTER AFTER CREATION]
+- home_address — آدرس محل سکونت — Long Text — ID: [ENTER AFTER CREATION]
+- home_phone — شماره منزل — Text — ID: [ENTER AFTER CREATION]
+- secondary_email — ایمیل دوم — Text — ID: [ENTER AFTER CREATION]
+- other_residency_passport — اقامت و پاسپورت کشور دیگر — Select — ID: [ENTER AFTER CREATION]
+- current_job — شغل کنونی — Text — ID: [ENTER AFTER CREATION]
+- work_address — نشانی محل کار — Long Text — ID: [ENTER AFTER CREATION]
+- employer_name — نام کارفرما/شرکت/مدرسه — Text — ID: [ENTER AFTER CREATION]
+- work_postal_code — کدپستی محل کار — Text — ID: [ENTER AFTER CREATION]
+- employer_phone — تلفن کارفرما/شرکت/مدرسه — Text — ID: [ENTER AFTER CREATION]
+- employer_email — ایمیل کارفرما/شرکت/مدرسه — Text — ID: [ENTER AFTER CREATION]
+
+Recommended Deal Custom Fields:
+
+- evaluation_date — تاریخ — Date — ID: [ENTER AFTER CREATION]
+- eu_family_relation — رابطه خانوادگی با شهروند اروپا/سوئیس/بریتانیا — Select — ID: [ENTER AFTER CREATION]
+- travel_purpose — هدف از سفر — Multi-select — ID: [ENTER AFTER CREATION]
+- travel_purpose_details — توضیحات هدف سفر — Long Text — ID: [ENTER AFTER CREATION]
+- main_destination_country — کشور مقصد اصلی — Select — ID: [ENTER AFTER CREATION]
+- first_entry_country — کشور اولین ورود — Select — ID: [ENTER AFTER CREATION]
+- requested_entries — تعداد ورودهای درخواستی — Multi-select — ID: [ENTER AFTER CREATION]
+- schengen_first_entry — تاریخ اولین ورود شنگن — Date — ID: [ENTER AFTER CREATION]
+- schengen_first_exit — تاریخ خروج از اولین ورود شنگن — Date — ID: [ENTER AFTER CREATION]
+- previous_fingerprints — اثر انگشت‌های قبلی — Select — ID: [ENTER AFTER CREATION]
+- previous_visa_number — شماره ویزای قبلی — Text — ID: [ENTER AFTER CREATION]
+- last_visa_valid_from — شروع اعتبار آخرین ویزا — Date — ID: [ENTER AFTER CREATION]
+- last_visa_valid_to — پایان اعتبار آخرین ویزا — Date — ID: [ENTER AFTER CREATION]
+- final_country_entry_permit_issuer — صادرکننده مجوز ورود نهایی — Text — ID: [ENTER AFTER CREATION]
+- entry_permit_valid_from — شروع اعتبار مجوز — Date — ID: [ENTER AFTER CREATION]
+- entry_permit_valid_to — پایان اعتبار مجوز — Date — ID: [ENTER AFTER CREATION]
+- has_invitation — دعوتنامه — Select — ID: [ENTER AFTER CREATION]
+- host_or_hotel_name — دعوت‌کننده/هتل — Text — ID: [ENTER AFTER CREATION]
+- host_or_hotel_address — آدرس دعوت‌کننده/هتل — Long Text — ID: [ENTER AFTER CREATION]
+- host_or_hotel_phone — تلفن دعوت‌کننده/هتل — Text — ID: [ENTER AFTER CREATION]
+- host_or_hotel_email — ایمیل دعوت‌کننده/هتل — Text — ID: [ENTER AFTER CREATION]
+- travel_funding — نحوه تامین هزینه — Multi-select — ID: [ENTER AFTER CREATION]
+- self_funding_methods — روش تامین شخصی — Multi-select — ID: [ENTER AFTER CREATION]
+- sponsor_funding_methods — روش تامین حمایت‌کننده — Multi-select — ID: [ENTER AFTER CREATION]
+- financial_accounts — حساب‌های مالی — Multi-select — ID: [ENTER AFTER CREATION]
+- rial_balance — موجودی ریالی — Number — ID: [ENTER AFTER CREATION]
+- foreign_currency_balance — موجودی ارزی — Number — ID: [ENTER AFTER CREATION]
+- property_deeds_count — تعداد اسناد ملکی — Number — ID: [ENTER AFTER CREATION]
+
+COMPLAINT / SUGGESTION — FIELD CLASSIFICATION
+---------------------------------------------
+
+Native Person fields: first_name, last_name, mobile.
+
+Recommended Deal Custom Fields:
+
+- date — تاریخ — Date — key: date — ID: [ENTER AFTER CREATION]
+- subject — موضوع شکایت/پیشنهاد — Text — key: subject — ID: [ENTER AFTER CREATION]
+- message — پیام شکایت/پیشنهاد — Long Text — key: message — ID: [ENTER AFTER CREATION]
+
+VISA REQUEST — FIELD CLASSIFICATION
+-----------------------------------
+
+Native Person fields: birth_date, national_id, mobile, email, postal_code.
+Map full_name to Person FirstName/LastName only through the centralized
+resolver; do not create a redundant full-name custom field unless required.
+
+Recommended Person Custom Fields:
+
+- birth_surname — نام خانوادگی زمان تولد — Text — ID: [ENTER AFTER CREATION]
+- birth_city — شهر محل تولد — Text — ID: [ENTER AFTER CREATION]
+- birth_country — کشور محل تولد — Select — ID: [ENTER AFTER CREATION]
+- current_nationality — تابعیت فعلی — Text — ID: [ENTER AFTER CREATION]
+- birth_nationality — تابعیت زمان تولد — Text — ID: [ENTER AFTER CREATION]
+- marital_status — وضعیت تاهل — Select — ID: [ENTER AFTER CREATION]
+- residential_address — آدرس کامل مسکونی — Long Text — ID: [ENTER AFTER CREATION]
+
+Recommended Deal Custom Fields:
+
+- academic_level — وضعیت تحصیلی — Select — ID: [ENTER AFTER CREATION]
+- invitation_type — نوع دعوت‌نامه — Select — ID: [ENTER AFTER CREATION]
+- passport_number — شماره گذرنامه — Text — ID: [ENTER AFTER CREATION]
+- passport_expiry — تاریخ انقضای گذرنامه — Date — ID: [ENTER AFTER CREATION]
+- passport_issuer_country — کشور صادرکننده پاسپورت — Select — ID: [ENTER AFTER CREATION]
+- travel_destination — مقصد سفر — Select — ID: [ENTER AFTER CREATION]
+- personal_photo, passport_main_page, round_trip_ticket, other_documents — Direct WordPress file URL(s) — Text or Long Text — only if direct download mode is active — IDs: [ENTER AFTER CREATION]
+- account_balance — مانده حساب — Number — ID: [ENTER AFTER CREATION]
+- six_month_turnover — گردش شش‌ماهه — Number — ID: [ENTER AFTER CREATION]
+- has_foreign_currency_account — حساب ارزی — Select — ID: [ENTER AFTER CREATION]
+- has_property_deed — سند ملکی — Select — ID: [ENTER AFTER CREATION]
+- passive_income — درآمد غیرفعال — Multi-select — ID: [ENTER AFTER CREATION]
+- employment_type — نوع شغل — Select — ID: [ENTER AFTER CREATION]
+- occupation — عنوان شغلی — Select — ID: [ENTER AFTER CREATION]
+- workplace_name — نام محل کار — Text — ID: [ENTER AFTER CREATION]
+- job_title — سمت شغلی — use Person.Position first; otherwise Deal Text — ID only if Deal mapping is chosen
+- employment_documents — مدارک شغلی — Multi-select — ID: [ENTER AFTER CREATION]
+- has_rejection — سابقه ریجکتی — Select — ID: [ENTER AFTER CREATION]
+- rejection_embassy — سفارت ریجکت‌کننده — Text — ID: [ENTER AFTER CREATION]
+- rejection_date — تاریخ ریجکتی — Date — ID: [ENTER AFTER CREATION]
+- has_previous_schengen — سابقه شنگن — Select — ID: [ENTER AFTER CREATION]
+- previous_schengen_country — کشور ویزای شنگن قبلی — Select — ID: [ENTER AFTER CREATION]
+- previous_schengen_date — تاریخ ویزای شنگن قبلی — Date — ID: [ENTER AFTER CREATION]
+- estimated_travel_date — تاریخ حدودی سفر — Date — ID: [ENTER AFTER CREATION]
+- schengen_exit_place — محل خروج از شنگن — Text — ID: [ENTER AFTER CREATION]
+- companions — لیست همراهان — Long Text or JSON-compatible text — ID: [ENTER AFTER CREATION]
+
+No Didar field needed by default: file values remain in WordPress unless a
+direct URL mapping is explicitly configured. Local audit events, internal
+notes, and WordPress-only workflow data remain local unless separately mapped.
+
+SUPPORTED TYPE NOTE
+-------------------
+
+The recommendations use only the control concepts documented by Didar's
+Custom Field responses: TextBox/text, Long Text, Number, Date, Select, and
+multi-select-style options where the created field's official ControlType and
+Options support them. Confirm the actual available ControlType in Didar before
+creating each field. Didar Custom Field creation is a manual CRM operation;
+the official API reference confirms listing fields, not creating them.

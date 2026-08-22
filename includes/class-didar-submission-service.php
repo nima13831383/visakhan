@@ -9,12 +9,14 @@ class Didar_Submission_Service {
 	private $events;
 	private $settings;
 	private $files;
+	private $logger;
 
 	public function __construct( Didar_Form_Registry $registry, Didar_Event_Log $events, Didar_Settings $settings = null, Didar_File_Service $files = null ) {
 		$this->registry = $registry;
 		$this->events   = $events;
 		$this->settings = $settings ? $settings : new Didar_Settings();
 		$this->files    = $files ? $files : new Didar_File_Service( $registry, $this->settings, $events );
+		$this->logger   = new Didar_Logger();
 		$this->files->set_submission_service( $this );
 	}
 
@@ -61,7 +63,22 @@ class Didar_Submission_Service {
 			null,
 			array( 'form_type' => $form_type, 'owner_user_id' => $author_id, 'public_status' => $default_status, 'internal_status' => $default_status )
 		);
+		$this->logger->log( 'INFO', 'submission_saved', 'WordPress submission saved.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'wp_user_id' => $author_id, 'form_type' => $form_type, 'source' => 'submission_service' ) );
 		$this->attach_files( $post_id, $form_type, $data, array(), true );
+		do_action( 'didar_submission_created', $post_id );
+		return $post_id;
+	}
+
+	/** Create a local submission from a verified Didar webhook and an existing WP user. */
+	public function create_from_didar( $form_type, $data, $author_id, $shared_note = '' ) {
+		$form = $this->registry->get( $form_type );
+		$author_id = absint( $author_id );
+		if ( ! $form || ! $author_id || ! get_user_by( 'id', $author_id ) ) {
+			return new WP_Error( 'invalid_external_submission', __( 'اطلاعات درخواست ورودی از دیدار کامل نیست.', 'didar' ) );
+		}
+		$post_id = wp_insert_post( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'publish', 'post_author' => $author_id, 'post_title' => sprintf( '%s — %s', $form['label'], current_time( 'Y-m-d H:i' ) ), 'meta_input' => array( '_didar_form_type' => $form_type, '_didar_created_by_user_id' => 0, '_didar_status' => $form['default_status'], '_didar_public_status' => $form['default_status'], '_didar_public_note' => '', '_didar_internal_status' => $form['default_status'], '_didar_internal_note' => '', '_didar_assigned_user_id' => '', '_didar_fields' => (array) $data, '_didar_shared_note' => sanitize_textarea_field( $shared_note ) ) ), true );
+		if ( is_wp_error( $post_id ) ) { return $post_id; }
+		$this->events->add( $post_id, 'request_created', null, array( 'form_type' => $form_type, 'owner_user_id' => $author_id, 'source' => 'Didar' ) );
 		return $post_id;
 	}
 
@@ -127,6 +144,7 @@ class Didar_Submission_Service {
 				return $workflow;
 			}
 		}
+		do_action( 'didar_submission_updated', $post_id );
 		return true;
 	}
 
@@ -243,6 +261,7 @@ class Didar_Submission_Service {
 		}
 		$this->attach_files( $post_id, $form_type, $data, $old_fields, true );
 		wp_update_post( array( 'ID' => $post_id ) );
+		do_action( 'didar_submission_updated', $post_id );
 		return true;
 	}
 
@@ -324,6 +343,9 @@ class Didar_Submission_Service {
 			}
 			$this->events->add( $post_id, $event_type, $old_value, $new_value );
 		}
+		if ( $prepared ) {
+			do_action( 'didar_submission_workflow_changed', $post_id, array_keys( $prepared ) );
+		}
 
 		return true;
 	}
@@ -344,6 +366,7 @@ class Didar_Submission_Service {
 			$result = $this->update_workflow( $post_id, array( 'internal_note' => $admin_note ) );
 			return ! is_wp_error( $result );
 		}
+		do_action( 'didar_submission_updated', $post_id );
 		return true;
 	}
 

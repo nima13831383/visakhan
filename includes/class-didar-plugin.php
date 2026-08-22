@@ -12,9 +12,11 @@ final class Didar_Plugin {
 	public $validator;
 	public $service;
 	public $event_log;
+	public $logger;
 	public $settings;
 	public $file_service;
 	public $request_search;
+	public $sync_manager;
 
 	public static function instance() {
 		if ( null === self::$instance ) {
@@ -36,12 +38,15 @@ final class Didar_Plugin {
 		$this->registry  = new Didar_Form_Registry();
 		$this->settings  = new Didar_Settings();
 		$this->event_log = new Didar_Event_Log();
+		$this->logger    = new Didar_Logger();
+		Didar_Logger::maybe_upgrade();
 		$this->request_search = new Didar_Request_Search();
 		$this->file_service = new Didar_File_Service( $this->registry, $this->settings, $this->event_log );
 		$this->renderer  = new Didar_Field_Renderer( $this->settings, $this->file_service );
 		$this->validator = new Didar_Validator( $this->registry, $this->settings, $this->file_service );
 		$this->service   = new Didar_Submission_Service( $this->registry, $this->event_log, $this->settings, $this->file_service );
 		$this->file_service->set_submission_service( $this->service );
+		$this->sync_manager = new Didar_Sync_Manager( $this->registry, $this->settings, $this->event_log, $this->service, $this->file_service, $this->logger );
 
 		new Didar_Shortcodes( $this->registry, $this->renderer, $this->validator, $this->service, $this->settings, $this->file_service, $this->request_search );
 		new Didar_Ajax( $this->registry, $this->renderer, $this->service, $this->file_service );
@@ -59,6 +64,7 @@ final class Didar_Plugin {
 		Didar_Post_Type::register();
 		Didar_Access_Control::install_roles_and_capabilities();
 		$schema = Didar_Schema_Manager::install_and_verify();
+		Didar_Logger::maybe_upgrade();
 		if ( is_wp_error( $schema ) ) {
 			$message    = $schema->get_error_message();
 			$error_data = $schema->get_error_data();
@@ -92,5 +98,7 @@ final class Didar_Plugin {
 		if ( $timestamp ) {
 			wp_unschedule_event( $timestamp, 'didar_cleanup_temporary_uploads' );
 		}
+		wp_clear_scheduled_hook( Didar_Sync_Manager::CRON_HOOK );
+		wp_clear_scheduled_hook( Didar_Sync_Manager::USER_HOOK );
 	}
 }

@@ -453,6 +453,18 @@ class Didar_File_Service {
 		return add_query_arg( '_wpnonce', wp_create_nonce( 'didar_download_file_' . $record['file_id'] ), $url );
 	}
 
+	/** Return a direct URL only for the configured Stage 2 direct-file mode. */
+	public function get_sync_url( $file_id, $submission_id, $field_key ) {
+		if ( 'direct' !== $this->settings->file_download_mode() ) {
+			return '';
+		}
+		$record = $this->get( $file_id );
+		if ( ! $record || 'final' !== $record['file_status'] || (int) $record['submission_id'] !== absint( $submission_id ) || (string) $record['field_key'] !== (string) $field_key ) {
+			return '';
+		}
+		return $this->direct_url( $record );
+	}
+
 	public function handle_secure_download() {
 		$file_id = isset( $_GET['file_id'] ) && ! is_array( $_GET['file_id'] ) ? absint( wp_unslash( $_GET['file_id'] ) ) : 0;
 		$nonce   = isset( $_GET['_wpnonce'] ) && ! is_array( $_GET['_wpnonce'] ) ? sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ) : '';
