@@ -10,15 +10,130 @@ Didar IDs. After manually creating a field in Didar, enter its returned Key
 (for example Field_xxx_xxx) beside the matching mapping in the Didar settings.
 An empty mapping intentionally means “do not synchronize”.
 
-OFFICIAL NATIVE FIELDS — NO CUSTOM FIELD REQUIRED
+STAGE 2 AUTHORITATIVE DATA MODEL
+--------------------------------
+
+The rules in this section supersede any older form-by-form recommendation
+below that assigns submitted identity fields to a Person.
+
+A. USER / PERSON PROFILE DATA
+
+The relationship is:
+
+    WordPress User <-> Didar Person
+
+A Didar Person represents the account identity. It is sourced automatically
+from the WordPress user profile, not from form-field mappings:
+
+    Person.FirstName   <- user meta first_name
+    Person.LastName    <- user meta last_name
+    Person.Email       <- WP_User.user_email
+    Person.MobilePhone <- Digits user meta digits_phone
+
+The installed Digits integration writes `digits_phone` as its canonical
+country-code-plus-number value. The integration falls back to
+`digt_countrycode` + `digits_phone_no` when `digits_phone` is unavailable.
+Do not use a guessed generic `mobile` meta key.
+
+Registration creates or resolves the Person and persists its ID in user meta
+`_didar_person_id`. Request synchronization may copy that ID to submission
+meta `_didar_person_id` for reference, but never updates Person identity.
+Automatic profile-update synchronization is disabled because this site has
+no established profile-edit synchronization flow; any future profile flow
+must remain separate from request synchronization.
+
+B. REQUEST / DEAL DATA
+
+The relationship is:
+
+    WordPress didar_submission <-> one Didar Deal
+
+A Deal is a snapshot of one request. Every submitted form value, including
+identity-like values, belongs to the request and should use a Deal Custom
+Field mapping when CRM synchronization is wanted. Request first name, last
+name, mobile, phone, email, applicant values, passport values, and
+description must never overwrite the WordPress user or Didar Person.
+
+The live test form is `consultation`. All six fields are request values:
+
+    first_name, last_name, input_3, email, input_5, description
+
+Configure each desired consultation field as a Deal Custom Field. In
+particular, `first_name`, `last_name`, `input_3`, and `email` must not be
+configured as Person Native fields. Existing saved Person mappings are
+preserved for migration safety, shown with an admin warning, and skipped by
+request synchronization. They are not silently remapped to guessed IDs.
+
+C. SYSTEM DEAL FIELDS
+
+Every synchronized Deal automatically receives these configured Deal Custom
+Fields:
+
+    WordPress Submission ID = unique didar_submission post ID
+    WordPress Form Type      = consultation, visa_request, etc.
+    WordPress User ID        = customer/account owner user ID
+    WordPress Public Status  = optional, when configured
+
+The current installation settings observed during the Stage 2 review are:
+
+    Submission ID: Field_996_0_143
+    Form Type:     Field_996_0_141
+    User ID:       Field_996_0_144
+    Public Status: not configured
+
+These are settings, not code constants. Do not hardcode them in new code.
+The configured field Key (for example `Field_996_0_143`) is used in Deal
+payloads. `/api/deal/search_v2` requires the Custom Field metadata UUID, so
+ns-didar must continue resolving Key -> metadata UUID before searching.
+
+D. LIFECYCLE AND SECURITY
+
+- A frontend request gets its owner from the current logged-in WordPress user
+  on the server; client fields cannot change owner, Person ID, or Deal ID.
+- An admin/broker-created request must select a customer WordPress user. The
+  creator is not silently used as the customer.
+- One WordPress user may own unlimited independent submissions and Deals.
+- Existing `_didar_deal_id` is authoritative. Recovery uses only an exact
+  WordPress Submission ID Deal field match; it never uses User ID, Person ID,
+  mobile, email, title, owner, or form type alone.
+- New Deal creation omits empty Id, stores the returned Deal ID immediately,
+  then applies Custom Fields on that same Deal for retry safety.
+- Editing a submission updates only its linked Deal. Deal webhooks update
+  request snapshots only. They never write to WordPress profile metadata.
+- Person webhooks are a separate identity stream and do not modify requests.
+
+E. DELETION LIMITATION
+
+The verified official Didar references document Deal create/update and Deal
+create/update webhook actions. They do not document a dedicated Deal delete
+endpoint or a reliable separate Deal deletion webhook. `IsDeleted` in a Deal
+payload is not treated as proof of a supported delete event/API.
+
+Normal customers are denied request deletion server-side. Administrator and
+authorized `didar_broker` users retain the existing WordPress deletion
+capabilities. Trash/permanent deletion is audited with source
+`wordpress_admin` or `wordpress_broker`; ns-didar does not fabricate a remote
+Didar deletion call. A Didar `IsDeleted` state is logged as unsupported and
+does not delete a WordPress request, preventing a loop.
+
+F. DIAGNOSTICS
+
+Didar_Logger stores stable UTC timestamps and displays diagnostic timestamps
+in `Asia/Tehran`. Logs include user ID, submission ID, form type, Person ID,
+Deal ID, direction, operation, mapping, resolution source, API response, and
+suppression/deletion events. API keys, webhook tokens, passwords, cookies,
+and other authentication secrets must never be logged.
+
+LEGACY NATIVE FIELD REFERENCE — PROFILE FLOW ONLY
 -------------------------------------------------
 
-These shared fields should normally be mapped to the Didar Person entity:
+These native fields are available only to the separate WordPress-user profile
+flow. They are not normal form/request mappings:
 
-- first_name / نام → Person.FirstName — NO CUSTOM FIELD REQUIRED
-- last_name / نام خانوادگی → Person.LastName — NO CUSTOM FIELD REQUIRED
-- mobile, input_3 / شماره همراه or موبایل → Person.MobilePhone — NO CUSTOM FIELD REQUIRED
-- email / ایمیل → Person.Email — NO CUSTOM FIELD REQUIRED
+- first_name / نام → Person.FirstName — profile flow only; not request sync
+- last_name / نام خانوادگی → Person.LastName — profile flow only; not request sync
+- mobile, input_3 / شماره همراه or موبایل → Person.MobilePhone — profile flow only; not request sync
+- email / ایمیل → Person.Email — profile flow only; not request sync
 - birth_date / تاریخ تولد → Person.BirthDate — NO CUSTOM FIELD REQUIRED
 - national_id / کد ملی → Person.NationalCode — NO CUSTOM FIELD REQUIRED
 - postal_code / کد پستی → Person.ZipCode — NO CUSTOM FIELD REQUIRED
@@ -30,8 +145,9 @@ the settings screen before enabling it.
 
 REQUEST-SYNC RULE: form submissions are snapshots. During request
 synchronization, first name, last name, mobile, email, passport data, and
-other submitted values belong on the Deal when mapped there. An existing
-Person is resolved by the submission mobile and is not updated by the form.
+other submitted values belong on the Deal when mapped there. The linked
+Person is resolved from the WordPress user and is never resolved from the
+submission mobile or updated by the form.
 
 SYSTEM / INTEGRATION DEAL FIELDS — RECOMMENDED CUSTOM FIELDS
 ------------------------------------------------------------
@@ -69,13 +185,13 @@ Request snapshot fields (do not update an existing Person from a submission):
 
 - first_name — Deal Custom Field — request snapshot
 - last_name — Deal Custom Field — request snapshot
-- input_3 — Deal Custom Field — request mobile snapshot; also used only to resolve the linked Person
+- input_3 — Deal Custom Field — request mobile snapshot; never used to resolve the linked Person
 - email — Deal Custom Field — request snapshot
 
-The submitted mobile is the request Person matching key. Existing Person
-profile fields are never updated during request synchronization. Configure
-these mappings in Didar settings after the corresponding Deal Custom Fields
-are created; empty mappings intentionally skip the field.
+The submitted mobile is request data only. The linked Person comes from the
+WordPress user identity. Configure these mappings in Didar settings after the
+corresponding Deal Custom Fields are created; empty mappings intentionally
+skip the field.
 
 Recommended additional Deal Custom Fields:
 
@@ -89,9 +205,10 @@ status field. The local event log remains local.
 EMBASSY APPOINTMENT — FIELD CLASSIFICATION
 -------------------------------------------
 
-Native Person fields: first_name, last_name, mobile, email, birth_date.
+Legacy profile-field reference only; request fields belong on the Deal:
+first_name, last_name, mobile, email, birth_date.
 
-Recommended Person Custom Fields:
+Legacy profile custom-field reference only (request mappings belong on Deal):
 
 - current_nationality — ملیت فعلی — Text — key: current_nationality — ID: [ENTER AFTER CREATION]
 - passport_number — شماره گذرنامه — Text — key: passport_number — ID: [ENTER AFTER CREATION]
@@ -117,11 +234,12 @@ may remain local if it is not useful in CRM.
 TRAVELER EVALUATION — FIELD CLASSIFICATION
 -------------------------------------------
 
-Native Person fields: first_name, last_name, mobile, email, birth_date,
+Legacy profile-field reference only; request fields belong on the Deal:
+first_name, last_name, mobile, email, birth_date,
 national_id, postal_code. Consider Person.Position for current_job only if
 the business accepts the native free-text meaning.
 
-Recommended Person Custom Fields:
+Legacy profile custom-field reference only (request mappings belong on Deal):
 
 - mother_name — نام مادر — Text — ID: [ENTER AFTER CREATION]
 - father_name — نام پدر — Text — ID: [ENTER AFTER CREATION]
@@ -182,7 +300,8 @@ Recommended Deal Custom Fields:
 COMPLAINT / SUGGESTION — FIELD CLASSIFICATION
 ---------------------------------------------
 
-Native Person fields: first_name, last_name, mobile.
+Legacy profile-field reference only; request fields belong on the Deal:
+first_name, last_name, mobile.
 
 Recommended Deal Custom Fields:
 
@@ -193,11 +312,12 @@ Recommended Deal Custom Fields:
 VISA REQUEST — FIELD CLASSIFICATION
 -----------------------------------
 
-Native Person fields: birth_date, national_id, mobile, email, postal_code.
-Map full_name to Person FirstName/LastName only through the centralized
-resolver; do not create a redundant full-name custom field unless required.
+Legacy profile-field reference only; request fields belong on the Deal:
+birth_date, national_id, mobile, email, postal_code. Map `full_name` to a
+Deal Custom Field when the request snapshot is required; do not copy it to a
+Person profile.
 
-Recommended Person Custom Fields:
+Legacy profile custom-field reference only (request mappings belong on Deal):
 
 - birth_surname — نام خانوادگی زمان تولد — Text — ID: [ENTER AFTER CREATION]
 - birth_city — شهر محل تولد — Text — ID: [ENTER AFTER CREATION]

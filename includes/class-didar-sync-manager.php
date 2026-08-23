@@ -38,6 +38,72 @@ class Didar_Sync_Manager {
 		add_action( self::CRON_HOOK, array( $this, 'process_submission' ), 10, 1 );
 		add_action( self::USER_HOOK, array( $this, 'process_user' ), 10, 1 );
 		add_action( 'rest_api_init', array( $this, 'register_webhook_route' ) );
+		add_filter( 'pre_delete_post', array( $this, 'guard_submission_delete' ), 10, 3 );
+		add_filter( 'pre_trash_post', array( $this, 'guard_submission_delete' ), 10, 3 );
+		add_action( 'transition_post_status', array( $this, 'record_submission_trash' ), 10, 3 );
+		add_action( 'before_delete_post', array( $this, 'record_submission_delete' ), 20, 2 );
+	}
+
+	/** Normal customers have no request deletion path, including direct wp_delete_post calls. */
+	public function guard_submission_delete( $delete, $post, $force_delete ) {
+		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type ) {
+			return $delete;
+		}
+
+		if ( ! current_user_can( 'delete_post', $post->ID ) ) {
+			$this->logger->log( 'WARNING', 'deletion_denied', 'Request deletion denied by the server-side capability check.', array(
+				'direction'       => 'wordpress_to_didar',
+				'entity_type'     => 'submission',
+				'local_id'        => $post->ID,
+				'wp_user_id'      => $this->service->get_owner_user_id( $post->ID ),
+				'form_type'       => get_post_meta( $post->ID, '_didar_form_type', true ),
+				'didar_deal_id'   => get_post_meta( $post->ID, self::META_DEAL_ID, true ),
+				'deletion_source' => 'wordpress_customer',
+			) );
+			return false;
+		}
+
+		return $delete;
+	}
+
+	/** Record the chosen WordPress lifecycle; no remote delete is attempted because Didar has no verified delete API. */
+	public function record_submission_trash( $new_status, $old_status, $post ) {
+		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || 'trash' !== $new_status || 'trash' === $old_status ) {
+			return;
+		}
+
+		$this->record_deletion_operation( $post, 'request_trashed' );
+	}
+
+	/** Record permanent deletion before WordPress removes the post and its mapping metadata. */
+	public function record_submission_delete( $post_id, $post = null ) {
+		$post = $post instanceof WP_Post ? $post : get_post( $post_id );
+		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type ) {
+			return;
+		}
+
+		$this->record_deletion_operation( $post, 'request_deleted' );
+	}
+
+	private function record_deletion_operation( $post, $event_type ) {
+		$source = current_user_can( 'manage_options' ) ? 'wordpress_admin' : 'wordpress_broker';
+		$deal_id = sanitize_text_field( (string) get_post_meta( $post->ID, self::META_DEAL_ID, true ) );
+		$context = array(
+			'direction'       => 'wordpress_to_didar',
+			'entity_type'     => 'submission',
+			'local_id'        => $post->ID,
+			'wp_user_id'      => $this->service->get_owner_user_id( $post->ID ),
+			'form_type'       => get_post_meta( $post->ID, '_didar_form_type', true ),
+			'didar_deal_id'   => $deal_id,
+			'deletion_source' => $source,
+			'operation'       => 'delete',
+			'official_support'=> 'not_confirmed',
+		);
+		$this->events->add( $post->ID, $event_type, null, null, $context + array( 'source' => $source ) );
+		$this->logger->log( 'INFO', $event_type, 'Authorized WordPress request deletion lifecycle recorded; remote Didar Deal deletion is not available in the verified official API.', $context );
+		if ( $deal_id ) {
+			$this->logger->log( 'WARNING', 'deal_delete_unsupported', 'WordPress request deletion was authorized, but no remote Deal delete/archive call was made because official Didar deletion support is not documented.', $context );
+		}
 	}
 
 	public function queue_user( $user_id ) {
@@ -73,9 +139,8 @@ class Didar_Sync_Manager {
 		if ( ! $user || ! $this->enabled() ) { return; }
 		$settings = $this->settings->all();
 		if ( empty( $settings['didar_default_owner_id'] ) ) { $this->log_user_state( $user->ID, 'pending', 'didar_default_owner_missing' ); return $this->queue_user_retry( $user->ID ); }
-		$fields = array( 'first_name' => $user->first_name, 'last_name' => $user->last_name, 'email' => $user->user_email, 'mobile' => get_user_meta( $user->ID, 'mobile', true ) );
 		$trace = Didar_Logger::trace_id( '' ); $this->api->set_trace_id( $trace );
-		$result = $this->resolve_and_sync_person( $user, $fields, '', 0, $trace );
+		$result = $this->resolve_and_sync_person( $user, array(), '', 0, $trace );
 		if ( is_wp_error( $result ) ) { $status = 'didar_person_conflict' === $result->get_error_code() ? 'conflict' : 'pending'; $this->log_user_state( $user->ID, $status, $result->get_error_code() ); if ( 'conflict' !== $status ) { return $this->queue_user_retry( $user->ID ); } return; }
 		$this->log_user_state( $user->ID, 'synced', '' );
 	}
@@ -89,15 +154,20 @@ class Didar_Sync_Manager {
 		$this->logger->log( 'INFO', 'sync_execute', 'Submission sync execution started.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'source' => 'wp_cron' ) );
 		$form = $this->registry->get( $form_type );
 		if ( ! $form ) { $this->logger->log( 'ERROR', 'mapping', 'Sync stopped: form mapping is missing.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'form_type' => $form_type, 'trace_id' => $trace ) ); return $this->fail( $post->ID, 'invalid_form_type' ); }
-		$user = get_user_by( 'id', $post->post_author );
+		$user_id = $this->service->get_owner_user_id( $post->ID );
+		$user = get_user_by( 'id', $user_id );
 		if ( ! $user ) { $this->logger->log( 'ERROR', 'person_sync', 'Sync stopped: submission owner is missing.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'trace_id' => $trace ) ); return $this->fail( $post->ID, 'submission_owner_missing' ); }
 		$settings = $this->settings->all();
 		if ( empty( $settings['didar_default_pipeline_id'] ) || empty( $this->pipeline_stage( $this->internal_status( $post->ID ) ) ) ) { $this->logger->log( 'ERROR', 'settings_check', 'Sync stopped: required Pipeline or Pipeline Stage mapping is missing.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'pipeline_id' => $settings['didar_default_pipeline_id'] ?? '', 'pipeline_stage_id' => $this->pipeline_stage( $this->internal_status( $post->ID ) ) ) ); return $this->fail( $post->ID, 'pipeline_mapping_missing', true ); }
 		$fields = $this->service->get_fields( $post->ID );
-		$person_result = $this->resolve_submission_person( $fields, $form_type, $post->ID, $trace );
+		$legacy_person_mappings = $this->mapper->legacy_request_person_mappings( $form_type );
+		if ( $legacy_person_mappings ) {
+			$this->logger->log( 'WARNING', 'mapping_legacy_person_target', 'Legacy form-to-Person mappings were preserved but skipped; request values are Deal snapshots and do not update Person identity.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'legacy_mappings' => $legacy_person_mappings, 'person_source' => 'wordpress_user_profile' ) );
+		}
+		$person_result = $this->resolve_submission_person( $user, $form_type, $post->ID, $trace );
 		if ( is_wp_error( $person_result ) ) { return $this->fail( $post->ID, $person_result->get_error_code(), 'didar_person_conflict' !== $person_result->get_error_code() ); }
 		$person_id = $person_result;
-		$this->logger->log( 'INFO', 'deal_resume', 'Deal sync resumed after Person resolution.', array( 'entity_type' => 'person', 'local_id' => $post->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace ) );
+		$this->logger->log( 'INFO', 'deal_resume', 'Deal sync resumed after Person resolution.', array( 'entity_type' => 'person', 'local_id' => $post->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'person_source' => 'wordpress_user_profile' ) );
 		$local_deal_id = sanitize_text_field( (string) get_post_meta( $post->ID, self::META_DEAL_ID, true ) );
 		if ( $local_deal_id && $this->deal_id_used_by_other_submission( $local_deal_id, $post->ID ) ) { $this->logger->log( 'ERROR', 'deal_identity_conflict', 'The local Deal ID is already linked to another WordPress submission; update stopped to prevent overwrite.', array( 'entity_type' => 'deal', 'local_id' => $post->ID, 'external_id' => $local_deal_id, 'form_type' => $form_type, 'trace_id' => $trace, 'lookup_strategy' => 'local_deal_meta' ) ); return $this->fail( $post->ID, 'didar_deal_conflict', false ); }
 		$deal = array(
@@ -111,7 +181,7 @@ class Didar_Sync_Manager {
 			'Fields' => $this->mapper->deal_fields( $form_type, $fields, $post->ID ),
 		);
 		$this->logger->log( 'INFO', 'deal_identity', $deal['Id'] ? 'Stored local Deal ID found; updating the Deal belonging to this submission.' : 'No stored local Deal ID; Deal identity will use exact Submission ID lookup or create.', array( 'entity_type' => 'deal', 'local_id' => $post->ID, 'external_id' => $deal['Id'], 'form_type' => $form_type, 'trace_id' => $trace, 'resolved_person_id' => $person_id, 'lookup_strategy' => $deal['Id'] ? 'local_deal_meta' : 'submission_id_custom_field' ) );
-		$this->logger->log( 'INFO', 'deal_create', 'Deal payload built.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'external_id' => $person_id, 'form_type' => $form_type, 'trace_id' => $trace, 'pipeline_id' => $deal['PipelineId'], 'pipeline_stage_id' => $deal['PipelineStageId'], 'deal_payload' => $deal ) );
+		$this->logger->log( 'INFO', 'deal_create', 'Deal payload built; form identity fields remain request snapshots.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'external_id' => $person_id, 'form_type' => $form_type, 'trace_id' => $trace, 'wp_user_id' => $user->ID, 'pipeline_id' => $deal['PipelineId'], 'pipeline_stage_id' => $deal['PipelineStageId'], 'deal_field_mapping' => $deal['Fields'], 'person_source' => 'wordpress_user_profile' ) );
 		if ( empty( $deal['Id'] ) ) {
 			$existing_deal_id = $this->find_deal_by_submission_id( $post->ID, $settings );
 			if ( is_wp_error( $existing_deal_id ) ) {
@@ -199,26 +269,38 @@ class Didar_Sync_Manager {
 	}
 
 	private function apply_person_webhook( $payload, $event_id ) {
-		$data = is_array( $payload['data'] ) ? $payload['data'] : array(); $person_id = sanitize_text_field( $payload['meta']['entityId'] ?? ( $data['Id'] ?? '' ) ); $user_id = $this->wp_user_for_person( $person_id );
-		if ( ! $user_id || 1 !== absint( $payload['meta']['actionType'] ?? 0 ) && 2 !== absint( $payload['meta']['actionType'] ?? 0 ) ) { return; }
-		$update = array( 'ID' => $user_id ); if ( isset( $data['FirstName'] ) ) { $update['first_name'] = sanitize_text_field( $data['FirstName'] ); } if ( isset( $data['LastName'] ) ) { $update['last_name'] = sanitize_text_field( $data['LastName'] ); } if ( ! empty( $data['Email'] ) && is_email( $data['Email'] ) ) { $update['user_email'] = sanitize_email( $data['Email'] ); } wp_update_user( $update ); if ( isset( $data['MobilePhone'] ) ) { update_user_meta( $user_id, 'mobile', sanitize_text_field( $data['MobilePhone'] ) ); }
-		$q = new WP_Query( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'any', 'author' => $user_id, 'posts_per_page' => 100, 'fields' => 'ids', 'no_found_rows' => true ) ); foreach ( (array) $q->posts as $post_id ) { $this->events->add( $post_id, 'didar_person_webhook_received', null, null, array( 'source' => 'Didar', 'event_id' => $event_id, 'entity_id' => $person_id ) ); }
+		$data      = is_array( $payload['data'] ) ? $payload['data'] : array();
+		$person_id = sanitize_text_field( $payload['meta']['entityId'] ?? ( $data['Id'] ?? '' ) );
+		$user_id   = $this->wp_user_for_person( $person_id );
+		$this->logger->log( 'INFO', 'person_webhook_separate', 'Didar Person webhook received; WordPress profile synchronization is disabled for this integration.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'person', 'external_id' => $person_id, 'wp_user_id' => $user_id, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook', 'profile_sync' => 'disabled' ) );
 	}
 
 	private function apply_deal_webhook( $payload, $event_id ) {
 		$data = is_array( $payload['data'] ) ? $payload['data'] : array();
 		$deal_id = sanitize_text_field( isset( $payload['meta']['entityId'] ) ? $payload['meta']['entityId'] : ( isset( $data['Id'] ) ? $data['Id'] : '' ) );
 		$post_id = $this->find_submission_by_deal( $deal_id );
+		$settings = $this->settings->all();
+		$fields = isset( $data['Fields'] ) && is_array( $data['Fields'] ) ? $data['Fields'] : array();
+		$system_submission_id = $this->deal_custom_field_value( $data, array( $settings['didar_system_submission_id_field_id'] ?? '' ) );
+		if ( ! $post_id && is_scalar( $system_submission_id ) && absint( $system_submission_id ) ) {
+			$post_id = $this->find_submission_by_submission_id( $system_submission_id, $deal_id );
+		}
+		if ( ! empty( $data['IsDeleted'] ) ) {
+			$this->logger->log( 'WARNING', 'deal_delete_unsupported', 'Didar Deal deletion state received, but official reverse Deal deletion support is not confirmed; WordPress request was not deleted.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'deal', 'external_id' => $deal_id, 'local_id' => $post_id, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook', 'deletion_source' => 'didar_webhook', 'official_support' => 'not_confirmed' ) );
+			return;
+		}
 		if ( ! $post_id ) {
 			$action_type = isset( $payload['meta']['actionType'] ) ? absint( $payload['meta']['actionType'] ) : 0;
 			if ( 1 !== $action_type ) { $this->logger->log( 'INFO', 'webhook_matching', 'Deal webhook had no mapped WordPress submission.', array( 'entity_type' => 'deal', 'external_id' => $deal_id, 'webhook_event_id' => $event_id, 'source' => 'webhook' ) ); return; }
 			$form_type = $this->form_type_from_deal( $data );
-			$person_id = sanitize_text_field( isset( $data['PersonId'] ) ? $data['PersonId'] : ( isset( $data['ContactId'] ) ? $data['ContactId'] : '' ) );
-			$user_id = $this->wp_user_for_person( $person_id );
+			$user_id = $this->wp_user_from_deal( $data );
 			if ( ! $form_type || ! $user_id ) { $this->logger->log( 'WARNING', 'webhook_matching', 'Deal webhook could not resolve form type or WordPress user.', array( 'entity_type' => 'deal', 'external_id' => $deal_id, 'webhook_event_id' => $event_id, 'source' => 'webhook' ) ); return; }
 			$post_id = $this->service->create_from_didar( $form_type, $this->mapped_submission_fields( $form_type, $data ), $user_id, $data['Description'] ?? '' );
 			if ( is_wp_error( $post_id ) ) { $this->logger->log( 'ERROR', 'webhook_apply', 'Deal webhook submission creation failed.', array( 'entity_type' => 'deal', 'external_id' => $deal_id, 'webhook_event_id' => $event_id, 'error_code' => $post_id->get_error_code(), 'source' => 'webhook' ) ); return; }
 			update_post_meta( $post_id, self::META_DEAL_ID, $deal_id );
+			$person_id = sanitize_text_field( (string) get_user_meta( $user_id, self::USER_PERSON_META, true ) );
+			if ( $person_id ) { update_post_meta( $post_id, self::META_PERSON_ID, $person_id ); }
+			$this->logger->log( 'INFO', 'webhook_apply', 'Didar Deal created a WordPress request from explicit system mappings.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'deal', 'external_id' => $deal_id, 'local_id' => $post_id, 'wp_user_id' => $user_id, 'form_type' => $form_type, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook' ) );
 		}
 		self::$suppress = true;
 		try { $this->update_local_from_deal( $post_id, $data, $event_id ); } finally { self::$suppress = false; }
@@ -234,9 +316,6 @@ class Didar_Sync_Manager {
 			if ( 'deal_custom' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $fields ) ) { $new[ $key ] = $fields[ $map['field'] ]; }
 			if ( 'deal_native' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $data ) ) { $new[ $key ] = $data[ $map['field'] ]; }
 		}
-		$person = isset( $data['Person'] ) && is_array( $data['Person'] ) ? $data['Person'] : ( isset( $data['Contact'] ) && is_array( $data['Contact'] ) ? $data['Contact'] : array() );
-		$person_fields = isset( $person['Fields'] ) && is_array( $person['Fields'] ) ? $person['Fields'] : array();
-		foreach ( $this->registry->fields( $form_type ) as $key => $definition ) { $map = $this->mapper->mapping( $form_type, $key ); if ( 'person_native' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $person ) ) { $new[ $key ] = $person[ $map['field'] ]; } elseif ( 'person_custom' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $person_fields ) ) { $new[ $key ] = $person_fields[ $map['field'] ]; } }
 		if ( $new !== $old ) { update_post_meta( $post_id, '_didar_fields', $new ); }
 		$stage = isset( $data['PipelineStageId'] ) ? sanitize_text_field( $data['PipelineStageId'] ) : '';
 		$status = $this->internal_status_for_stage( $stage );
@@ -244,7 +323,8 @@ class Didar_Sync_Manager {
 		$settings = $this->settings->all(); $public_field = isset( $settings['didar_public_status_field_id'] ) ? sanitize_text_field( $settings['didar_public_status_field_id'] ) : ''; if ( $public_field && isset( $fields[ $public_field ] ) && isset( Didar_Reference_Data::statuses()[ sanitize_key( $fields[ $public_field ] ) ] ) ) { update_post_meta( $post_id, '_didar_public_status', sanitize_key( $fields[ $public_field ] ) ); update_post_meta( $post_id, '_didar_status', sanitize_key( $fields[ $public_field ] ) ); }
 		$owner = isset( $data['OwnerId'] ) ? $this->wp_user_for_didar( $data['OwnerId'] ) : 0;
 		if ( $owner ) { update_post_meta( $post_id, '_didar_assigned_user_id', $owner ); }
-		$this->events->add( $post_id, 'didar_webhook_received', $old, $new, array( 'source' => 'Didar', 'event_id' => $event_id, 'entity_id' => isset( $data['Id'] ) ? $data['Id'] : '' ) );
+		$this->events->add( $post_id, 'didar_webhook_received', $old, $new, array( 'source' => 'Didar', 'event_id' => $event_id, 'entity_id' => isset( $data['Id'] ) ? $data['Id'] : '', 'request_snapshot_only' => true ) );
+		$this->logger->log( 'INFO', 'webhook_apply', 'Didar Deal webhook updated request snapshot fields only; WordPress user profile was not modified.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'deal', 'external_id' => $deal_id, 'local_id' => $post_id, 'wp_user_id' => get_post_field( 'post_author', $post_id ), 'form_type' => $form_type, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook', 'deal_field_mapping' => $fields ) );
 	}
 
 	private function mapped_submission_fields( $form_type, $data ) {
@@ -261,12 +341,20 @@ class Didar_Sync_Manager {
 		return $this->registry->is_valid_type( $type ) ? $type : '';
 	}
 
-	/** Resolve one Person deterministically, then update it with the mapped fields. */
+	private function wp_user_from_deal( $data ) {
+		$settings = $this->settings->all();
+		$field_id = isset( $settings['didar_system_user_id_field_id'] ) ? sanitize_text_field( (string) $settings['didar_system_user_id_field_id'] ) : '';
+		$value    = $this->deal_custom_field_value( $data, array( $field_id ) );
+		$user_id  = is_scalar( $value ) ? absint( $value ) : 0;
+		return $user_id && get_user_by( 'id', $user_id ) ? $user_id : 0;
+	}
+
+	/** Registration/profile flow: resolve one Person deterministically and sync account data. */
 	private function resolve_and_sync_person( $user, $fields, $form_type, $submission_id, $trace ) {
 		$payload = $this->mapper->person_payload( $user, $fields, $form_type );
 		$stored_id = sanitize_text_field( (string) get_user_meta( $user->ID, self::USER_PERSON_META, true ) );
 		if ( $stored_id ) {
-			$this->logger->log( 'INFO', 'person_resolution', 'Stored registration Person ID found; updating the registration-linked Person.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $stored_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'source' => 'stored_person_meta' ) );
+			$this->logger->log( 'INFO', 'person_resolution', 'Stored Didar Person ID found; updating the registration-linked profile Person.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $stored_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'source' => 'wordpress_user_profile', 'person_source' => 'wordpress_user_profile' ) );
 			$payload['Id'] = $stored_id;
 			$person_id = $stored_id;
 		} else {
@@ -286,39 +374,65 @@ class Didar_Sync_Manager {
 		$response = $this->response_object( $result ); $person_id = $person_id ?: ( isset( $response['Id'] ) ? sanitize_text_field( $response['Id'] ) : '' );
 		if ( ! $person_id ) { return new WP_Error( 'didar_person_id_missing', 'Didar Person ID was not returned.', array( 'trace_id' => $trace ) ); }
 		update_user_meta( $user->ID, self::USER_PERSON_META, $person_id );
-		$this->logger->log( 'INFO', $creating ? 'person_created' : 'person_updated', $creating ? 'New Didar Person created.' : 'Existing Didar Person updated.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace ) );
+		$this->logger->log( 'INFO', $creating ? 'person_created' : 'person_updated', $creating ? 'New Didar Person created from WordPress user registration.' : 'Didar Person profile synchronized from WordPress user registration.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'person_source' => 'wordpress_user_profile' ) );
 		$this->logger->log( 'INFO', 'person_persisted', 'Didar Person ID persisted in WordPress.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace ) );
 		return $person_id;
 	}
 
-	/** Resolve a request Person from that request's mobile only. Existing profiles are never updated here. */
-	private function resolve_submission_person( $fields, $form_type, $submission_id, $trace ) {
-		$mobile_raw = $this->mapper->request_mobile( $form_type, $fields );
-		$mobile = $this->normalize_mobile( $mobile_raw );
-		$context = array( 'entity_type' => 'person', 'local_id' => $submission_id, 'form_type' => $form_type, 'trace_id' => $trace, 'request_mobile' => $mobile_raw, 'normalized_mobile' => $mobile );
-		$this->logger->log( 'INFO', 'person_resolution', 'Request mobile extracted for Person resolution.', $context );
-		if ( ! $mobile ) { $this->logger->log( 'ERROR', 'person_conflict', 'Request Person resolution stopped: mobile is missing.', $context ); return new WP_Error( 'didar_person_conflict', 'Request mobile is required to resolve a Didar Person.', array( 'trace_id' => $trace ) ); }
-		$this->logger->log( 'INFO', 'person_search', 'Person search by exact request mobile started.', $context + array( 'lookup_strategy' => 'submission_mobile_only' ) );
-		$result = $this->api->search_person( array( 'MobilePhone' => $mobile_raw, 'IsDeleted' => 0 ), 0, 100 );
-		if ( is_wp_error( $result ) ) { return $result; }
-		$matches = array(); foreach ( $this->response_items( $result ) as $person ) { if ( ! is_array( $person ) || empty( $person['Id'] ) ) { continue; } if ( $mobile === $this->normalize_mobile( $person['MobilePhone'] ?? '' ) ) { $matches[ sanitize_text_field( (string) $person['Id'] ) ] = true; } }
-		$this->logger->log( count( $matches ) > 1 ? 'WARNING' : 'INFO', 'person_search', 'Exact request mobile match count: ' . count( $matches ) . '.', $context + array( 'match_count' => count( $matches ) ) );
-		if ( count( $matches ) > 1 ) { return $this->person_conflict( 'Multiple Didar Persons match the request mobile.', array_keys( $matches ), 0, $submission_id, $form_type, $trace ); }
-		if ( 1 === count( $matches ) ) { $person_id = (string) array_key_first( $matches ); update_post_meta( $submission_id, self::META_PERSON_ID, $person_id ); $this->logger->log( 'INFO', 'person_linked', 'Existing Person resolved by submission mobile; profile update intentionally skipped.', $context + array( 'external_id' => $person_id ) ); $this->logger->log( 'INFO', 'person_persisted', 'Submission-level Didar Person ID stored.', $context + array( 'external_id' => $person_id ) ); return $person_id; }
-		$payload = $this->request_person_creation_payload( $fields, $form_type, $mobile_raw );
-		$this->logger->log( 'INFO', 'person_create', 'No Person matched request mobile; creating a new Person with initial request identity data.', $context + array( 'person_payload' => $payload ) );
+	/** Request flow: resolve/create the Person from the WordPress user only; never from request fields. */
+	private function resolve_submission_person( $user, $form_type, $submission_id, $trace ) {
+		$stored_id = sanitize_text_field( (string) get_user_meta( $user->ID, self::USER_PERSON_META, true ) );
+		$context   = array( 'entity_type' => 'person', 'local_id' => $submission_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'person_source' => 'wordpress_user_profile' );
+		if ( $stored_id ) {
+			update_post_meta( $submission_id, self::META_PERSON_ID, $stored_id );
+			$this->logger->log( 'INFO', 'person_resolution', 'Didar Person resolved from WordPress user identity.', $context + array( 'external_id' => $stored_id, 'lookup_strategy' => 'stored_user_person_meta' ) );
+			$this->logger->log( 'INFO', 'person_persisted', 'Resolved Person ID persisted as a submission convenience reference.', $context + array( 'external_id' => $stored_id ) );
+			$this->logger->log( 'INFO', 'request_identity_isolation', 'Form identity fields treated as Deal snapshot; Person profile unchanged.', $context );
+			return $stored_id;
+		}
+
+		$payload = $this->mapper->person_payload( $user );
+		$this->logger->log( 'INFO', 'person_resolution', 'No user Person link exists; resolving with authoritative WordPress profile data.', $context + array( 'lookup_strategy' => 'wordpress_user_profile' ) );
+		$person_id = $this->find_exact_person_id( $payload, $user->ID, $submission_id, $form_type, $trace );
+		if ( is_wp_error( $person_id ) ) {
+			return $person_id;
+		}
+		if ( $person_id ) {
+			update_user_meta( $user->ID, self::USER_PERSON_META, $person_id );
+			update_post_meta( $submission_id, self::META_PERSON_ID, $person_id );
+			$this->logger->log( 'INFO', 'person_linked', 'Existing Didar Person resolved from WordPress user profile; Person profile was not changed by request sync.', $context + array( 'external_id' => $person_id ) );
+			return $person_id;
+		}
+
+		$this->logger->log( 'INFO', 'person_create', 'No Person matched authoritative WordPress user profile; creating the account Person.', $context + array( 'person_payload' => $payload ) );
 		$created = $this->api->save_person( $payload );
-		if ( is_wp_error( $created ) && $this->is_duplicate_contact_error( $created ) ) { $this->logger->log( 'WARNING', 'person_duplicate_recovery', 'Duplicate Person creation detected; repeating exact mobile lookup.', $context ); $recovery = $this->api->search_person( array( 'MobilePhone' => $mobile_raw, 'IsDeleted' => 0 ), 0, 100 ); if ( ! is_wp_error( $recovery ) ) { $recovery_matches = array(); foreach ( $this->response_items( $recovery ) as $person ) { if ( is_array( $person ) && ! empty( $person['Id'] ) && $mobile === $this->normalize_mobile( $person['MobilePhone'] ?? '' ) ) { $recovery_matches[ sanitize_text_field( (string) $person['Id'] ) ] = true; } } if ( 1 === count( $recovery_matches ) ) { $person_id = (string) array_key_first( $recovery_matches ); update_post_meta( $submission_id, self::META_PERSON_ID, $person_id ); $this->logger->log( 'INFO', 'person_duplicate_recovery', 'Duplicate recovery linked the existing Person; profile update intentionally skipped.', $context + array( 'external_id' => $person_id ) ); return $person_id; } if ( count( $recovery_matches ) > 1 ) { return $this->person_conflict( 'Multiple Didar Persons remain for the request mobile after duplicate recovery.', array_keys( $recovery_matches ), 0, $submission_id, $form_type, $trace ); } } }
-		if ( is_wp_error( $created ) ) { return $created; }
-		$response = $this->response_object( $created ); $person_id = isset( $response['Id'] ) ? sanitize_text_field( (string) $response['Id'] ) : '';
-		if ( ! $person_id ) { return new WP_Error( 'didar_person_id_missing', 'Didar did not return a Person ID.', array( 'trace_id' => $trace ) ); }
+		if ( is_wp_error( $created ) && $this->is_duplicate_contact_error( $created ) ) {
+			$this->logger->log( 'WARNING', 'person_duplicate_recovery', 'Duplicate Person creation detected; repeating the WordPress profile lookup.', $context );
+			$person_id = $this->find_exact_person_id( $payload, $user->ID, $submission_id, $form_type, $trace, true );
+			if ( is_wp_error( $person_id ) ) {
+				return $person_id;
+			}
+			if ( $person_id ) {
+				update_user_meta( $user->ID, self::USER_PERSON_META, $person_id );
+				update_post_meta( $submission_id, self::META_PERSON_ID, $person_id );
+				$this->logger->log( 'INFO', 'person_duplicate_recovery', 'Duplicate recovery linked the existing account Person without a request-driven profile update.', $context + array( 'external_id' => $person_id ) );
+				return $person_id;
+			}
+		}
+		if ( is_wp_error( $created ) ) {
+			return $created;
+		}
+		$response  = $this->response_object( $created );
+		$person_id = isset( $response['Id'] ) ? sanitize_text_field( (string) $response['Id'] ) : '';
+		if ( ! $person_id ) {
+			return new WP_Error( 'didar_person_id_missing', 'Didar did not return a Person ID.', array( 'trace_id' => $trace ) );
+		}
+		update_user_meta( $user->ID, self::USER_PERSON_META, $person_id );
 		update_post_meta( $submission_id, self::META_PERSON_ID, $person_id );
-		$this->logger->log( 'INFO', 'person_created', 'New Didar Person created for request mobile.', $context + array( 'external_id' => $person_id ) );
-		$this->logger->log( 'INFO', 'person_persisted', 'Submission-level Didar Person ID stored.', $context + array( 'external_id' => $person_id ) );
+		$this->logger->log( 'INFO', 'person_created', 'New Didar Person created from authoritative WordPress user profile.', $context + array( 'external_id' => $person_id ) );
+		$this->logger->log( 'INFO', 'person_persisted', 'Didar Person ID persisted on the WordPress user and submission.', $context + array( 'external_id' => $person_id ) );
 		return $person_id;
 	}
-
-	private function request_person_creation_payload( $fields, $form_type, $mobile ) { $parts = $this->mapper->name_parts( $fields, null ); $payload = array( 'Type' => 'Person', 'FirstName' => $parts['first_name'], 'LastName' => $parts['last_name'], 'MobilePhone' => $mobile ); foreach ( (array) $fields as $key => $value ) { $map = $this->mapper->mapping( $form_type, $key ); if ( 'person_native' === $map['target'] && 'Email' === $map['field'] && is_scalar( $value ) && is_email( $value ) ) { $payload['Email'] = sanitize_email( $value ); } } return $payload; }
 
 	private function find_exact_person_id( $payload, $user_id, $submission_id, $form_type, $trace, $recovery = false ) {
 		$mobile = $this->normalize_mobile( $payload['MobilePhone'] ?? '' ); $email = $this->normalize_email( $payload['Email'] ?? '' );
@@ -343,6 +457,14 @@ class Didar_Sync_Manager {
 	private function normalize_email( $value ) { return strtolower( trim( sanitize_email( (string) $value ) ) ); }
 
 	private function find_submission_by_deal( $deal_id ) { $q = new WP_Query( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => 1, 'meta_key' => self::META_DEAL_ID, 'meta_value' => $deal_id, 'no_found_rows' => true ) ); return ! empty( $q->posts[0] ) ? absint( $q->posts[0] ) : 0; }
+	private function find_submission_by_submission_id( $submission_id, $deal_id = '' ) {
+		$submission_id = absint( $submission_id );
+		if ( ! $submission_id || Didar_Post_Type::POST_TYPE !== get_post_type( $submission_id ) ) {
+			return 0;
+		}
+		$stored_deal_id = sanitize_text_field( (string) get_post_meta( $submission_id, self::META_DEAL_ID, true ) );
+		return $stored_deal_id && $deal_id && $stored_deal_id !== $deal_id ? 0 : $submission_id;
+	}
 	private function deal_id_used_by_other_submission( $deal_id, $post_id ) { $q = new WP_Query( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => 2, 'post__not_in' => array( absint( $post_id ) ), 'meta_key' => self::META_DEAL_ID, 'meta_value' => $deal_id, 'no_found_rows' => true ) ); return ! empty( $q->posts ); }
 	private function find_deal_by_submission_id( $submission_id, $settings ) {
 		$field_id = isset( $settings['didar_system_submission_id_field_id'] ) ? sanitize_text_field( (string) $settings['didar_system_submission_id_field_id'] ) : '';

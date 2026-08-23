@@ -24,58 +24,54 @@ class Didar_Field_Mapper {
 		$native_fields = 'person_native' === $target ? array( 'FirstName', 'LastName', 'Title', 'OwnerId', 'BirthDate', 'MobilePhone', 'WorkPhone', 'Email', 'Position', 'NationalCode', 'ZipCode', 'BackgroundInfo', 'CustomerCode', 'CityId', 'ProvinceId' ) : array( 'Title', 'Description', 'PersonId', 'PipelineId', 'PipelineStageId', 'OwnerId', 'Status', 'Price', 'ExpectedCloseDate', 'VisibilityType' );
 		if ( in_array( $target, array( 'person_native', 'deal_native' ), true ) && ! in_array( $field, $native_fields, true ) ) { $target = ''; $field = ''; }
 		if ( '' === $target && '' === $field ) {
-			$native = array(
-				'first_name' => array( 'target' => 'person_native', 'field' => 'FirstName' ),
-				'last_name'  => array( 'target' => 'person_native', 'field' => 'LastName' ),
-				'mobile'     => array( 'target' => 'person_native', 'field' => 'MobilePhone' ),
-				'input_3'    => array( 'target' => 'person_native', 'field' => 'MobilePhone' ),
-				'email'      => array( 'target' => 'person_native', 'field' => 'Email' ),
-			);
-			if ( isset( $native[ $field_key ] ) ) {
-				return $native[ $field_key ];
+			$request_identity_fields = array( 'first_name', 'last_name', 'full_name', 'mobile', 'input_3', 'phone', 'email', 'applicant_email', 'applicant_mobile' );
+			if ( in_array( $field_key, $request_identity_fields, true ) ) {
+				return array( 'target' => 'deal_custom', 'field' => '' );
 			}
 		}
 		return array( 'target' => in_array( $target, array( 'person_native', 'person_custom', 'deal_native', 'deal_custom' ), true ) ? $target : '', 'field' => $field );
 	}
 
-	public function person_payload( $user, $fields, $form_type = '' ) {
-		$parts = $this->name_parts( $fields, $user );
+	/** Build the Person payload exclusively from the WordPress account/profile. */
+	public function person_payload( $user, $fields = array(), $form_type = '' ) {
+		$profile = $this->wordpress_user_profile( $user );
 		$settings = $this->settings->all();
 		$owner_id = isset( $settings['didar_default_owner_id'] ) ? sanitize_text_field( (string) $settings['didar_default_owner_id'] ) : '';
-		$contact = array( 'Type' => 'Person', 'FirstName' => $parts['first_name'], 'LastName' => $parts['last_name'], 'Email' => $user ? sanitize_email( $user->user_email ) : '', 'OwnerId' => $owner_id );
-		$custom  = array();
-		foreach ( (array) $fields as $key => $value ) {
-			$map = $this->mapping( $form_type, $key );
-			if ( 'person_native' === $map['target'] && '' !== $map['field'] ) {
-				$contact[ $map['field'] ] = $this->value( $value );
-			} elseif ( 'person_custom' === $map['target'] && '' !== $map['field'] ) {
-				$custom[ $map['field'] ] = $this->value( $value );
-			}
-		}
-		if ( $user && ! isset( $contact['MobilePhone'] ) && $user->user_login ) {
-			$mobile = get_user_meta( $user->ID, 'mobile', true );
-			if ( $mobile ) {
-				$contact['MobilePhone'] = sanitize_text_field( $mobile );
-			}
-		}
-		if ( $custom ) {
-			$contact['Fields'] = $custom;
-		}
-		return $contact;
+		return array(
+			'Type'        => 'Person',
+			'FirstName'   => $profile['first_name'],
+			'LastName'    => $profile['last_name'],
+			'Email'       => $profile['email'],
+			'MobilePhone' => $profile['mobile'],
+			'OwnerId'     => $owner_id,
+		);
 	}
 
-	/** Return the request mobile using the configured native mapping, with legacy consultation keys supported. */
-	public function request_mobile( $form_type, $fields ) {
-		foreach ( (array) $fields as $key => $value ) {
-			$map = $this->mapping( $form_type, $key );
-			if ( 'person_native' === $map['target'] && 'MobilePhone' === $map['field'] && is_scalar( $value ) && '' !== trim( (string) $value ) ) {
-				return sanitize_text_field( (string) $value );
-			}
+	/** Return account/profile identity data, with Digits' canonical mobile metadata first. */
+	public function wordpress_user_profile( $user ) {
+		if ( ! $user || empty( $user->ID ) ) {
+			return array( 'first_name' => '', 'last_name' => '', 'email' => '', 'mobile' => '' );
 		}
-		foreach ( array( 'mobile', 'input_3' ) as $key ) {
-			if ( isset( $fields[ $key ] ) && is_scalar( $fields[ $key ] ) && '' !== trim( (string) $fields[ $key ] ) ) { return sanitize_text_field( (string) $fields[ $key ] ); }
+
+		return array(
+			'first_name' => sanitize_text_field( (string) get_user_meta( $user->ID, 'first_name', true ) ),
+			'last_name'  => sanitize_text_field( (string) get_user_meta( $user->ID, 'last_name', true ) ),
+			'email'      => sanitize_email( (string) $user->user_email ),
+			'mobile'     => $this->wordpress_user_mobile( $user->ID ),
+		);
+	}
+
+	/** Resolve the installed Digits value; do not use form-entered or guessed mobile keys. */
+	public function wordpress_user_mobile( $user_id ) {
+		$user_id = absint( $user_id );
+		$mobile  = sanitize_text_field( (string) get_user_meta( $user_id, 'digits_phone', true ) );
+		if ( $mobile ) {
+			return $mobile;
 		}
-		return '';
+
+		$phone_no   = sanitize_text_field( (string) get_user_meta( $user_id, 'digits_phone_no', true ) );
+		$country    = sanitize_text_field( (string) get_user_meta( $user_id, 'digt_countrycode', true ) );
+		return $country . $phone_no;
 	}
 
 	public function deal_fields( $form_type, $fields, $post_id = 0 ) {
@@ -102,6 +98,19 @@ class Didar_Field_Mapper {
 			if ( 'deal_native' === $map['target'] && '' !== $map['field'] ) { $native[ $map['field'] ] = $this->value( $value ); }
 		}
 		return $native;
+	}
+
+	/** Return legacy request mappings that still point at Person fields, without changing their saved settings. */
+	public function legacy_request_person_mappings( $form_type ) {
+		$legacy = array();
+		foreach ( (array) $this->registry->fields( $form_type ) as $key => $definition ) {
+			$map = $this->mapping( $form_type, $key );
+			if ( in_array( $map['target'], array( 'person_native', 'person_custom' ), true ) ) {
+				$legacy[ $key ] = $map;
+			}
+		}
+
+		return $legacy;
 	}
 
 	public function name_parts( $fields, $user = null ) {

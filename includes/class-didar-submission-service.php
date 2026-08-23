@@ -432,6 +432,11 @@ class Didar_Submission_Service {
 		return $creator_id ? $creator_id : absint( get_post_field( 'post_author', $post_id ) );
 	}
 
+	/** The canonical request customer/owner is the submission post_author, not the last editor. */
+	public function get_owner_user_id( $post_id ) {
+		return absint( get_post_field( 'post_author', absint( $post_id ) ) );
+	}
+
 	public function can_view_public( $post_id ) {
 		return $this->can_view_submission( $post_id, get_current_user_id() );
 	}

@@ -245,8 +245,8 @@ class Didar_Admin {
 	public function render_system_field_ids() { $s = $this->settings->all(); foreach ( array( 'didar_system_form_type_field_id' => 'Form Type', 'didar_system_submission_id_field_id' => 'Submission ID', 'didar_system_user_id_field_id' => 'WordPress User ID' ) as $key => $label ) { echo '<label>' . esc_html( $label ) . ' <input type="text" class="regular-text" name="' . esc_attr( Didar_Settings::OPTION_NAME . '[' . $key . ']' ) . '" value="' . esc_attr( $s[ $key ] ?? '' ) . '" placeholder="Field_xxx_xxx"></label><br>'; } echo '<p class="description">Optional system Deal Custom Field IDs used to resolve inbound Deals and maintain external mappings. Do not guess IDs.</p>'; }
 	public function render_status_stage_map() { $s = $this->settings->all(); foreach ( Didar_Reference_Data::statuses() as $key => $label ) { echo '<label style="display:block;max-width:560px"><span style="display:inline-block;width:180px">' . esc_html( $label ) . ' <code>' . esc_html( $key ) . '</code></span><input type="text" name="' . esc_attr( Didar_Settings::OPTION_NAME . '[didar_status_pipeline_stage_map][' . $key . ']' ) . '" value="' . esc_attr( $s['didar_status_pipeline_stage_map'][ $key ] ?? '' ) . '" placeholder="PipelineStageId"></label>'; } }
 	public function render_broker_map() { $s = $this->settings->all(); foreach ( $this->service->eligible_assignees() as $user ) { echo '<label style="display:block"><span style="display:inline-block;width:220px">' . esc_html( $user->display_name ) . ' (#' . absint( $user->ID ) . ')</span><input type="text" name="' . esc_attr( Didar_Settings::OPTION_NAME . '[didar_broker_user_map][' . absint( $user->ID ) . ']' ) . '" value="' . esc_attr( $s['didar_broker_user_map'][ $user->ID ] ?? '' ) . '" placeholder="Didar UserId"></label>'; } }
-	public function render_didar_mapping_description() { echo '<p>کلید داخلی فرم و فیلد مبنای نگاشت است، نه برچسب فارسی. مقدار خالی یعنی عدم همگام‌سازی. در همگام‌سازی درخواست، اطلاعات فرم snapshot همان Deal است؛ برای first name، last name، mobile و email از هدف Deal Custom Field استفاده کنید تا پروفایل Person موجود تغییر نکند. Mobile برای resolve کردن Person نیز استفاده می‌شود.</p>'; }
-	public function render_didar_field_mappings() { $s = $this->settings->all(); $defaults = new Didar_Field_Mapper( $this->registry, $this->settings ); $targets = array( '' => 'None', 'person_native' => 'Person Native Field', 'person_custom' => 'Person Custom Field', 'deal_native' => 'Deal Native Field', 'deal_custom' => 'Deal Custom Field' ); foreach ( $this->registry->all() as $form_type => $form ) { echo '<h3>' . esc_html( $form['label'] ) . ' <code>' . esc_html( $form_type ) . '</code></h3><table class="widefat striped"><thead><tr><th>Field</th><th>Target</th><th>Didar field / Custom ID</th></tr></thead><tbody>'; foreach ( $this->registry->fields( $form_type ) as $key => $field ) { if ( ! empty( $field['internal'] ) || 'honeypot' === $field['type'] ) { continue; } $map = $s['didar_field_mappings'][ $form_type ][ $key ] ?? $defaults->mapping( $form_type, $key ); echo '<tr><td>' . esc_html( $field['label'] ) . '<br><code>' . esc_html( $key ) . '</code></td><td><select name="' . esc_attr( Didar_Settings::OPTION_NAME . '[didar_field_mappings][' . $form_type . '][' . $key . '][target]' ) . '">'; foreach ( $targets as $value => $label ) { echo '<option value="' . esc_attr( $value ) . '" ' . selected( $map['target'] ?? '', $value, false ) . '>' . esc_html( $label ) . '</option>'; } echo '</select></td><td><input type="text" class="regular-text" name="' . esc_attr( Didar_Settings::OPTION_NAME . '[didar_field_mappings][' . $form_type . '][' . $key . '][field]' ) . '" value="' . esc_attr( $map['field'] ?? '' ) . '" placeholder="FirstName or Field_xxx_xxx"></td></tr>'; } echo '</tbody></table>'; } }
+	public function render_didar_mapping_description() { echo '<p>کلید داخلی فرم و فیلد مبنای نگاشت است، نه برچسب فارسی. مقدار خالی یعنی عدم همگام‌سازی. هر مقدار واردشده در فرم، از جمله نام، نام خانوادگی، موبایل و ایمیل، snapshot همان Deal است و در صورت نیاز باید به Deal Custom Field نگاشت شود. اطلاعات Person فقط از پروفایل WordPress کاربر و جریان ثبت‌نام می‌آید؛ نگاشت فرم نباید پروفایل Person را تغییر دهد.</p>'; }
+	public function render_didar_field_mappings() { $s = $this->settings->all(); $defaults = new Didar_Field_Mapper( $this->registry, $this->settings ); $targets = array( '' => 'None', 'person_native' => 'Person Native Field (profile only)', 'person_custom' => 'Person Custom Field (profile only)', 'deal_native' => 'Deal Native Field', 'deal_custom' => 'Deal Custom Field' ); $legacy = array(); foreach ( (array) ( $s['didar_field_mappings'] ?? array() ) as $legacy_type => $legacy_fields ) { foreach ( (array) $legacy_fields as $legacy_key => $legacy_map ) { if ( is_array( $legacy_map ) && in_array( $legacy_map['target'] ?? '', array( 'person_native', 'person_custom' ), true ) ) { $legacy[] = $legacy_type . '.' . $legacy_key; } } } if ( $legacy ) { echo '<div class="notice notice-warning inline"><p>' . esc_html__( 'نگاشت‌های قدیمی Person برای فیلدهای فرم حفظ شده‌اند اما در همگام‌سازی درخواست اعمال نمی‌شوند. آن‌ها را فقط در صورت نیاز به Deal Custom Field منتقل کنید و شناسه واقعی را از فهرست فیلدهای دیدار انتخاب کنید.', 'didar' ) . ' <code>' . esc_html( implode( ', ', $legacy ) ) . '</code></p></div>'; } foreach ( $this->registry->all() as $form_type => $form ) { echo '<h3>' . esc_html( $form['label'] ) . ' <code>' . esc_html( $form_type ) . '</code></h3><table class="widefat striped"><thead><tr><th>Field</th><th>Target</th><th>Didar field / Custom ID</th></tr></thead><tbody>'; foreach ( $this->registry->fields( $form_type ) as $key => $field ) { if ( ! empty( $field['internal'] ) || 'honeypot' === $field['type'] ) { continue; } $map = $s['didar_field_mappings'][ $form_type ][ $key ] ?? $defaults->mapping( $form_type, $key ); echo '<tr><td>' . esc_html( $field['label'] ) . '<br><code>' . esc_html( $key ) . '</code></td><td><select name="' . esc_attr( Didar_Settings::OPTION_NAME . '[didar_field_mappings][' . $form_type . '][' . $key . '][target]' ) . '">'; foreach ( $targets as $value => $label ) { echo '<option value="' . esc_attr( $value ) . '" ' . selected( $map['target'] ?? '', $value, false ) . '>' . esc_html( $label ) . '</option>'; } echo '</select>'; if ( in_array( $map['target'] ?? '', array( 'person_native', 'person_custom' ), true ) ) { echo '<p class="description">' . esc_html__( 'این نگاشت قدیمی است؛ فیلد فرم در Person نوشته نمی‌شود.', 'didar' ) . '</p>'; } echo '</td><td><input type="text" class="regular-text" name="' . esc_attr( Didar_Settings::OPTION_NAME . '[didar_field_mappings][' . $form_type . '][' . $key . '][field]' ) . '" value="' . esc_attr( $map['field'] ?? '' ) . '" placeholder="FirstName or Field_xxx_xxx"></td></tr>'; } echo '</tbody></table>'; } }
 
 	public function sanitize_page_settings( $input ) {
 		$current = get_option( Didar_Shortcodes::PAGE_SETTINGS_OPTION, array() );
@@ -559,7 +559,8 @@ class Didar_Admin {
 	}
 
 	public function render_details_box( $post ) {
-		$owner_id = $post->post_author ? (int) $post->post_author : get_current_user_id();
+		$stored_type = (string) get_post_meta( $post->ID, '_didar_form_type', true );
+		$owner_id    = $stored_type ? (int) $post->post_author : 0;
 		echo '<div class="didar-admin-wrap" dir="rtl">';
 		if ( current_user_can( 'didar_change_request_owner' ) ) {
 			$users        = get_users( array( 'number' => 100, 'orderby' => 'display_name', 'order' => 'ASC', 'fields' => array( 'ID', 'display_name', 'user_email' ) ) );
@@ -576,11 +577,11 @@ class Didar_Admin {
 					array_unshift( $users, $current_owner );
 				}
 			}
-			echo '<p><label for="didar-owner"><strong>' . esc_html__( 'مالک درخواست', 'didar' ) . '</strong></label><select id="didar-owner" name="didar_owner">';
+			echo '<p><label for="didar-owner"><strong>' . esc_html__( 'مالک / مشتری درخواست', 'didar' ) . '</strong></label><select id="didar-owner" name="didar_owner"><option value="0">' . esc_html__( '— انتخاب مشتری —', 'didar' ) . '</option>';
 			foreach ( $users as $user ) {
 				echo '<option value="' . esc_attr( $user->ID ) . '" ' . selected( $owner_id, $user->ID, false ) . '>' . esc_html( $user->display_name . ' — ' . $user->user_email ) . '</option>';
 			}
-			echo '</select></p><p class="description">' . esc_html__( 'در سایت‌های دارای بیش از ۱۰۰ کاربر، مالک فعلی همواره حفظ می‌شود مگر اینکه گزینه دیگری انتخاب شود.', 'didar' ) . '</p>';
+			echo '</select></p><p class="description">' . esc_html__( 'درخواست جدید باید به مشتری/کاربر WordPress واقعی متصل شود؛ حساب Administrator یا Broker فقط به‌عنوان ایجادکننده استفاده نمی‌شود.', 'didar' ) . '</p>';
 		} else {
 			$owner = get_user_by( 'id', $owner_id );
 			echo '<p><strong>' . esc_html__( 'مالک درخواست:', 'didar' ) . '</strong><br>' . esc_html( $owner ? $owner->display_name : __( 'نامشخص', 'didar' ) ) . '</p>';
@@ -687,12 +688,19 @@ class Didar_Admin {
 		}
 
 		$status   = $public_status ? $public_status : $form['default_status'];
-		$owner_id = (int) $post->post_author;
+		$owner_id = $stored_type ? (int) $post->post_author : 0;
 		if ( current_user_can( 'didar_change_request_owner' ) && isset( $_POST['didar_owner'] ) && ! is_array( $_POST['didar_owner'] ) ) {
 			$requested_owner = absint( wp_unslash( $_POST['didar_owner'] ) );
 			if ( get_user_by( 'id', $requested_owner ) ) {
 				$owner_id = $requested_owner;
 			}
+		}
+		if ( ! $owner_id ) {
+			$this->store_admin_state( $post_id, $form_type, $raw, array( '_owner' => __( 'برای ایجاد درخواست، مشتری / مالک WordPress را انتخاب کنید.', 'didar' ) ), $shared_note );
+			if ( ! $stored_type ) {
+				$this->force_draft( $post_id, $post );
+			}
+			return;
 		}
 		self::$saving = true;
 		$result       = $this->service->update( $post_id, $form_type, $result['data'], $status, $owner_id );
