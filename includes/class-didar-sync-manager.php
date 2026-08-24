@@ -21,6 +21,7 @@ class Didar_Sync_Manager {
 	private $api;
 	private $mapper;
 	private $logger;
+	private $workflow;
 
 	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings, Didar_Event_Log $events, Didar_Submission_Service $service, Didar_File_Service $files, Didar_Logger $logger = null ) {
 		$this->registry = $registry;
@@ -28,6 +29,7 @@ class Didar_Sync_Manager {
 		$this->events   = $events;
 		$this->service  = $service;
 		$this->logger   = $logger ? $logger : new Didar_Logger();
+		$this->workflow = new Didar_Workflow_Manager( $registry, $settings, $this->logger );
 		$this->api      = new Didar_Api_Client( $settings, $this->logger );
 		$this->mapper   = new Didar_Field_Mapper( $registry, $settings, $files );
 
@@ -113,9 +115,10 @@ class Didar_Sync_Manager {
 	}
 
 	public function queue_submission( $post_id ) {
-		if ( self::$suppress ) { $this->logger->log( 'INFO', 'sync_suppressed', 'Sync suppressed: inbound Didar update.', array( 'entity_type' => 'submission', 'local_id' => absint( $post_id ), 'source' => 'queue_submission' ) ); return; }
-		if ( ! $this->enabled() || Didar_Post_Type::POST_TYPE !== get_post_type( $post_id ) ) { return; }
 		$post_id = absint( $post_id );
+		if ( self::$suppress ) { $this->logger->log( 'INFO', 'sync_suppressed', 'Sync suppressed: inbound Didar update.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'source' => 'queue_submission', 'skip_reason' => 'inbound_didar_suppression' ) ); return; }
+		if ( ! $this->enabled() ) { $this->logger->log( 'WARNING', 'sync_skipped', 'Submission sync skipped because the Didar API is not configured.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'source' => 'queue_submission', 'skip_reason' => 'didar_api_not_configured' ) ); return; }
+		if ( Didar_Post_Type::POST_TYPE !== get_post_type( $post_id ) ) { $this->logger->log( 'WARNING', 'sync_skipped', 'Submission sync skipped because the post type is invalid.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'source' => 'queue_submission', 'skip_reason' => 'invalid_post_type' ) ); return; }
 		$state = $this->state( $post_id );
 		$state['trace_id'] = Didar_Logger::trace_id( $state['trace_id'] ?? '' );
 		$state['status'] = 'pending';
@@ -123,8 +126,22 @@ class Didar_Sync_Manager {
 		update_post_meta( $post_id, self::META_STATE, $state );
 		if ( ! wp_next_scheduled( self::CRON_HOOK, array( $post_id ) ) ) {
 			$when = time() + 5; wp_schedule_single_event( $when, self::CRON_HOOK, array( $post_id ) );
-			$this->logger->log( 'INFO', 'sync_queued', 'Submission sync queued.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'form_type' => get_post_meta( $post_id, '_didar_form_type', true ), 'trace_id' => $state['trace_id'], 'source' => 'submission_hook', 'queue_job_id' => self::CRON_HOOK, 'scheduled_at' => Didar_Logger::display_timestamp( $when, DATE_ATOM ) ) );
+			$this->logger->log( 'INFO', 'sync_queued', 'Submission sync hook fired and the canonical submission was queued.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'form_type' => get_post_meta( $post_id, '_didar_form_type', true ), 'owner_user_id' => $this->service->get_owner_user_id( $post_id ), 'internal_status' => $this->internal_status( $post_id ), 'create_update_mode' => get_post_meta( $post_id, self::META_DEAL_ID, true ) ? 'update' : 'create', 'sync_hook_fired' => 'yes', 'suppression' => 'off', 'trace_id' => $state['trace_id'], 'source' => 'submission_hook', 'queue_job_id' => self::CRON_HOOK, 'scheduled_at' => Didar_Logger::display_timestamp( $when, DATE_ATOM ) ) );
 		}
+	}
+
+	/** Run the same centralized sync immediately after an admin save has fully persisted canonical data. */
+	public function sync_after_admin_save( $post_id ) {
+		$post_id = absint( $post_id );
+		$this->logger->log( 'INFO', 'didar_admin_submission_sync_execute', 'Admin submission entered centralized sync after canonical persistence.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'form_type' => get_post_meta( $post_id, '_didar_form_type', true ), 'owner_user_id' => $this->service->get_owner_user_id( $post_id ), 'internal_status' => $this->internal_status( $post_id ), 'create_update_mode' => get_post_meta( $post_id, self::META_DEAL_ID, true ) ? 'update' : 'create', 'sync_hook_fired' => 'yes', 'suppression' => self::$suppress ? 'on' : 'off', 'source' => 'wp_admin' ) );
+		$result = $this->process_submission( $post_id );
+		if ( ! is_wp_error( $result ) ) {
+			while ( $when = wp_next_scheduled( self::CRON_HOOK, array( $post_id ) ) ) {
+				wp_unschedule_event( $when, self::CRON_HOOK, array( $post_id ) );
+			}
+		}
+
+		return $result;
 	}
 
 	public function manual_sync( $post_id ) {
@@ -147,7 +164,10 @@ class Didar_Sync_Manager {
 
 	public function process_submission( $post_id ) {
 		$post = get_post( absint( $post_id ) );
-		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || ! $this->enabled() ) { return new WP_Error( 'didar_sync_stopped', 'Sync stopped before execution.' ); }
+		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || ! $this->enabled() ) {
+			$this->logger->log( 'WARNING', 'sync_skipped', 'Submission sync stopped before execution.', array( 'entity_type' => 'submission', 'local_id' => absint( $post_id ), 'source' => 'sync_execution', 'skip_reason' => ! $post ? 'missing_post' : ( Didar_Post_Type::POST_TYPE !== $post->post_type ? 'invalid_post_type' : 'didar_api_not_configured' ) ) );
+			return new WP_Error( 'didar_sync_stopped', 'Sync stopped before execution.' );
+		}
 		$form_type = sanitize_key( (string) get_post_meta( $post->ID, '_didar_form_type', true ) );
 		$state = $this->state( $post->ID ); $trace = Didar_Logger::trace_id( $state['trace_id'] ?? '' ); $state['trace_id'] = $trace; $state['last_attempt_at'] = time(); update_post_meta( $post->ID, self::META_STATE, $state );
 		$this->api->set_trace_id( $trace );
@@ -158,7 +178,11 @@ class Didar_Sync_Manager {
 		$user = get_user_by( 'id', $user_id );
 		if ( ! $user ) { $this->logger->log( 'ERROR', 'person_sync', 'Sync stopped: submission owner is missing.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'trace_id' => $trace ) ); return $this->fail( $post->ID, 'submission_owner_missing' ); }
 		$settings = $this->settings->all();
-		if ( empty( $settings['didar_default_pipeline_id'] ) || empty( $this->pipeline_stage( $this->internal_status( $post->ID ) ) ) ) { $this->logger->log( 'ERROR', 'settings_check', 'Sync stopped: required Pipeline or Pipeline Stage mapping is missing.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'pipeline_id' => $settings['didar_default_pipeline_id'] ?? '', 'pipeline_stage_id' => $this->pipeline_stage( $this->internal_status( $post->ID ) ) ) ); return $this->fail( $post->ID, 'pipeline_mapping_missing', true ); }
+		$workflow_errors = $this->workflow->configuration_errors( $form_type );
+		if ( $workflow_errors ) { $this->logger->log( 'ERROR', 'settings_check', 'Sync stopped: this form has an invalid per-form workflow and is not allowed to fall back to legacy settings.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'workflow_errors' => $workflow_errors ) ); return $this->fail( $post->ID, 'per_form_workflow_invalid', true ); }
+		$internal_status = $this->internal_status( $post->ID );
+		$workflow_mapping = $this->workflow->mapping( $form_type, $internal_status );
+		if ( empty( $workflow_mapping['pipeline_id'] ) || empty( $workflow_mapping['stage_id'] ) ) { $this->logger->log( 'ERROR', 'settings_check', 'Sync stopped: form-specific Pipeline or Pipeline Stage mapping is missing.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'form_type' => $form_type, 'internal_status' => $internal_status, 'trace_id' => $trace, 'pipeline_id' => $workflow_mapping['pipeline_id'] ?? '', 'pipeline_stage_id' => $workflow_mapping['stage_id'] ?? '' ) ); return $this->fail( $post->ID, 'pipeline_mapping_missing', true ); }
 		$fields = $this->service->get_fields( $post->ID );
 		$legacy_person_mappings = $this->mapper->legacy_request_person_mappings( $form_type );
 		if ( $legacy_person_mappings ) {
@@ -169,14 +193,19 @@ class Didar_Sync_Manager {
 		$person_id = $person_result;
 		$this->logger->log( 'INFO', 'deal_resume', 'Deal sync resumed after Person resolution.', array( 'entity_type' => 'person', 'local_id' => $post->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'person_source' => 'wordpress_user_profile' ) );
 		$local_deal_id = sanitize_text_field( (string) get_post_meta( $post->ID, self::META_DEAL_ID, true ) );
+		$previous_status = sanitize_key( (string) ( $state['last_synced_internal_status'] ?? '' ) );
+		if ( $local_deal_id && $previous_status && $previous_status !== $internal_status ) {
+			$this->logger->log( 'INFO', 'didar_workflow_stage_sync_started', 'Internal status changed; synchronizing the existing Deal stage.', array( 'entity_type' => 'deal', 'local_id' => $post->ID, 'external_id' => $local_deal_id, 'form_type' => $form_type, 'trace_id' => $trace, 'old_status' => $previous_status, 'new_status' => $internal_status ) );
+			$this->logger->log( 'INFO', 'didar_workflow_stage_resolved', 'Per-form workflow stage resolved for the new internal status.', array( 'entity_type' => 'deal', 'local_id' => $post->ID, 'external_id' => $local_deal_id, 'form_type' => $form_type, 'trace_id' => $trace, 'old_status' => $previous_status, 'new_status' => $internal_status, 'pipeline_id' => $workflow_mapping['pipeline_id'], 'pipeline_stage_id' => $workflow_mapping['stage_id'] ) );
+		}
 		if ( $local_deal_id && $this->deal_id_used_by_other_submission( $local_deal_id, $post->ID ) ) { $this->logger->log( 'ERROR', 'deal_identity_conflict', 'The local Deal ID is already linked to another WordPress submission; update stopped to prevent overwrite.', array( 'entity_type' => 'deal', 'local_id' => $post->ID, 'external_id' => $local_deal_id, 'form_type' => $form_type, 'trace_id' => $trace, 'lookup_strategy' => 'local_deal_meta' ) ); return $this->fail( $post->ID, 'didar_deal_conflict', false ); }
 		$deal = array(
 			'Id' => $local_deal_id,
 			'Title' => sanitize_text_field( $form['label'] . ' #' . $post->ID ),
 			'Description' => $this->service->get_shared_note( $post->ID ),
 			'PersonId' => $person_id,
-			'PipelineId' => sanitize_text_field( $settings['didar_default_pipeline_id'] ),
-			'PipelineStageId' => $this->pipeline_stage( $this->internal_status( $post->ID ) ),
+			'PipelineId' => $workflow_mapping['pipeline_id'],
+			'PipelineStageId' => $workflow_mapping['stage_id'],
 			'Status' => 'Pending',
 			'Fields' => $this->mapper->deal_fields( $form_type, $fields, $post->ID ),
 		);
@@ -222,7 +251,17 @@ class Didar_Sync_Manager {
 			$this->logger->log( 'INFO', 'deal_create', 'Creating the Deal with required native fields first; request Custom Fields will be applied in a same-Deal update.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'external_id' => $person_id, 'form_type' => $form_type, 'trace_id' => $trace, 'deal_payload' => $create_payload, 'deferred_field_count' => count( $deal['Fields'] ) ) );
 		}
 		$result = $this->api->save_deal( $create_payload );
-		if ( is_wp_error( $result ) ) { $this->logger->log( 'ERROR', $is_new_deal ? 'deal_create' : 'deal_update', 'Deal API call failed.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'external_id' => $person_id, 'form_type' => $form_type, 'trace_id' => $trace, 'error_code' => $result->get_error_code(), 'error_message' => $result->get_error_message(), 'api_response' => $result->get_error_data(), 'deal_payload' => $create_payload ) ); return $this->fail( $post->ID, $result->get_error_code(), true ); }
+		if ( is_wp_error( $result ) ) {
+			$this->logger->log( 'ERROR', $is_new_deal ? 'deal_create' : 'deal_update', 'Deal API call failed.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'external_id' => $person_id, 'form_type' => $form_type, 'trace_id' => $trace, 'error_code' => $result->get_error_code(), 'error_message' => $result->get_error_message(), 'api_response' => $result->get_error_data(), 'deal_payload' => $create_payload ) );
+			if ( $local_deal_id && $previous_status && $previous_status !== $internal_status ) {
+				$this->logger->log( 'ERROR', 'didar_workflow_stage_update_failed', 'Existing Didar Deal Pipeline Stage update failed.', array( 'entity_type' => 'deal', 'local_id' => $post->ID, 'external_id' => $local_deal_id, 'form_type' => $form_type, 'trace_id' => $trace, 'old_status' => $previous_status, 'new_status' => $internal_status, 'pipeline_id' => $workflow_mapping['pipeline_id'], 'pipeline_stage_id' => $workflow_mapping['stage_id'], 'error_code' => $result->get_error_code() ) );
+			}
+
+			return $this->fail( $post->ID, $result->get_error_code(), true );
+		}
+		if ( $local_deal_id && $previous_status && $previous_status !== $internal_status ) {
+			$this->logger->log( 'INFO', 'didar_workflow_stage_update_succeeded', 'Existing Didar Deal Pipeline and Pipeline Stage were updated.', array( 'entity_type' => 'deal', 'local_id' => $post->ID, 'external_id' => $local_deal_id, 'form_type' => $form_type, 'trace_id' => $trace, 'old_status' => $previous_status, 'new_status' => $internal_status, 'pipeline_id' => $workflow_mapping['pipeline_id'], 'pipeline_stage_id' => $workflow_mapping['stage_id'], 'api_response' => $result ) );
+		}
 		$this->logger->log( 'INFO', 'deal_response', 'Deal API response received.', array( 'entity_type' => 'deal', 'local_id' => $post->ID, 'external_id' => $person_id, 'form_type' => $form_type, 'trace_id' => $trace, 'api_response' => $result ) );
 		$response = $this->response_object( $result );
 		$deal_id = $deal['Id'] ?: ( isset( $response['Id'] ) ? sanitize_text_field( $response['Id'] ) : '' );
@@ -239,7 +278,8 @@ class Didar_Sync_Manager {
 		}
 		update_post_meta( $post->ID, self::META_DEAL_ID, $deal_id );
 		$this->logger->log( 'INFO', 'deal_persist', 'Deal ID stored in WordPress; sync marked successful.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'external_id' => $deal_id, 'form_type' => $form_type, 'trace_id' => $trace ) );
-		$this->success( $post->ID, $deal_id );
+		$this->success( $post->ID, $deal_id, $internal_status );
+		return true;
 	}
 
 	public function register_webhook_route() {
@@ -318,8 +358,14 @@ class Didar_Sync_Manager {
 		}
 		if ( $new !== $old ) { update_post_meta( $post_id, '_didar_fields', $new ); }
 		$stage = isset( $data['PipelineStageId'] ) ? sanitize_text_field( $data['PipelineStageId'] ) : '';
-		$status = $this->internal_status_for_stage( $stage );
-		if ( $status ) { update_post_meta( $post_id, '_didar_internal_status', $status ); }
+		$pipeline = isset( $data['PipelineId'] ) ? sanitize_text_field( $data['PipelineId'] ) : '';
+		$status = $this->workflow->reverse_mapping( $form_type, $pipeline, $stage );
+		if ( $status ) {
+			$old_status = (string) get_post_meta( $post_id, '_didar_internal_status', true );
+			if ( $old_status !== $status ) { update_post_meta( $post_id, '_didar_internal_status', $status ); $this->events->add( $post_id, 'internal_status_changed', $old_status, $status, array( 'form_type' => $form_type, 'old_status_key' => $old_status, 'old_status_label' => $this->workflow->status_label( $form_type, $old_status ), 'new_status_key' => $status, 'new_status_label' => $this->workflow->status_label( $form_type, $status ), 'pipeline_id' => $pipeline, 'pipeline_stage_id' => $stage, 'source' => 'didar', 'actor' => 0 ) ); }
+		} elseif ( $stage ) {
+			$this->logger->log( 'WARNING', 'workflow_mapping_conflict', 'Didar webhook stage does not match this form workflow; local status was not changed.', array( 'form_type' => $form_type, 'local_id' => $post_id, 'pipeline_id' => $pipeline, 'pipeline_stage_id' => $stage, 'source' => 'didar_webhook' ) );
+		}
 		$settings = $this->settings->all(); $public_field = isset( $settings['didar_public_status_field_id'] ) ? sanitize_text_field( $settings['didar_public_status_field_id'] ) : ''; if ( $public_field && isset( $fields[ $public_field ] ) && isset( Didar_Reference_Data::statuses()[ sanitize_key( $fields[ $public_field ] ) ] ) ) { update_post_meta( $post_id, '_didar_public_status', sanitize_key( $fields[ $public_field ] ) ); update_post_meta( $post_id, '_didar_status', sanitize_key( $fields[ $public_field ] ) ); }
 		$owner = isset( $data['OwnerId'] ) ? $this->wp_user_for_didar( $data['OwnerId'] ) : 0;
 		if ( $owner ) { update_post_meta( $post_id, '_didar_assigned_user_id', $owner ); }
@@ -512,15 +558,13 @@ class Didar_Sync_Manager {
 	private function wp_user_for_person( $person_id ) { $users = get_users( array( 'meta_key' => self::USER_PERSON_META, 'meta_value' => $person_id, 'number' => 1, 'fields' => 'ids' ) ); return ! empty( $users[0] ) ? absint( $users[0] ) : 0; }
 	private function wp_user_for_didar( $didar_id ) { $settings = $this->settings->all(); foreach ( (array) ( $settings['didar_broker_user_map'] ?? array() ) as $wp => $didar ) { if ( (string) $didar === (string) $didar_id ) { return absint( $wp ); } } return 0; }
 	private function didar_owner_for_wp_user( $user_id ) { $settings = $this->settings->all(); return $user_id && isset( $settings['didar_broker_user_map'][ $user_id ] ) ? sanitize_text_field( $settings['didar_broker_user_map'][ $user_id ] ) : ''; }
-	private function pipeline_stage( $status ) { $settings = $this->settings->all(); return isset( $settings['didar_status_pipeline_stage_map'][ $status ] ) ? sanitize_text_field( $settings['didar_status_pipeline_stage_map'][ $status ] ) : ''; }
-	private function internal_status_for_stage( $stage ) { $settings = $this->settings->all(); foreach ( (array) ( $settings['didar_status_pipeline_stage_map'] ?? array() ) as $status => $id ) { if ( (string) $id === (string) $stage ) { return sanitize_key( $status ); } } return ''; }
-	private function internal_status( $post_id ) { $status = (string) get_post_meta( $post_id, '_didar_internal_status', true ); return isset( Didar_Reference_Data::statuses()[ $status ] ) ? $status : 'pending_review'; }
+	private function internal_status( $post_id ) { $form_type = sanitize_key( (string) get_post_meta( $post_id, '_didar_form_type', true ) ); $status = sanitize_key( (string) get_post_meta( $post_id, '_didar_internal_status', true ) ); return isset( $this->workflow->statuses( $form_type )[ $status ] ) ? $status : $this->workflow->default_status( $form_type, 'pending_review' ); }
 	private function first_response_item( $response ) { if ( is_wp_error( $response ) || empty( $response['Response'] ) ) { return array(); } $value = $response['Response']; if ( isset( $value['List'][0] ) ) { return $value['List'][0]; } return isset( $value[0] ) ? $value[0] : ( is_array( $value ) ? $value : array() ); }
 	private function response_object( $response ) { return isset( $response['Response'] ) && is_array( $response['Response'] ) ? $response['Response'] : array(); }
 	private function enabled() { return $this->api->is_configured(); }
 	private function state( $post_id ) { $state = get_post_meta( $post_id, self::META_STATE, true ); return is_array( $state ) ? $state : array( 'status' => 'new', 'attempts' => 0 ); }
 	private function fail( $post_id, $error, $pending = false ) { $state = $this->state( $post_id ); $state['status'] = $pending ? 'pending' : 'failed'; $state['last_error'] = sanitize_key( $error ); $state['attempts'] = absint( $state['attempts'] ?? 0 ) + 1; $state['updated_at'] = time(); update_post_meta( $post_id, self::META_STATE, $state ); $this->events->add( $post_id, 'didar_sync_failed', null, null, array( 'source' => 'Didar', 'error' => sanitize_key( $error ), 'attempt' => $state['attempts'] ) ); $this->logger->log( $pending && $state['attempts'] < 10 ? 'WARNING' : 'ERROR', 'sync_failure', $pending && $state['attempts'] < 10 ? 'Sync failed; retry scheduled.' : 'Sync final failure.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'form_type' => get_post_meta( $post_id, '_didar_form_type', true ), 'trace_id' => $state['trace_id'] ?? '', 'retry_count' => $state['attempts'], 'error_code' => $error ) ); if ( $pending && $state['attempts'] < 10 ) { $when = time() + min( HOUR_IN_SECONDS, 60 * max( 1, $state['attempts'] ) ); wp_schedule_single_event( $when, self::CRON_HOOK, array( $post_id ) ); $this->logger->log( 'INFO', 'retry_scheduled', 'Didar sync retry scheduled.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'trace_id' => $state['trace_id'] ?? '', 'retry_count' => $state['attempts'], 'retry_delay' => $when - time(), 'scheduled_at' => Didar_Logger::display_timestamp( $when, DATE_ATOM ) ) ); } return new WP_Error( sanitize_key( $error ), 'Didar synchronization failed.', array( 'trace_id' => $state['trace_id'] ?? '', 'retry_scheduled' => $pending && $state['attempts'] < 10 ) ); }
-	private function success( $post_id, $deal_id ) { $state = $this->state( $post_id ); $state['status'] = 'synced'; $state['last_error'] = ''; $state['last_synced_at'] = time(); $state['deal_id'] = $deal_id; update_post_meta( $post_id, self::META_STATE, $state ); return true; }
+	private function success( $post_id, $deal_id, $internal_status = '' ) { $state = $this->state( $post_id ); $state['status'] = 'synced'; $state['last_error'] = ''; $state['last_synced_at'] = time(); $state['deal_id'] = $deal_id; $state['last_synced_internal_status'] = sanitize_key( (string) $internal_status ); update_post_meta( $post_id, self::META_STATE, $state ); return true; }
 	private function log_user_state( $user_id, $status, $error ) { $state = get_user_meta( $user_id, '_didar_person_sync_state', true ); $state = is_array( $state ) ? $state : array(); $state['status'] = $status; $state['error'] = sanitize_key( $error ); $state['attempts'] = absint( $state['attempts'] ?? 0 ) + 1; $state['updated_at'] = time(); update_user_meta( $user_id, '_didar_person_sync_state', $state ); }
 	private function queue_user_retry( $user_id ) { $state = get_user_meta( $user_id, '_didar_person_sync_state', true ); if ( is_array( $state ) && absint( $state['attempts'] ?? 0 ) < 10 ) { wp_schedule_single_event( time() + min( HOUR_IN_SECONDS, 60 * max( 1, absint( $state['attempts'] ) ) ), self::USER_HOOK, array( absint( $user_id ) ) ); } }
 	private function seen_webhook( $event_id ) { $seen = get_option( 'didar_seen_webhooks', array() ); $seen = is_array( $seen ) ? $seen : array(); if ( isset( $seen[ $event_id ] ) ) { return true; } $seen[ $event_id ] = time(); if ( count( $seen ) > 500 ) { $seen = array_slice( $seen, -500, 500, true ); } update_option( 'didar_seen_webhooks', $seen, false ); return false; }

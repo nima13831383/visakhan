@@ -10,6 +10,7 @@ class Didar_Submission_Service {
 	private $settings;
 	private $files;
 	private $logger;
+	private $workflow;
 
 	public function __construct( Didar_Form_Registry $registry, Didar_Event_Log $events, Didar_Settings $settings = null, Didar_File_Service $files = null ) {
 		$this->registry = $registry;
@@ -17,6 +18,7 @@ class Didar_Submission_Service {
 		$this->settings = $settings ? $settings : new Didar_Settings();
 		$this->files    = $files ? $files : new Didar_File_Service( $registry, $this->settings, $events );
 		$this->logger   = new Didar_Logger();
+		$this->workflow = new Didar_Workflow_Manager( $registry, $this->settings, $this->logger );
 		$this->files->set_submission_service( $this );
 	}
 
@@ -30,7 +32,10 @@ class Didar_Submission_Service {
 			return new WP_Error( 'forbidden_owner', __( 'شما اجازه ثبت درخواست برای این کاربر را ندارید.', 'didar' ) );
 		}
 
-		$default_status = $form['default_status'];
+		$default_status = $this->workflow->default_status( $form_type, $form['default_status'] );
+		if ( ! $default_status ) {
+			return new WP_Error( 'workflow_default_missing', __( 'وضعیت پیش‌فرض گردش کار این فرم مشخص نیست.', 'didar' ) );
+		}
 		$post_id        = wp_insert_post(
 			array(
 				'post_type'   => Didar_Post_Type::POST_TYPE,
@@ -76,7 +81,9 @@ class Didar_Submission_Service {
 		if ( ! $form || ! $author_id || ! get_user_by( 'id', $author_id ) ) {
 			return new WP_Error( 'invalid_external_submission', __( 'اطلاعات درخواست ورودی از دیدار کامل نیست.', 'didar' ) );
 		}
-		$post_id = wp_insert_post( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'publish', 'post_author' => $author_id, 'post_title' => sprintf( '%s — %s', $form['label'], current_time( 'Y-m-d H:i' ) ), 'meta_input' => array( '_didar_form_type' => $form_type, '_didar_created_by_user_id' => 0, '_didar_status' => $form['default_status'], '_didar_public_status' => $form['default_status'], '_didar_public_note' => '', '_didar_internal_status' => $form['default_status'], '_didar_internal_note' => '', '_didar_assigned_user_id' => '', '_didar_fields' => (array) $data, '_didar_shared_note' => sanitize_textarea_field( $shared_note ) ) ), true );
+		$default_status = $this->workflow->default_status( $form_type, $form['default_status'] );
+		if ( ! $default_status ) { return new WP_Error( 'workflow_default_missing', __( 'وضعیت پیش‌فرض گردش کار این فرم مشخص نیست.', 'didar' ) ); }
+		$post_id = wp_insert_post( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'publish', 'post_author' => $author_id, 'post_title' => sprintf( '%s — %s', $form['label'], current_time( 'Y-m-d H:i' ) ), 'meta_input' => array( '_didar_form_type' => $form_type, '_didar_created_by_user_id' => 0, '_didar_status' => $default_status, '_didar_public_status' => $default_status, '_didar_public_note' => '', '_didar_internal_status' => $default_status, '_didar_internal_note' => '', '_didar_assigned_user_id' => '', '_didar_fields' => (array) $data, '_didar_shared_note' => sanitize_textarea_field( $shared_note ) ) ), true );
 		if ( is_wp_error( $post_id ) ) { return $post_id; }
 		$this->events->add( $post_id, 'request_created', null, array( 'form_type' => $form_type, 'owner_user_id' => $author_id, 'source' => 'Didar' ) );
 		return $post_id;
@@ -111,7 +118,11 @@ class Didar_Submission_Service {
 		if ( ! metadata_exists( 'post', $post_id, '_didar_created_by_user_id' ) ) {
 			update_post_meta( $post_id, '_didar_created_by_user_id', get_current_user_id() );
 		}
-		$this->ensure_workflow_defaults( $post_id, $form['default_status'] );
+		$internal_default_status = $this->workflow->default_status( $form_type, $form['default_status'] );
+		if ( ! $internal_default_status ) {
+			return new WP_Error( 'workflow_default_missing', __( 'وضعیت پیش‌فرض گردش کار این فرم مشخص نیست.', 'didar' ) );
+		}
+		$this->ensure_workflow_defaults( $post_id, $internal_default_status );
 
 		$post_update = array(
 			'ID'         => $post_id,
@@ -290,7 +301,9 @@ class Didar_Submission_Service {
 					return new WP_Error( 'invalid_status', __( 'وضعیت انتخاب‌شده معتبر نیست.', 'didar' ) );
 				}
 				$value = sanitize_key( (string) $value );
-				if ( ! isset( Didar_Reference_Data::statuses()[ $value ] ) ) {
+				$form_type = sanitize_key( (string) get_post_meta( $post_id, '_didar_form_type', true ) );
+				$valid_statuses = 'internal_status' === $key ? $this->workflow->statuses( $form_type ) : Didar_Reference_Data::statuses();
+				if ( ! isset( $valid_statuses[ $value ] ) ) {
 					return new WP_Error( 'invalid_status', __( 'وضعیت انتخاب‌شده معتبر نیست.', 'didar' ) );
 				}
 			} elseif ( 'note' === $definition['type'] ) {
@@ -310,6 +323,7 @@ class Didar_Submission_Service {
 			$prepared[ $key ] = array( 'definition' => $definition, 'value' => $value );
 		}
 
+		$changed_keys = array();
 		foreach ( $prepared as $key => $item ) {
 			$definition = $item['definition'];
 			$new_value  = $item['value'];
@@ -329,6 +343,7 @@ class Didar_Submission_Service {
 			if ( $old_value === $new_value ) {
 				continue;
 			}
+			$changed_keys[] = $key;
 			update_post_meta( $post_id, $definition['meta'], $new_value );
 			if ( 'public_status' === $key ) {
 				update_post_meta( $post_id, '_didar_status', $new_value );
@@ -341,10 +356,16 @@ class Didar_Submission_Service {
 			if ( 'assigned_user_id' === $key ) {
 				$event_type = ! $new_value ? 'assignment_removed' : ( $old_value ? 'request_reassigned' : 'request_assigned' );
 			}
-			$this->events->add( $post_id, $event_type, $old_value, $new_value );
+			$meta = array();
+			if ( 'internal_status' === $key ) {
+				$form_type = sanitize_key( (string) get_post_meta( $post_id, '_didar_form_type', true ) );
+				$mapping = $this->workflow->mapping( $form_type, $new_value );
+				$meta = array( 'form_type' => $form_type, 'old_status_key' => $old_value, 'old_status_label' => $this->workflow->status_label( $form_type, $old_value ), 'new_status_key' => $new_value, 'new_status_label' => $this->workflow->status_label( $form_type, $new_value ), 'pipeline_id' => $mapping['pipeline_id'] ?? '', 'pipeline_stage_id' => $mapping['stage_id'] ?? '', 'source' => 'wordpress', 'actor' => get_current_user_id() );
+			}
+			$this->events->add( $post_id, $event_type, $old_value, $new_value, $meta );
 		}
-		if ( $prepared ) {
-			do_action( 'didar_submission_workflow_changed', $post_id, array_keys( $prepared ) );
+		if ( $changed_keys ) {
+			do_action( 'didar_submission_workflow_changed', $post_id, $changed_keys );
 		}
 
 		return true;
@@ -654,7 +675,8 @@ class Didar_Submission_Service {
 
 	private function get_internal_status_raw( $post_id ) {
 		$status = (string) get_post_meta( $post_id, '_didar_internal_status', true );
-		return isset( Didar_Reference_Data::statuses()[ $status ] ) ? $status : 'pending_review';
+		$form_type = sanitize_key( (string) get_post_meta( $post_id, '_didar_form_type', true ) );
+		return isset( $this->workflow->statuses( $form_type )[ $status ] ) ? $status : $this->workflow->default_status( $form_type, 'pending_review' );
 	}
 
 	private function get_internal_note_raw( $post_id ) {

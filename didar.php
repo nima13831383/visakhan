@@ -33,6 +33,7 @@ require_once DIDAR_PATH . 'includes/class-didar-field-renderer.php';
 require_once DIDAR_PATH . 'includes/class-didar-validator.php';
 require_once DIDAR_PATH . 'includes/class-didar-submission-service.php';
 require_once DIDAR_PATH . 'includes/class-didar-api-client.php';
+require_once DIDAR_PATH . 'includes/class-didar-workflow-manager.php';
 require_once DIDAR_PATH . 'includes/class-didar-field-mapper.php';
 require_once DIDAR_PATH . 'includes/class-didar-sync-manager.php';
 require_once DIDAR_PATH . 'includes/class-didar-shortcodes.php';

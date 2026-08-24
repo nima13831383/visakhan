@@ -121,6 +121,23 @@
   }
 
   document.addEventListener('DOMContentLoaded', function () {
+	  document.querySelectorAll('.didar-form-workflow').forEach(function (workflow) {
+		var pipelineData;
+		try { pipelineData = JSON.parse(workflow.getAttribute('data-pipelines') || '[]'); } catch (error) { pipelineData = []; }
+		function selectedPipeline() { var id = workflow.querySelector('.didar-workflow-pipeline').value; return pipelineData.filter(function (pipeline) { return pipeline.id === id; })[0] || null; }
+		function rebuildStage(stage, preserve) {
+		  var pipeline = selectedPipeline(); var oldValue = preserve ? stage.value : ''; stage.innerHTML = '';
+		  if (!pipeline) { stage.disabled = true; stage.appendChild(new Option('ابتدا کاریز را انتخاب کنید', '')); return; }
+		  stage.disabled = false; stage.appendChild(new Option('— انتخاب مرحله کاریز دیدار —', ''));
+		  (pipeline.stages || []).forEach(function (item) { stage.appendChild(new Option(item.title + ' (' + pipeline.title + ')', item.id, false, item.id === oldValue)); });
+		  if (oldValue && !Array.prototype.some.call(stage.options, function (option) { return option.value === oldValue; })) { stage.appendChild(new Option('⚠ مرحله ذخیره‌شده در کاریز فعلی وجود ندارد', oldValue, false, true)); }
+		}
+		function refreshStages(preserve) { workflow.querySelectorAll('.didar-workflow-stage').forEach(function (stage) { rebuildStage(stage, preserve); }); }
+		function defaults() { workflow.querySelectorAll('.didar-workflow-row').forEach(function (row) { row.querySelector('.didar-workflow-default-value').value = row.querySelector('.didar-workflow-default').checked ? '1' : '0'; }); }
+		workflow.addEventListener('change', function (event) { if (event.target.classList.contains('didar-workflow-pipeline')) refreshStages(false); if (event.target.classList.contains('didar-workflow-default')) defaults(); });
+		workflow.addEventListener('click', function (event) { var remove = event.target.closest('.didar-remove-workflow-status'); var add = event.target.closest('.didar-add-workflow-status'); if (remove) { event.preventDefault(); var rows = workflow.querySelectorAll('.didar-workflow-row'); if (rows.length > 1) remove.closest('tr').remove(); defaults(); } if (add) { event.preventDefault(); var body = workflow.querySelector('.didar-workflow-rows'); var rows = body.querySelectorAll('.didar-workflow-row'); var clone = rows[rows.length - 1].cloneNode(true); var index = rows.length; clone.querySelectorAll('input, select').forEach(function (control) { control.name = control.name.replace(/\[statuses\]\[\d+\]/, '[statuses][' + index + ']'); if (control.type === 'radio') control.checked = false; else if (control.type !== 'hidden') control.value = ''; if (control.classList.contains('didar-workflow-default-value')) control.value = '0'; }); body.appendChild(clone); rebuildStage(clone.querySelector('.didar-workflow-stage'), false); } });
+		refreshStages(true); defaults();
+	  });
     var fields = document.getElementById('didar-admin-fields');
     if (fields) initRows(fields);
     var select = document.getElementById('didar-form-type-select');
