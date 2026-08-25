@@ -10,11 +10,15 @@ class Didar_Workflow_Manager {
 	private $registry;
 	private $settings;
 	private $logger;
+	private $custom_fields;
+	private $users;
 
 	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings, Didar_Logger $logger = null ) {
 		$this->registry = $registry;
 		$this->settings = $settings;
 		$this->logger   = $logger ? $logger : new Didar_Logger();
+		$this->custom_fields = new Didar_Custom_Field_Catalog( $settings, $this->logger );
+		$this->users = new Didar_User_Catalog( $settings, $this->logger );
 	}
 
 	public function pipelines() {
@@ -27,22 +31,42 @@ class Didar_Workflow_Manager {
 		return is_array( $cache ) ? $cache : array();
 	}
 
+	public function custom_fields() { return $this->custom_fields->fields(); }
+	public function custom_field_cache_info() { return $this->custom_fields->cache_info(); }
+	public function custom_field( $key ) { return $this->custom_fields->field( $key ); }
+	public function deal_fields_for_pipeline( $pipeline_id ) { return $this->custom_fields->deal_fields_for_pipeline( $pipeline_id ); }
+	public function custom_field_available_for_pipeline( $field, $pipeline_id ) { return Didar_Custom_Field_Catalog::is_available_for_pipeline( $field, $pipeline_id ); }
+	public function custom_field_available_pipeline_ids( $field ) { return $this->custom_fields->available_pipeline_ids( $field, $this->pipelines() ); }
+	public function didar_users() { return $this->users->users(); }
+	public function didar_user_cache_info() { return $this->users->cache_info(); }
+	public function didar_user_by_user_id( $user_id ) { return $this->users->user_by_user_id( $user_id ); }
+	public function didar_user_by_id( $id ) { return $this->users->user_by_id( $id ); }
+
 	public function refresh() {
+		$this->logger->log( 'INFO', 'didar_custom_fields_refresh_started', 'Didar metadata refresh started.', array( 'source' => 'admin' ) );
 		$api = new Didar_Api_Client( $this->settings, $this->logger );
 		$response = $api->pipelines();
+		$pipeline_error = null;
+		$pipelines = array();
 		if ( is_wp_error( $response ) ) {
 			$this->record_refresh_error( $response->get_error_code() );
-			return $response;
+			$pipeline_error = $response;
+		} else {
+			$pipelines = $this->normalize_pipelines( $response );
 		}
-		$pipelines = $this->normalize_pipelines( $response );
-		if ( ! $pipelines ) {
+		if ( ! $pipeline_error && ! $pipelines ) {
 			$this->record_refresh_error( 'pipeline_response_empty' );
-			return new WP_Error( 'pipeline_response_empty', __( 'فهرست کاریزهای معامله دیدار معتبر نیست.', 'didar' ) );
+			$pipeline_error = new WP_Error( 'pipeline_response_empty', __( 'فهرست کاریزهای معامله دیدار معتبر نیست.', 'didar' ) );
 		}
-		$stage_count = 0;
-		foreach ( $pipelines as $pipeline ) { $stage_count += count( $pipeline['stages'] ); }
-		update_option( self::PIPELINES_OPTION, array( 'pipelines' => $pipelines, 'refreshed_at_gmt' => current_time( 'mysql', true ), 'last_error' => '' ), false );
-		$this->logger->log( 'INFO', 'pipeline_metadata_refresh', 'Didar Deal pipeline metadata refreshed.', array( 'pipeline_count' => count( $pipelines ), 'stage_count' => $stage_count, 'source' => 'admin' ) );
+		if ( ! $pipeline_error ) { $stage_count = 0; foreach ( $pipelines as $pipeline ) { $stage_count += count( $pipeline['stages'] ); } update_option( self::PIPELINES_OPTION, array( 'pipelines' => $pipelines, 'refreshed_at_gmt' => current_time( 'mysql', true ), 'last_error' => '' ), false ); $this->logger->log( 'INFO', 'pipeline_metadata_refresh', 'Didar Deal pipeline metadata refreshed.', array( 'pipeline_count' => count( $pipelines ), 'stage_count' => $stage_count, 'source' => 'admin' ) ); }
+		$fields = $this->custom_fields->refresh();
+		if ( is_wp_error( $fields ) ) {
+			return $fields;
+		}
+		$users = $this->users->refresh();
+		if ( is_wp_error( $users ) ) { return $users; }
+		if ( $pipeline_error ) { return $pipeline_error; }
+		$this->logger->log( 'INFO', 'didar_custom_fields_refresh_succeeded', 'Didar metadata refresh succeeded.', array( 'pipeline_count' => count( $pipelines ), 'custom_field_count' => count( $fields ), 'active_deal_field_count' => count( array_filter( $fields, array( 'Didar_Custom_Field_Catalog', 'is_deal_field' ) ) ), 'user_count' => count( $users ), 'source' => 'admin' ) );
 		return $pipelines;
 	}
 

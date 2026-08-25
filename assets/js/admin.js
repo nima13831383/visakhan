@@ -121,6 +121,46 @@
   }
 
   document.addEventListener('DOMContentLoaded', function () {
+	  var catalogNode = document.getElementById('didar-custom-field-catalog');
+	  var catalog = { fields: [], pipelines: [] };
+	  try { if (catalogNode) catalog = JSON.parse(catalogNode.textContent || '{}'); } catch (error) {}
+	  function fieldLabel(field) {
+		var available = (catalog.pipelines || []).filter(function (pipeline) { return (field.excluded_pipeline_ids || []).indexOf(pipeline.id) === -1; });
+		var scope = available.length === (catalog.pipelines || []).length && available.length ? 'همه کاریزها' : (available.length <= 2 ? available.map(function (pipeline) { return pipeline.title; }).join('، ') : available.length + ' کاریز');
+		var duplicates = (catalog.fields || []).filter(function (item) { return item.title === field.title; }).length;
+		return field.title + (field.control_type ? ' — ' + field.control_type : '') + ' (' + scope + ')' + (duplicates > 1 ? ' — ' + field.key : '');
+	  }
+	  function fieldDetails(field) {
+		if (!field) return '';
+		var available = (catalog.pipelines || []).filter(function (pipeline) { return (field.excluded_pipeline_ids || []).indexOf(pipeline.id) === -1; }).map(function (pipeline) { return pipeline.title; });
+		return '<strong>فیلد انتخاب‌شده:</strong> ' + escapeHtml(field.title || field.key) + '<br><code>' + escapeHtml(field.key) + '</code>' + (field.control_type ? ' — ' + escapeHtml(field.control_type) : '') + '<br>کاریزها: ' + escapeHtml(available.join('، ') || '—');
+	  }
+	  function escapeHtml(value) { return String(value || '').replace(/[&<>"']/g, function (character) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character]; }); }
+	  function updateCustomFieldDetails(select) {
+		var value = select.value || select.getAttribute('data-selected') || '';
+		var field = (catalog.fields || []).filter(function (item) { return item.key === value; })[0];
+		var details = select.parentNode.querySelector('.didar-custom-field-details');
+		if (!details) { details = document.createElement('div'); details.className = 'didar-custom-field-details'; select.after(details); }
+		details.hidden = !field;
+		details.innerHTML = fieldDetails(field);
+		select.title = field ? fieldDetails(field).replace(/<br>/g, '\n').replace(/<[^>]+>/g, '') : '';
+	  }
+	  function rebuildCustomFields(formType, pipelineId) {
+		var container = document.querySelector('[data-didar-field-mapping="' + formType + '"]');
+		if (!container) return;
+		container.querySelectorAll('.didar-custom-field').forEach(function (select) {
+		  var oldValue = select.value || select.getAttribute('data-selected') || '';
+		  select.innerHTML = '';
+		  if (!pipelineId) { select.disabled = true; select.appendChild(new Option('ابتدا کاریز دیدار این فرم را انتخاب کنید', '')); if (oldValue) { var hidden = document.createElement('input'); hidden.type = 'hidden'; hidden.className = 'didar-disabled-custom-field'; hidden.name = select.name; hidden.value = oldValue; select.after(hidden); } return; }
+		  container.querySelectorAll('.didar-disabled-custom-field').forEach(function (hidden) { hidden.remove(); });
+		  select.disabled = false; select.appendChild(new Option('— بدون نگاشت —', ''));
+		  (catalog.fields || []).filter(function (field) { return field.field_type && field.field_type.toLowerCase() === 'deal' && !field.is_deleted && (field.excluded_pipeline_ids || []).indexOf(pipelineId) === -1; }).forEach(function (field) { var option = new Option(fieldLabel(field), field.key, false, field.key === oldValue); option.title = fieldDetails(field).replace(/<br>/g, '\n').replace(/<[^>]+>/g, ''); select.appendChild(option); });
+		  if (oldValue && !Array.prototype.some.call(select.options, function (option) { return option.value === oldValue; })) { var stale = (catalog.fields || []).filter(function (field) { return field.key === oldValue; })[0]; var message = !stale ? '⚠ ' + oldValue + ' — در اطلاعات فعلی دیدار یافت نشد' : (stale.is_deleted ? '⚠ ' + stale.title + ' — فیلد در دیدار حذف شده است' : '⚠ ' + stale.title + ' — در کاریز فعلی در دسترس نیست'); select.appendChild(new Option(message, oldValue, false, true)); }
+		  select.setAttribute('data-selected', oldValue); updateCustomFieldDetails(select);
+		});
+	  }
+	  document.addEventListener('change', function (event) { if (event.target.classList.contains('didar-custom-field')) updateCustomFieldDetails(event.target); });
+	  document.querySelectorAll('.didar-custom-field').forEach(updateCustomFieldDetails);
 	  document.querySelectorAll('.didar-form-workflow').forEach(function (workflow) {
 		var pipelineData;
 		try { pipelineData = JSON.parse(workflow.getAttribute('data-pipelines') || '[]'); } catch (error) { pipelineData = []; }
@@ -134,7 +174,7 @@
 		}
 		function refreshStages(preserve) { workflow.querySelectorAll('.didar-workflow-stage').forEach(function (stage) { rebuildStage(stage, preserve); }); }
 		function defaults() { workflow.querySelectorAll('.didar-workflow-row').forEach(function (row) { row.querySelector('.didar-workflow-default-value').value = row.querySelector('.didar-workflow-default').checked ? '1' : '0'; }); }
-		workflow.addEventListener('change', function (event) { if (event.target.classList.contains('didar-workflow-pipeline')) refreshStages(false); if (event.target.classList.contains('didar-workflow-default')) defaults(); });
+		workflow.addEventListener('change', function (event) { if (event.target.classList.contains('didar-workflow-pipeline')) { refreshStages(false); rebuildCustomFields(workflow.getAttribute('data-didar-workflow'), event.target.value); } if (event.target.classList.contains('didar-workflow-default')) defaults(); });
 		workflow.addEventListener('click', function (event) { var remove = event.target.closest('.didar-remove-workflow-status'); var add = event.target.closest('.didar-add-workflow-status'); if (remove) { event.preventDefault(); var rows = workflow.querySelectorAll('.didar-workflow-row'); if (rows.length > 1) remove.closest('tr').remove(); defaults(); } if (add) { event.preventDefault(); var body = workflow.querySelector('.didar-workflow-rows'); var rows = body.querySelectorAll('.didar-workflow-row'); var clone = rows[rows.length - 1].cloneNode(true); var index = rows.length; clone.querySelectorAll('input, select').forEach(function (control) { control.name = control.name.replace(/\[statuses\]\[\d+\]/, '[statuses][' + index + ']'); if (control.type === 'radio') control.checked = false; else if (control.type !== 'hidden') control.value = ''; if (control.classList.contains('didar-workflow-default-value')) control.value = '0'; }); body.appendChild(clone); rebuildStage(clone.querySelector('.didar-workflow-stage'), false); } });
 		refreshStages(true); defaults();
 	  });

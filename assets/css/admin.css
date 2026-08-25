@@ -336,3 +336,69 @@ body.post-type-didar_submission #poststuff .postbox .hndle::before {
   .didar-admin-wrap *::before,
   .didar-admin-wrap *::after { transition-duration: .01ms !important; }
 }
+
+/* Pipeline-aware Didar settings: keep long native-select labels inside wp-admin. */
+.didar-settings-page,
+.didar-settings-page .form-table,
+.didar-settings-page .form-table > tbody,
+.didar-settings-page .form-table > tbody > tr,
+.didar-settings-page .form-table > tbody > tr > td,
+.didar-settings-page .didar-form-workflow,
+.didar-settings-page .didar-field-mapping-form,
+.didar-settings-page .didar-field-mapping-form table,
+.didar-settings-page .didar-field-mapping-form td {
+  min-width: 0;
+}
+
+.didar-settings-page .didar-form-workflow,
+.didar-settings-page .didar-field-mapping-form {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.didar-settings-page .didar-workflow-pipeline,
+.didar-settings-page .didar-workflow-stage,
+.didar-settings-page .didar-custom-field,
+.didar-settings-page .didar-user-select {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.didar-settings-page .didar-field-mapping-form table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.didar-settings-page .didar-field-mapping-form td:last-child {
+  min-width: 0;
+  width: 65%;
+}
+
+.didar-settings-page .didar-custom-field-details {
+  color: #50575e;
+  font-size: 12px;
+  line-height: 1.65;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.didar-settings-page .didar-custom-field-details[hidden] { display: none; }
+.didar-settings-page .didar-custom-field-details strong { color: #1d2327; }
+.didar-settings-page .didar-custom-field-details code { direction: ltr; unicode-bidi: embed; }
+
+.didar-settings-page .didar-user-mapping-list { display: grid; gap: 12px; max-width: 760px; }
+.didar-settings-page .didar-user-mapping-row { min-width: 0; }
+.didar-settings-page .didar-user-mapping-row > strong { display: block; margin-bottom: 5px; }
+.didar-settings-page .didar-user-details { color: #50575e; font-size: 12px; line-height: 1.65; margin-top: 6px; overflow-wrap: anywhere; }
+.didar-settings-page .didar-user-details code { direction: ltr; unicode-bidi: embed; }
+
+@media (max-width: 960px) {
+  .didar-settings-page .form-table > tbody > tr > th,
+  .didar-settings-page .form-table > tbody > tr > td { display: block; width: auto; }
+  .didar-settings-page .didar-field-mapping-form td:last-child { width: auto; }
+}
