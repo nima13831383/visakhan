@@ -6,6 +6,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 /** Coordinates asynchronous, idempotent WordPress ↔ Didar synchronization. */
 class Didar_Sync_Manager {
+	const WEBHOOK_RATE_LIMIT = 120;
+	const WEBHOOK_RATE_WINDOW = 60;
 	const CRON_HOOK = 'didar_process_sync';
 	const USER_HOOK = 'didar_process_user_sync';
 	const META_DEAL_ID = '_didar_deal_id';
@@ -31,7 +33,7 @@ class Didar_Sync_Manager {
 		$this->logger   = $logger ? $logger : new Didar_Logger();
 		$this->workflow = new Didar_Workflow_Manager( $registry, $settings, $this->logger );
 		$this->api      = new Didar_Api_Client( $settings, $this->logger );
-		$this->mapper   = new Didar_Field_Mapper( $registry, $settings, $files );
+		$this->mapper   = new Didar_Field_Mapper( $registry, $settings, $files, $this->logger );
 
 		add_action( 'user_register', array( $this, 'queue_user' ), 20, 1 );
 		add_action( 'didar_submission_created', array( $this, 'queue_submission' ), 20, 1 );
@@ -283,6 +285,12 @@ class Didar_Sync_Manager {
 	}
 
 	public function register_webhook_route() {
+		$this->settings->ensure_webhook_secret();
+		register_rest_route( 'didar/v1', '/webhook/(?P<secret>[a-f0-9]{64})', array(
+			'methods' => WP_REST_Server::CREATABLE,
+			'callback' => array( $this, 'receive_webhook' ),
+			'permission_callback' => '__return_true',
+		) );
 		register_rest_route( 'didar/v1', '/webhook', array(
 			'methods' => WP_REST_Server::CREATABLE,
 			'callback' => array( $this, 'receive_webhook' ),
@@ -291,21 +299,50 @@ class Didar_Sync_Manager {
 	}
 
 	public function receive_webhook( WP_REST_Request $request ) {
-		$this->logger->log( 'INFO', 'webhook_received', 'Didar webhook received.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'webhook', 'webhook_event_id' => $request->get_header( 'x-didar-event-id' ), 'source' => 'webhook' ) );
 		$settings = $this->settings->all();
-		$secret = isset( $settings['didar_webhook_secret'] ) ? (string) $settings['didar_webhook_secret'] : '';
-		$provided = (string) $request->get_header( 'x-didar-webhook-token' );
-		if ( '' === $secret || '' === $provided || ! hash_equals( $secret, $provided ) ) { $this->logger->log( 'WARNING', 'webhook_authentication', 'Didar webhook authentication failed.', array( 'direction' => 'didar_to_wordpress', 'source' => 'webhook' ) ); return new WP_Error( 'didar_webhook_unauthorized', __( 'وب‌هوک دیدار احراز نشد.', 'didar' ), array( 'status' => 401 ) ); }
+		$route_params = method_exists( $request, 'get_url_params' ) ? $request->get_url_params() : array();
+		$route_secret = isset( $route_params['secret'] ) ? (string) $route_params['secret'] : '';
+		$configured   = isset( $settings['didar_webhook_secret'] ) ? (string) $settings['didar_webhook_secret'] : '';
+		$legacy       = empty( $route_secret );
+		$authenticated = false;
+		if ( ! $legacy && '' !== $configured && hash_equals( $configured, $route_secret ) ) {
+			$authenticated = true;
+		}
+		if ( $legacy && ! empty( $settings['didar_webhook_legacy_enabled'] ) ) {
+			$provided = (string) $request->get_header( 'x-didar-webhook-token' );
+			$authenticated = '' !== $configured && '' !== $provided && hash_equals( $configured, $provided );
+		}
+		if ( ! $authenticated ) { $this->logger->log( 'WARNING', 'webhook_authentication', 'Didar webhook authentication failed.', array( 'direction' => 'didar_to_wordpress', 'source' => 'webhook', 'route_secret_present' => $legacy ? 'no' : 'yes' ) ); return new WP_Error( 'didar_webhook_unauthorized', __( 'وب‌هوک دیدار احراز نشد.', 'didar' ), array( 'status' => 401 ) ); }
+		$content_type = strtolower( (string) $request->get_header( 'content-type' ) );
+		if ( 0 !== strpos( $content_type, 'application/json' ) ) { return new WP_Error( 'didar_webhook_content_type', __( 'نوع محتوای وب‌هوک باید JSON باشد.', 'didar' ), array( 'status' => 415 ) ); }
+		if ( $this->webhook_rate_limited() ) { $this->logger->log( 'WARNING', 'webhook_rate_limited', 'Didar webhook rate limit exceeded.', array( 'direction' => 'didar_to_wordpress', 'source' => 'webhook' ) ); return new WP_Error( 'didar_webhook_rate_limited', __( 'تعداد درخواست‌های وب‌هوک بیش از حد مجاز است.', 'didar' ), array( 'status' => 429 ) ); }
 		$payload = $request->get_json_params();
-		if ( ! is_array( $payload ) || empty( $payload['data'] ) || empty( $payload['meta']['entityId'] ) ) { return new WP_Error( 'didar_webhook_invalid', __( 'ساختار وب‌هوک دیدار معتبر نیست.', 'didar' ), array( 'status' => 400 ) ); }
-		$meta = isset( $payload['meta'] ) && is_array( $payload['meta'] ) ? $payload['meta'] : array();
+		if ( ! is_array( $payload ) || ! isset( $payload['data'] ) || ! is_array( $payload['data'] ) || ! isset( $payload['meta'] ) || ! is_array( $payload['meta'] ) ) { return new WP_Error( 'didar_webhook_invalid', __( 'ساختار وب‌هوک دیدار معتبر نیست.', 'didar' ), array( 'status' => 400 ) ); }
+		$meta = $payload['meta'];
+		if ( empty( $meta['id'] ) || empty( $meta['entityId'] ) || empty( $meta['entityTitle'] ) ) { return new WP_Error( 'didar_webhook_invalid', __( 'اطلاعات ضروری وب‌هوک دیدار ناقص است.', 'didar' ), array( 'status' => 400 ) ); }
 		$event_id = isset( $meta['id'] ) ? sanitize_text_field( (string) $meta['id'] ) : md5( wp_json_encode( $payload ) );
 		if ( $this->seen_webhook( $event_id ) ) { $this->logger->log( 'INFO', 'webhook_deduplication', 'Duplicate Didar webhook ignored.', array( 'direction' => 'didar_to_wordpress', 'webhook_event_id' => $event_id, 'source' => 'webhook' ) ); return new WP_REST_Response( array( 'received' => true, 'duplicate' => true ), 200 ); }
 		$entity = sanitize_key( isset( $meta['entityTitle'] ) ? (string) $meta['entityTitle'] : '' );
+		$action = isset( $meta['actionType'] ) && is_scalar( $meta['actionType'] ) ? (int) $meta['actionType'] : 0;
+		if ( ! $this->webhook_event_key( $entity, $action ) ) { return new WP_Error( 'didar_webhook_unsupported', __( 'رویداد یا موجودیت وب‌هوک دیدار پشتیبانی نمی‌شود.', 'didar' ), array( 'status' => 422 ) ); }
 		$this->logger->log( 'INFO', 'webhook_authenticated', 'Didar webhook authenticated and accepted.', array( 'direction' => 'didar_to_wordpress', 'webhook_event_id' => $event_id, 'entity_type' => $entity, 'external_id' => $payload['meta']['entityId'] ?? '', 'source' => 'webhook' ) );
 		if ( false !== strpos( $entity, 'deal' ) || 'deal' === $entity || 'معامله' === $entity ) { $this->apply_deal_webhook( $payload, $event_id ); }
 		if ( false !== strpos( $entity, 'person' ) || 'person' === $entity || 'شخص' === $entity ) { $this->apply_person_webhook( $payload, $event_id ); }
 		return new WP_REST_Response( array( 'received' => true ), 200 );
+	}
+
+	private function webhook_event_key( $entity, $action ) {
+		$entity = sanitize_key( (string) $entity ); $action = (int) $action;
+		$is_deal = false !== strpos( $entity, 'deal' ) || 'معامله' === $entity; $is_person = false !== strpos( $entity, 'person' ) || 'شخص' === $entity;
+		if ( ! $is_deal && ! $is_person ) { return ''; }
+		return ( $is_deal ? 'deal_' : 'person_' ) . ( 1 === $action ? 'created' : ( 2 === $action ? 'updated' : '' ) );
+	}
+
+	private function webhook_rate_limited() {
+		$ip = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( (string) $_SERVER['REMOTE_ADDR'] ) : 'unknown';
+		$key = 'didar_webhook_rate_' . md5( $ip ); $count = (int) get_transient( $key );
+		if ( $count >= self::WEBHOOK_RATE_LIMIT ) { return true; }
+		set_transient( $key, $count + 1, self::WEBHOOK_RATE_WINDOW ); return false;
 	}
 
 	private function apply_person_webhook( $payload, $event_id ) {
@@ -347,14 +384,20 @@ class Didar_Sync_Manager {
 	}
 
 	private function update_local_from_deal( $post_id, $data, $event_id ) {
+		$deal_id = sanitize_text_field( (string) get_post_meta( $post_id, self::META_DEAL_ID, true ) );
 		$form_type = sanitize_key( (string) get_post_meta( $post_id, '_didar_form_type', true ) );
 		$old = $this->service->get_fields( $post_id );
 		$new = $old;
+		$changed_field_keys = array();
 		$fields = isset( $data['Fields'] ) && is_array( $data['Fields'] ) ? $data['Fields'] : array();
 		foreach ( $this->registry->fields( $form_type ) as $key => $definition ) {
 			$map = $this->mapper->mapping( $form_type, $key );
-			if ( 'deal_custom' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $fields ) ) { $new[ $key ] = $fields[ $map['field'] ]; }
-			if ( 'deal_native' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $data ) ) { $new[ $key ] = $data[ $map['field'] ]; }
+			if ( 'deal_custom' === $map['target'] && $map['field'] && $this->mapper->is_structured_field( $definition ) && array_key_exists( $map['field'], $fields ) ) {
+				$this->logger->log( 'INFO', 'didar_structured_field_inbound_ignored', 'Readable structured field text was not parsed back into local structured data.', array( 'entity_type' => 'deal', 'local_id' => $post_id, 'form_type' => $form_type, 'field_key' => $key, 'deal_field_key' => $map['field'], 'source' => 'didar_webhook' ) );
+				continue;
+			}
+			if ( 'deal_custom' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $fields ) ) { $new[ $key ] = $fields[ $map['field'] ]; $changed_field_keys[] = $key; }
+			if ( 'deal_native' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $data ) ) { $new[ $key ] = $data[ $map['field'] ]; $changed_field_keys[] = $key; }
 		}
 		if ( $new !== $old ) { update_post_meta( $post_id, '_didar_fields', $new ); }
 		$stage = isset( $data['PipelineStageId'] ) ? sanitize_text_field( $data['PipelineStageId'] ) : '';
@@ -370,7 +413,7 @@ class Didar_Sync_Manager {
 		$owner = isset( $data['OwnerId'] ) ? $this->wp_user_for_didar( $data['OwnerId'] ) : 0;
 		if ( $owner ) { update_post_meta( $post_id, '_didar_assigned_user_id', $owner ); }
 		$this->events->add( $post_id, 'didar_webhook_received', $old, $new, array( 'source' => 'Didar', 'event_id' => $event_id, 'entity_id' => isset( $data['Id'] ) ? $data['Id'] : '', 'request_snapshot_only' => true ) );
-		$this->logger->log( 'INFO', 'webhook_apply', 'Didar Deal webhook updated request snapshot fields only; WordPress user profile was not modified.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'deal', 'external_id' => $deal_id, 'local_id' => $post_id, 'wp_user_id' => get_post_field( 'post_author', $post_id ), 'form_type' => $form_type, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook', 'deal_field_mapping' => $fields ) );
+		$this->logger->log( 'INFO', 'webhook_apply', 'Didar Deal webhook updated request snapshot fields only; WordPress user profile was not modified.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'deal', 'external_id' => $deal_id, 'local_id' => $post_id, 'wp_user_id' => get_post_field( 'post_author', $post_id ), 'form_type' => $form_type, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook', 'changed_field_keys' => array_values( array_unique( $changed_field_keys ) ) ) );
 	}
 
 	private function mapped_submission_fields( $form_type, $data ) {

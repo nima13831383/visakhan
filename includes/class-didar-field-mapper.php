@@ -9,11 +9,13 @@ class Didar_Field_Mapper {
 	private $registry;
 	private $settings;
 	private $files;
+	private $serializer;
 
-	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings, Didar_File_Service $files = null ) {
+	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings, Didar_File_Service $files = null, Didar_Logger $logger = null ) {
 		$this->registry = $registry;
 		$this->settings = $settings;
 		$this->files    = $files;
+		$this->serializer = new Didar_Readable_Value_Serializer( $files, $logger );
 	}
 
 	public function mapping( $form_type, $field_key ) {
@@ -80,16 +82,13 @@ class Didar_Field_Mapper {
 			$map = $this->mapping( $form_type, $key );
 			if ( 'deal_custom' === $map['target'] && '' !== $map['field'] ) {
 				$definition = $this->registry->fields( $form_type )[ $key ] ?? array();
-				if ( 'file' === ( $definition['type'] ?? '' ) && $this->files && is_array( $value ) ) {
-					$urls = array(); foreach ( $value as $file_id ) { $url = $this->files->get_sync_url( $file_id, $post_id, $key ); if ( $url ) { $urls[] = $url; } }
-					$custom[ $map['field'] ] = $urls;
-				} else {
-					$custom[ $map['field'] ] = $this->value( $value, $form_type, $key, $post_id );
-				}
+				$custom[ $map['field'] ] = $this->serializer->serialize( $form_type, $key, $definition, $value, $post_id );
 			}
 		}
 		return $custom;
 	}
+
+	public function is_structured_field( $definition ) { return $this->serializer->is_structured( $definition ); }
 
 	public function deal_native_fields( $form_type, $fields ) {
 		$native = array();

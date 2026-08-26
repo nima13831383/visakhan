@@ -14,9 +14,43 @@ class Didar_Settings {
 	const MAX_REQUESTS_PER_PAGE     = 100;
 	const DEFAULT_FILE_DOWNLOAD_MODE = 'secure';
 
+	/** Return a cryptographically random path credential for the inbound webhook. */
+	public static function generate_webhook_secret() {
+		try {
+			return bin2hex( random_bytes( 32 ) );
+		} catch ( Exception $e ) {
+			return '';
+		}
+	}
+
+	public function ensure_webhook_secret() {
+		$settings = $this->all();
+		$secret   = isset( $settings['didar_webhook_secret'] ) && is_string( $settings['didar_webhook_secret'] ) ? trim( $settings['didar_webhook_secret'] ) : '';
+		if ( preg_match( '/^[a-f0-9]{64}$/', $secret ) ) {
+			return $secret;
+		}
+		$secret = self::generate_webhook_secret();
+		if ( $secret ) {
+			$settings['didar_webhook_secret'] = $secret;
+			update_option( self::OPTION_NAME, $settings, false );
+		}
+		return $secret;
+	}
+
+	public function webhook_url() {
+		$secret = $this->ensure_webhook_secret();
+		return $secret ? rest_url( 'didar/v1/webhook/' . rawurlencode( $secret ) ) : '';
+	}
+
 	public function all() {
 		$settings = get_option( self::OPTION_NAME, array() );
-		return is_array( $settings ) ? $settings : array();
+		$settings = is_array( $settings ) ? $settings : array();
+		// Remove the retired webhookId allowlist from persisted settings.
+		if ( array_key_exists( 'didar_webhook_bindings', $settings ) ) {
+			unset( $settings['didar_webhook_bindings'] );
+			update_option( self::OPTION_NAME, $settings, false );
+		}
+		return $settings;
 	}
 
 	public function colleague_can_view_internal_history() {
