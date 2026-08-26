@@ -41,6 +41,7 @@ require_once DIDAR_PATH . 'includes/class-didar-settings-transfer.php';
 require_once DIDAR_PATH . 'includes/class-didar-field-mapper.php';
 require_once DIDAR_PATH . 'includes/class-didar-sync-manager.php';
 require_once DIDAR_PATH . 'includes/class-didar-shortcodes.php';
+require_once DIDAR_PATH . 'includes/class-didar-user-profile.php';
 require_once DIDAR_PATH . 'includes/class-didar-ajax.php';
 require_once DIDAR_PATH . 'includes/class-didar-admin.php';
 require_once DIDAR_PATH . 'includes/class-didar-plugin.php';

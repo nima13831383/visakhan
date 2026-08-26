@@ -49,6 +49,7 @@ final class Didar_Plugin {
 		$this->sync_manager = new Didar_Sync_Manager( $this->registry, $this->settings, $this->event_log, $this->service, $this->file_service, $this->logger );
 
 		new Didar_Shortcodes( $this->registry, $this->renderer, $this->validator, $this->service, $this->settings, $this->file_service, $this->request_search );
+		new Didar_User_Profile( $this->registry, $this->settings, $this->sync_manager, $this->logger );
 		new Didar_Ajax( $this->registry, $this->renderer, $this->service, $this->file_service );
 
 		if ( is_admin() ) {

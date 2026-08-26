@@ -130,6 +130,10 @@ class Didar_Admin {
 			'didar_behavior_settings'
 		);
 
+		add_settings_section( 'didar_profile_settings', __( 'تنظیمات فرم اطلاعات کاربری', 'didar' ), array( $this, 'render_profile_settings_description' ), 'didar-page-settings' );
+		add_settings_field( 'didar_profile_field_states', __( 'نمایش و ویرایش فیلدها', 'didar' ), array( $this, 'render_profile_field_states' ), 'didar-page-settings', 'didar_profile_settings' );
+		add_settings_field( 'didar_user_person_mappings', __( 'نگاشت اطلاعات کاربر به مخاطب دیدار', 'didar' ), array( $this, 'render_user_person_mappings' ), 'didar-page-settings', 'didar_profile_settings' );
+
 		add_settings_section(
 			'didar_file_settings',
 			__( 'تنظیمات فایل‌های درخواست', 'didar' ),
@@ -214,6 +218,18 @@ class Didar_Admin {
 			}
 		}
 		$output['field_required_overrides'] = $clean_overrides;
+		$output['profile_field_states'] = array();
+		$submitted_profile_states = isset( $input['profile_field_states'] ) && is_array( $input['profile_field_states'] ) ? $input['profile_field_states'] : array();
+		foreach ( Didar_Settings::PROFILE_FIELD_STATES as $field => $default ) {
+			$state = isset( $submitted_profile_states[ $field ] ) && is_scalar( $submitted_profile_states[ $field ] ) ? sanitize_key( wp_unslash( $submitted_profile_states[ $field ] ) ) : $default;
+			$output['profile_field_states'][ $field ] = in_array( $state, array( 'editable', 'readonly', 'disabled' ), true ) ? $state : $default;
+		}
+		$output['didar_user_person_mappings'] = array();
+		$submitted_person_mappings = isset( $input['didar_user_person_mappings'] ) && is_array( $input['didar_user_person_mappings'] ) ? $input['didar_user_person_mappings'] : array();
+		foreach ( array( 'gender', 'display_name', 'profile_image_url' ) as $property ) {
+			$key = isset( $submitted_person_mappings[ $property ] ) && is_scalar( $submitted_person_mappings[ $property ] ) ? sanitize_text_field( wp_unslash( $submitted_person_mappings[ $property ] ) ) : '';
+			if ( $key ) { $output['didar_user_person_mappings'][ $property ] = $key; }
+		}
 		$current_api_key = isset( $current['didar_api_key'] ) ? (string) $current['didar_api_key'] : '';
 		$submitted_api_key = isset( $input['didar_api_key'] ) && is_scalar( $input['didar_api_key'] ) ? trim( sanitize_text_field( wp_unslash( $input['didar_api_key'] ) ) ) : '';
 		$output['didar_api_key'] = $submitted_api_key ?: $current_api_key;
@@ -250,6 +266,39 @@ class Didar_Admin {
 		}
 
 		return $output;
+	}
+
+	public function render_profile_settings_description() {
+		echo '<p>این فرم با شورت‌کد <code>[didar_profile_form]</code> نمایش داده می‌شود. شماره تلفن توسط Digits و فرایند تأیید آن مدیریت می‌شود؛ تا زمانی که یک جریان تأییدشده تغییر شماره به این افزونه متصل نشده است، حتی در صورت انتخاب «قابل ویرایش» به‌صورت فقط‌خواندنی اجرا می‌شود.</p>';
+	}
+
+	public function render_profile_field_states() {
+		$labels   = array( 'first_name' => 'نام', 'last_name' => 'نام خانوادگی', 'gender' => 'جنسیت', 'display_name' => 'نام نمایشی', 'mobile' => 'شماره تلفن', 'email' => 'ایمیل', 'profile_image' => 'تصویر پروفایل' );
+		$settings = $this->settings->all();
+		$states   = isset( $settings['profile_field_states'] ) && is_array( $settings['profile_field_states'] ) ? $settings['profile_field_states'] : array();
+		echo '<table class="widefat striped"><tbody>';
+		foreach ( $labels as $field => $label ) {
+			$value = sanitize_key( (string) ( $states[ $field ] ?? Didar_Settings::PROFILE_FIELD_STATES[ $field ] ) );
+			$name  = Didar_Settings::OPTION_NAME . '[profile_field_states][' . $field . ']';
+			echo '<tr><td><strong>' . esc_html( $label ) . '</strong></td><td><select name="' . esc_attr( $name ) . '"><option value="editable" ' . selected( $value, 'editable', false ) . '>قابل ویرایش</option><option value="readonly" ' . selected( $value, 'readonly', false ) . '>فقط خواندنی</option><option value="disabled" ' . selected( $value, 'disabled', false ) . '>غیرفعال / مخفی</option></select>' . ( 'mobile' === $field ? ' <span class="description">ویرایش مستقیم شماره تلفن غیرفعال است.</span>' : '' ) . '</td></tr>';
+		}
+		echo '</tbody></table>';
+	}
+
+	public function render_user_person_mappings() {
+		$settings = $this->settings->all();
+		$mapping  = isset( $settings['didar_user_person_mappings'] ) && is_array( $settings['didar_user_person_mappings'] ) ? $settings['didar_user_person_mappings'] : array();
+		$labels   = array( 'gender' => 'جنسیت', 'display_name' => 'نام نمایشی', 'profile_image_url' => 'نشانی تصویر پروفایل' );
+		echo '<table class="widefat striped"><thead><tr><th>WordPress User/Profile</th><th>Didar Person native field</th></tr></thead><tbody>';
+		foreach ( array( 'first_name' => 'FirstName', 'last_name' => 'LastName', 'mobile' => 'MobilePhone', 'email' => 'Email' ) as $property => $native_field ) {
+			echo '<tr><td><code>' . esc_html( $property ) . '</code></td><td><code>' . esc_html( $native_field ) . '</code></td></tr>';
+		}
+		echo '</tbody></table>';
+		echo '<p class="description">نام، نام خانوادگی، موبایل و ایمیل به فیلدهای native Person ارسال می‌شوند. این سه مقدار فقط در صورت وارد کردن Field Key به Custom Field مخاطب دیدار ارسال می‌شوند. کلیدهای ناشناخته ذخیره می‌شوند و هنگام ارسال بررسی‌نشده محسوب می‌شوند.</p>';
+		foreach ( $labels as $property => $label ) {
+			$name = Didar_Settings::OPTION_NAME . '[didar_user_person_mappings][' . $property . ']';
+			echo '<p><label>' . esc_html( $label ) . ' <input type="text" class="regular-text" name="' . esc_attr( $name ) . '" value="' . esc_attr( $mapping[ $property ] ?? '' ) . '" placeholder="Field_..."></label></p>';
+		}
 	}
 
 	public function render_didar_api_key() { $value = $this->settings->all(); echo '<input type="password" autocomplete="new-password" class="regular-text" name="' . esc_attr( Didar_Settings::OPTION_NAME ) . '[didar_api_key]" value="" placeholder="' . esc_attr( empty( $value['didar_api_key'] ) ? '' : '••••••••' ) . '">'; echo '<p class="description">کلید در سمت سرور استفاده می‌شود و در صفحه یا گزارش‌ها نمایش داده نمی‌شود.</p>'; if ( ! empty( $value['didar_api_key'] ) ) { $url = wp_nonce_url( admin_url( 'admin-post.php?action=didar_test_connection' ), 'didar_test_connection' ); echo '<p><a class="button" href="' . esc_url( $url ) . '">آزمون اتصال دیدار</a></p>'; } }

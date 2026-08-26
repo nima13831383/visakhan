@@ -23,7 +23,7 @@ class Didar_Settings_Transfer {
 	}
 
 	private function portable_option_keys() {
-		return array( 'didar_form_workflows', 'didar_field_mappings', 'didar_broker_user_map', 'didar_default_owner_id', 'didar_default_pipeline_id', 'didar_system_form_type_field_id', 'didar_system_submission_id_field_id', 'didar_system_user_id_field_id', 'didar_public_status_field_id', 'field_required_overrides', 'colleague_can_view_internal_history', 'frontend_requests_per_page', 'file_download_mode', 'didar_debug_logging' );
+		return array( 'didar_form_workflows', 'didar_field_mappings', 'didar_broker_user_map', 'didar_default_owner_id', 'didar_default_pipeline_id', 'didar_system_form_type_field_id', 'didar_system_submission_id_field_id', 'didar_system_user_id_field_id', 'didar_public_status_field_id', 'field_required_overrides', 'profile_field_states', 'didar_user_person_mappings', 'colleague_can_view_internal_history', 'frontend_requests_per_page', 'file_download_mode', 'didar_debug_logging' );
 	}
 
 	/** Runtime-shaped portable values; unlike export, user maps remain keyed by local WP user ID. */
@@ -38,6 +38,11 @@ class Didar_Settings_Transfer {
 	public function portable_settings( $source = null ) {
 		$source = is_array( $source ) ? $source : $this->settings->all();
 		$out = $this->portable_runtime_settings( $source );
+		// New installs have no persisted profile settings until an administrator
+		// saves the page. Export their safe defaults explicitly so the feature is
+		// portable from the first export, rather than silently omitting it.
+		$out['profile_field_states'] = isset( $out['profile_field_states'] ) && is_array( $out['profile_field_states'] ) ? $out['profile_field_states'] : Didar_Settings::PROFILE_FIELD_STATES;
+		$out['didar_user_person_mappings'] = isset( $out['didar_user_person_mappings'] ) && is_array( $out['didar_user_person_mappings'] ) ? $out['didar_user_person_mappings'] : array();
 		$out['didar_broker_user_map'] = $this->export_user_mappings( $out['didar_broker_user_map'] ?? array() );
 		if ( isset( $out['didar_field_mappings'] ) && is_array( $out['didar_field_mappings'] ) ) {
 			$normalized_mappings = array();
@@ -136,9 +141,9 @@ class Didar_Settings_Transfer {
 	public function latest_backup() { $all = get_option( self::BACKUPS_OPTION, array() ); return is_array( $all ) && $all ? end( $all ) : array(); }
 
 	private function normalize( $raw, &$warnings, &$errors ) {
-		$out = array(); $allowed = array_keys( $this->portable_settings( array_fill_keys( array( 'didar_form_workflows','didar_field_mappings','didar_broker_user_map','didar_default_owner_id','didar_default_pipeline_id','didar_system_form_type_field_id','didar_system_submission_id_field_id','didar_system_user_id_field_id','didar_public_status_field_id','field_required_overrides','colleague_can_view_internal_history','frontend_requests_per_page','file_download_mode','didar_debug_logging' ), null ) ) );
+		$out = array(); $allowed = array_keys( $this->portable_settings( array_fill_keys( array( 'didar_form_workflows','didar_field_mappings','didar_broker_user_map','didar_default_owner_id','didar_default_pipeline_id','didar_system_form_type_field_id','didar_system_submission_id_field_id','didar_system_user_id_field_id','didar_public_status_field_id','field_required_overrides','profile_field_states','didar_user_person_mappings','colleague_can_view_internal_history','frontend_requests_per_page','file_download_mode','didar_debug_logging' ), null ) ) );
 		foreach ( (array) $raw as $key => $value ) { if ( in_array( $key, $allowed, true ) ) { $out[$key] = $value; } else { $warnings[] = 'گزینه ناشناخته «' . sanitize_text_field( (string) $key ) . '» نادیده گرفته شد.'; } }
-		foreach ( array( 'didar_form_workflows','didar_field_mappings','field_required_overrides' ) as $key ) { if ( isset( $out[$key] ) && ! is_array( $out[$key] ) ) { $errors[] = 'ساختار «' . $key . '» معتبر نیست.'; unset( $out[$key] ); } }
+		foreach ( array( 'didar_form_workflows','didar_field_mappings','field_required_overrides','profile_field_states','didar_user_person_mappings' ) as $key ) { if ( isset( $out[$key] ) && ! is_array( $out[$key] ) ) { $errors[] = 'ساختار «' . $key . '» معتبر نیست.'; unset( $out[$key] ); } }
 		foreach ( array( 'didar_form_workflows', 'didar_field_mappings', 'field_required_overrides' ) as $key ) {
 			if ( empty( $out[ $key ] ) ) { continue; }
 			foreach ( $out[ $key ] as $form_type => $value ) {
@@ -234,7 +239,7 @@ class Didar_Settings_Transfer {
 
 	private function export_user_mappings( $map ) { $out=array(); foreach((array)$map as $wp_id=>$didar_id){ $u=get_user_by('id',absint($wp_id)); if($u){$out[]=array('wordpress_user_id'=>absint($wp_id),'wordpress_user_login'=>$u->user_login,'wordpress_user_email'=>$u->user_email,'didar_user_id'=>sanitize_text_field((string)$didar_id));} } return $out; }
 	private function resolve_user_mappings( $items ) { $out=array(); $warnings=array(); foreach((array)$items as $item){ if(!is_array($item)) continue; $login=sanitize_user($item['wordpress_user_login']??'',true); $email=sanitize_email($item['wordpress_user_email']??''); $user=$login?get_user_by('login',$login):false; if(!$user && $email) $user=get_user_by('email',$email); if(!$user){$warnings[]='کاربر WordPress برای نگاشت دیدار یافت نشد؛ نگاشت رد شد.';continue;} $didar=sanitize_text_field((string)($item['didar_user_id']??'')); if(!$didar)continue; $catalog=$this->workflow->didar_users(); if($catalog && (!$this->workflow->didar_user_by_user_id($didar) || !empty($this->workflow->didar_user_by_user_id($didar)['is_disabled']))) $warnings[]='UserId دیدار «'.$didar.'» معتبر یا فعال نیست.'; $out[$user->ID]=$didar; } return array('mappings'=>$out,'warnings'=>$warnings); }
-	private function portable_defaults() { return array( 'didar_form_workflows'=>array(),'didar_field_mappings'=>array(),'didar_broker_user_map'=>array(),'didar_default_owner_id'=>'','didar_default_pipeline_id'=>'','didar_system_form_type_field_id'=>'','didar_system_submission_id_field_id'=>'','didar_system_user_id_field_id'=>'','didar_public_status_field_id'=>'','field_required_overrides'=>array(),'colleague_can_view_internal_history'=>0,'frontend_requests_per_page'=>Didar_Settings::DEFAULT_REQUESTS_PER_PAGE,'file_download_mode'=>Didar_Settings::DEFAULT_FILE_DOWNLOAD_MODE,'didar_debug_logging'=>'off' ); }
+	private function portable_defaults() { return array( 'didar_form_workflows'=>array(),'didar_field_mappings'=>array(),'didar_broker_user_map'=>array(),'didar_default_owner_id'=>'','didar_default_pipeline_id'=>'','didar_system_form_type_field_id'=>'','didar_system_submission_id_field_id'=>'','didar_system_user_id_field_id'=>'','didar_public_status_field_id'=>'','field_required_overrides'=>array(),'profile_field_states'=>Didar_Settings::PROFILE_FIELD_STATES,'didar_user_person_mappings'=>array(),'colleague_can_view_internal_history'=>0,'frontend_requests_per_page'=>Didar_Settings::DEFAULT_REQUESTS_PER_PAGE,'file_download_mode'=>Didar_Settings::DEFAULT_FILE_DOWNLOAD_MODE,'didar_debug_logging'=>'off' ); }
 
 	/**
 	 * Produces the runtime semantic form used by post-write verification. Export
@@ -281,6 +286,12 @@ class Didar_Settings_Transfer {
 
 			case 'field_required_overrides':
 				$out = array(); foreach ( (array) $value as $form_type => $fields ) { foreach ( (array) $fields as $field_key => $state ) { $out[ sanitize_key( (string) $form_type ) ][ sanitize_key( (string) $field_key ) ] = (bool) $state; } } return $this->sort_associative( $out );
+
+			case 'profile_field_states':
+				$out = Didar_Settings::PROFILE_FIELD_STATES; foreach ( (array) $value as $field => $state ) { $field = sanitize_key( (string) $field ); $state = sanitize_key( (string) $state ); if ( isset( $out[ $field ] ) && in_array( $state, array( 'editable', 'readonly', 'disabled' ), true ) ) { $out[ $field ] = $state; } } return $this->sort_associative( $out );
+
+			case 'didar_user_person_mappings':
+				$out = array(); foreach ( (array) $value as $property => $field_key ) { $property = sanitize_key( (string) $property ); $field_key = is_scalar( $field_key ) ? sanitize_text_field( (string) $field_key ) : ''; if ( in_array( $property, array( 'gender', 'display_name', 'profile_image_url' ), true ) && $field_key ) { $out[ $property ] = $field_key; } } return $this->sort_associative( $out );
 
 			case 'colleague_can_view_internal_history': return ! empty( $value ) ? 1 : 0;
 			case 'frontend_requests_per_page': return min( Didar_Settings::MAX_REQUESTS_PER_PAGE, max( Didar_Settings::MIN_REQUESTS_PER_PAGE, absint( $value ) ) );
@@ -340,7 +351,7 @@ class Didar_Settings_Transfer {
 		if ( array_keys( $value ) !== range( 0, count( $value ) - 1 ) ) { ksort( $value, SORT_STRING ); }
 		return $value;
 	}
-	private function diff($old,$new){$groups=array('گردش کار فرم‌ها'=>array('didar_form_workflows'),'نگاشت فیلدهای فرم'=>array('didar_field_mappings'),'کاربران دیدار'=>array('didar_broker_user_map','didar_default_owner_id'),'فیلدهای سیستمی'=>array('didar_system_form_type_field_id','didar_system_submission_id_field_id','didar_system_user_id_field_id'),'وضعیت عمومی'=>array('didar_public_status_field_id'),'سایر تنظیمات'=>array('field_required_overrides','colleague_can_view_internal_history','frontend_requests_per_page','file_download_mode','didar_debug_logging','didar_default_pipeline_id'));$out=array();foreach($groups as $name=>$keys){$changed=0;$same=0;foreach($keys as $k){if(!array_key_exists($k,$new))continue;if(($old[$k]??null)===$new[$k])$same++;else $changed++;}$out[$name]=array('added'=>0,'changed'=>$changed,'unchanged'=>$same,'invalid'=>0);}return $out;}
+	private function diff($old,$new){$groups=array('گردش کار فرم‌ها'=>array('didar_form_workflows'),'نگاشت فیلدهای فرم'=>array('didar_field_mappings'),'کاربران دیدار'=>array('didar_broker_user_map','didar_default_owner_id'),'فیلدهای سیستمی'=>array('didar_system_form_type_field_id','didar_system_submission_id_field_id','didar_system_user_id_field_id'),'وضعیت عمومی'=>array('didar_public_status_field_id'),'فرم اطلاعات کاربری'=>array('profile_field_states','didar_user_person_mappings'),'سایر تنظیمات'=>array('field_required_overrides','colleague_can_view_internal_history','frontend_requests_per_page','file_download_mode','didar_debug_logging','didar_default_pipeline_id'));$out=array();foreach($groups as $name=>$keys){$changed=0;$same=0;foreach($keys as $k){if(!array_key_exists($k,$new))continue;if(($old[$k]??null)===$new[$k])$same++;else $changed++;}$out[$name]=array('added'=>0,'changed'=>$changed,'unchanged'=>$same,'invalid'=>0);}return $out;}
 	public function summary($settings){return array('workflows'=>count((array)($settings['didar_form_workflows']??array())),'field_mappings'=>array_sum(array_map('count',(array)($settings['didar_field_mappings']??array()))),'user_mappings'=>count((array)($settings['didar_broker_user_map']??array())),'system_mappings'=>count(array_filter(array($settings['didar_system_form_type_field_id']??'',$settings['didar_system_submission_id_field_id']??'',$settings['didar_system_user_id_field_id']??''))));}
 	/** Safe diagnostic counts; Field Keys and user identifiers are never logged here. */
 	public function mapping_trace( $settings ) {

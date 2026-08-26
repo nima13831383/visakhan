@@ -233,6 +233,18 @@
 
 .didar-error { color: var(--didar-error); font-size: .88rem; font-weight: 700; margin: 7px 0 0; }
 
+/* Profile fields intentionally extend the shared form language above. */
+.didar-profile-form .didar-profile-section > .didar-grid > .didar-field:has(input[type="file"]) { grid-column: 1 / -1; }
+.didar-profile-form input[readonly] {
+  background: #f4f4f4;
+  color: var(--didar-muted);
+  cursor: not-allowed;
+}
+.didar-profile-form .didar-description {
+  display: block;
+  margin-top: 6px;
+}
+
 .didar-error-summary {
   background: #fff5f4;
   border: 1px solid #f3c6c2;

@@ -13,6 +13,15 @@ class Didar_Settings {
 	const MIN_REQUESTS_PER_PAGE     = 1;
 	const MAX_REQUESTS_PER_PAGE     = 100;
 	const DEFAULT_FILE_DOWNLOAD_MODE = 'secure';
+	const PROFILE_FIELD_STATES = array(
+		'first_name'   => 'editable',
+		'last_name'    => 'editable',
+		'gender'       => 'editable',
+		'display_name' => 'editable',
+		'mobile'       => 'readonly',
+		'email'        => 'editable',
+		'profile_image'=> 'disabled',
+	);
 
 	/** Return a cryptographically random path credential for the inbound webhook. */
 	public static function generate_webhook_secret() {
@@ -69,6 +78,16 @@ class Didar_Settings {
 		$settings = $this->all();
 		$mode     = isset( $settings['file_download_mode'] ) && is_scalar( $settings['file_download_mode'] ) ? sanitize_key( (string) $settings['file_download_mode'] ) : '';
 		return in_array( $mode, array( 'secure', 'direct' ), true ) ? $mode : self::DEFAULT_FILE_DOWNLOAD_MODE;
+	}
+
+	/** Frontend profile-field policy. Mobile is always effectively readonly until a verified Digits change-number flow is integrated. */
+	public function profile_field_state( $field ) {
+		$field    = sanitize_key( (string) $field );
+		$settings = $this->all();
+		$states   = isset( $settings['profile_field_states'] ) && is_array( $settings['profile_field_states'] ) ? $settings['profile_field_states'] : array();
+		$state    = isset( $states[ $field ] ) ? sanitize_key( (string) $states[ $field ] ) : ( self::PROFILE_FIELD_STATES[ $field ] ?? 'disabled' );
+		$state    = in_array( $state, array( 'editable', 'readonly', 'disabled' ), true ) ? $state : ( self::PROFILE_FIELD_STATES[ $field ] ?? 'disabled' );
+		return 'mobile' === $field && 'editable' === $state ? 'readonly' : $state;
 	}
 
 	/**

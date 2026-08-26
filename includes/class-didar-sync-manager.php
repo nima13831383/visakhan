@@ -36,6 +36,11 @@ class Didar_Sync_Manager {
 		$this->mapper   = new Didar_Field_Mapper( $registry, $settings, $files, $this->logger );
 
 		add_action( 'user_register', array( $this, 'queue_user' ), 20, 1 );
+		// Digits writes its phone metadata after wp_create_user(), then fires this
+		// action. The duplicate-safe queue makes the two hooks harmless together.
+		add_action( 'register_new_user', array( $this, 'queue_user' ), 20, 1 );
+		add_action( 'added_user_meta', array( $this, 'maybe_queue_user_mobile_change' ), 20, 4 );
+		add_action( 'updated_user_meta', array( $this, 'maybe_queue_user_mobile_change' ), 20, 4 );
 		add_action( 'didar_submission_created', array( $this, 'queue_submission' ), 20, 1 );
 		add_action( 'didar_submission_updated', array( $this, 'queue_submission' ), 20, 1 );
 		add_action( 'didar_submission_workflow_changed', array( $this, 'queue_submission' ), 20, 1 );
@@ -110,10 +115,30 @@ class Didar_Sync_Manager {
 		}
 	}
 
-	public function queue_user( $user_id ) {
+	public function queue_user( $user_id, $source = 'user_register' ) {
 		if ( ! $this->enabled() || ! absint( $user_id ) ) { return; }
-		$this->logger->log( 'INFO', 'person_sync_queue', 'User Person sync queued.', array( 'entity_type' => 'user', 'local_id' => absint( $user_id ), 'direction' => 'wordpress_to_didar', 'source' => 'user_register' ) );
-		wp_schedule_single_event( time() + 5, self::USER_HOOK, array( absint( $user_id ) ) );
+		$user_id = absint( $user_id );
+		$this->logger->log( 'INFO', 'didar_user_person_sync_started', 'WordPress User to Didar Person sync queued.', array( 'entity_type' => 'user', 'local_id' => $user_id, 'direction' => 'wordpress_to_didar', 'source' => sanitize_key( $source ) ) );
+		if ( ! wp_next_scheduled( self::USER_HOOK, array( $user_id ) ) ) {
+			wp_schedule_single_event( time() + 5, self::USER_HOOK, array( $user_id ) );
+		}
+	}
+
+	/** Digits has its own verified change-number workflows. Observe their canonical meta writes, never write those keys ourselves. */
+	public function maybe_queue_user_mobile_change( $meta_id, $user_id, $meta_key, $meta_value ) {
+		if ( ! in_array( (string) $meta_key, array( 'digits_phone', 'digits_phone_no', 'digt_countrycode' ), true ) ) {
+			return;
+		}
+		$this->queue_user( absint( $user_id ), 'digits_mobile_meta' );
+	}
+
+	/** Public entry point for the frontend profile module; the actual Person logic remains centralized here. */
+	public function sync_user_now( $user_id, $source = 'profile_form' ) {
+		$result = $this->process_user( absint( $user_id ), $source );
+		if ( is_wp_error( $result ) ) {
+			$this->queue_user_retry( absint( $user_id ) );
+		}
+		return $result;
 	}
 
 	public function queue_submission( $post_id ) {
@@ -153,15 +178,18 @@ class Didar_Sync_Manager {
 		return $this->process_submission( $post_id );
 	}
 
-	public function process_user( $user_id ) {
+	public function process_user( $user_id, $source = 'wp_cron' ) {
 		$user = get_user_by( 'id', absint( $user_id ) );
-		if ( ! $user || ! $this->enabled() ) { return; }
+		if ( ! $user || ! $this->enabled() ) { return new WP_Error( 'didar_user_sync_unavailable', 'User or Didar configuration is unavailable.' ); }
 		$settings = $this->settings->all();
-		if ( empty( $settings['didar_default_owner_id'] ) ) { $this->log_user_state( $user->ID, 'pending', 'didar_default_owner_missing' ); return $this->queue_user_retry( $user->ID ); }
+		if ( empty( $settings['didar_default_owner_id'] ) ) { $this->log_user_state( $user->ID, 'pending', 'didar_default_owner_missing' ); $this->queue_user_retry( $user->ID ); return new WP_Error( 'didar_default_owner_missing', 'Didar default owner is missing.' ); }
+		if ( ! $this->mapper->wordpress_user_profile( $user )['mobile'] ) { $this->log_user_state( $user->ID, 'pending', 'didar_mobile_missing' ); $this->queue_user_retry( $user->ID ); return new WP_Error( 'didar_mobile_missing', 'Digits mobile is not available yet.' ); }
 		$trace = Didar_Logger::trace_id( '' ); $this->api->set_trace_id( $trace );
 		$result = $this->resolve_and_sync_person( $user, array(), '', 0, $trace );
-		if ( is_wp_error( $result ) ) { $status = 'didar_person_conflict' === $result->get_error_code() ? 'conflict' : 'pending'; $this->log_user_state( $user->ID, $status, $result->get_error_code() ); if ( 'conflict' !== $status ) { return $this->queue_user_retry( $user->ID ); } return; }
+		if ( is_wp_error( $result ) ) { $status = 'didar_person_conflict' === $result->get_error_code() ? 'conflict' : 'pending'; $this->log_user_state( $user->ID, $status, $result->get_error_code() ); if ( 'conflict' !== $status ) { $this->queue_user_retry( $user->ID ); } return $result; }
 		$this->log_user_state( $user->ID, 'synced', '' );
+		$this->clear_user_retries( $user->ID );
+		return $result;
 	}
 
 	public function process_submission( $post_id ) {
@@ -443,6 +471,29 @@ class Didar_Sync_Manager {
 		$payload = $this->mapper->person_payload( $user, $fields, $form_type );
 		$stored_id = sanitize_text_field( (string) get_user_meta( $user->ID, self::USER_PERSON_META, true ) );
 		if ( $stored_id ) {
+			$detail = $this->api->person_by_id( $stored_id );
+			if ( is_wp_error( $detail ) ) {
+				if ( ! $this->is_person_not_found_error( $detail ) ) {
+					// A network/API failure is not evidence that the link is stale.
+					return $detail;
+				}
+				delete_user_meta( $user->ID, self::USER_PERSON_META );
+				$stored_id = '';
+				$this->logger->log( 'WARNING', 'didar_user_person_stale_link', 'Stored Didar Person ID no longer exists; falling back to exact mobile lookup.', array( 'wp_user_id' => $user->ID, 'trace_id' => $trace ) );
+			}
+		}
+		if ( $stored_id ) {
+			// A mobile change may not silently move this WordPress user to another
+			// Person. Resolve the canonical mobile first and stop on conflict.
+			$mobile_match = $this->find_exact_person_id( $payload, $user->ID, $submission_id, $form_type, $trace );
+			if ( is_wp_error( $mobile_match ) ) {
+				return $mobile_match;
+			}
+			if ( $mobile_match && $mobile_match !== $stored_id ) {
+				$this->logger->log( 'ERROR', 'didar_user_person_mobile_conflict', 'Canonical mobile is owned by another Didar Person; existing user link was preserved.', array( 'wp_user_id' => $user->ID, 'external_id' => $stored_id, 'candidate_person_id' => $mobile_match, 'trace_id' => $trace ) );
+				return new WP_Error( 'didar_person_conflict', 'The mobile number belongs to another Didar Person.', array( 'trace_id' => $trace ) );
+			}
+			$this->logger->log( 'INFO', 'didar_user_person_found_by_id', 'Stored Didar Person ID was verified and retained.', array( 'wp_user_id' => $user->ID, 'external_id' => $stored_id, 'trace_id' => $trace ) );
 			$this->logger->log( 'INFO', 'person_resolution', 'Stored Didar Person ID found; updating the registration-linked profile Person.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $stored_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'source' => 'wordpress_user_profile', 'person_source' => 'wordpress_user_profile' ) );
 			$payload['Id'] = $stored_id;
 			$person_id = $stored_id;
@@ -459,11 +510,18 @@ class Didar_Sync_Manager {
 			if ( is_wp_error( $recovered ) ) { return $recovered; }
 			if ( $recovered ) { $payload['Id'] = $recovered; $result = $this->api->save_person( $payload ); $person_id = $recovered; if ( is_wp_error( $result ) && $this->is_duplicate_contact_error( $result ) ) { $this->logger->log( 'WARNING', 'person_duplicate_recovery', 'Existing Person was resolved; Didar rejected the mapped update as a duplicate, so sync continues with the resolved Person.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace ) ); $result = array( 'Response' => array( 'Id' => $person_id ) ); } elseif ( ! is_wp_error( $result ) ) { $this->logger->log( 'INFO', 'person_duplicate_recovery', 'Duplicate recovery succeeded; existing Person updated.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace ) ); } }
 		}
-		if ( is_wp_error( $result ) ) { $this->logger->log( 'ERROR', 'person_save', 'Person create/update failed.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'error_code' => $result->get_error_code(), 'error_message' => $result->get_error_message(), 'api_response' => $result->get_error_data() ) ); return $result; }
+		if ( is_wp_error( $result ) && $stored_id && $this->is_person_not_found_error( $result ) ) {
+			// The local link is stale. A retry lookup is safe; a network error is
+			// never treated as an absent Person and never creates a duplicate.
+			$resolved = $this->find_exact_person_id( $payload, $user->ID, $submission_id, $form_type, $trace );
+			if ( is_wp_error( $resolved ) ) { return $resolved; }
+			if ( $resolved ) { $payload['Id'] = $resolved; $person_id = $resolved; $result = $this->api->save_person( $payload ); }
+		}
+		if ( is_wp_error( $result ) ) { $this->logger->log( 'ERROR', 'didar_user_person_sync_failed', 'Person create/update failed.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'error_code' => $result->get_error_code() ) ); return $result; }
 		$response = $this->response_object( $result ); $person_id = $person_id ?: ( isset( $response['Id'] ) ? sanitize_text_field( $response['Id'] ) : '' );
 		if ( ! $person_id ) { return new WP_Error( 'didar_person_id_missing', 'Didar Person ID was not returned.', array( 'trace_id' => $trace ) ); }
 		update_user_meta( $user->ID, self::USER_PERSON_META, $person_id );
-		$this->logger->log( 'INFO', $creating ? 'person_created' : 'person_updated', $creating ? 'New Didar Person created from WordPress user registration.' : 'Didar Person profile synchronized from WordPress user registration.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'person_source' => 'wordpress_user_profile' ) );
+		$this->logger->log( 'INFO', $creating ? 'didar_user_person_created' : 'didar_user_person_updated', $creating ? 'New Didar Person created from WordPress user profile.' : 'Didar Person profile synchronized from WordPress user profile.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace, 'person_source' => 'wordpress_user_profile' ) );
 		$this->logger->log( 'INFO', 'person_persisted', 'Didar Person ID persisted in WordPress.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user->ID, 'external_id' => $person_id, 'wp_user_id' => $user->ID, 'form_type' => $form_type, 'trace_id' => $trace ) );
 		return $person_id;
 	}
@@ -493,7 +551,7 @@ class Didar_Sync_Manager {
 			return $person_id;
 		}
 
-		$this->logger->log( 'INFO', 'person_create', 'No Person matched authoritative WordPress user profile; creating the account Person.', $context + array( 'person_payload' => $payload ) );
+		$this->logger->log( 'INFO', 'person_create', 'No Person matched authoritative WordPress user profile; creating the account Person.', $context + array( 'person_payload_fields' => array_keys( $payload ) ) );
 		$created = $this->api->save_person( $payload );
 		if ( is_wp_error( $created ) && $this->is_duplicate_contact_error( $created ) ) {
 			$this->logger->log( 'WARNING', 'person_duplicate_recovery', 'Duplicate Person creation detected; repeating the WordPress profile lookup.', $context );
@@ -524,19 +582,24 @@ class Didar_Sync_Manager {
 	}
 
 	private function find_exact_person_id( $payload, $user_id, $submission_id, $form_type, $trace, $recovery = false ) {
-		$mobile = $this->normalize_mobile( $payload['MobilePhone'] ?? '' ); $email = $this->normalize_email( $payload['Email'] ?? '' );
-		if ( $mobile ) { $matches = $this->search_exact_persons( 'MobilePhone', $payload['MobilePhone'], $mobile, $user_id, $submission_id, $form_type, $trace, $recovery ); if ( is_wp_error( $matches ) ) { return $matches; } if ( 1 === count( $matches ) ) { return $matches[0]; } if ( count( $matches ) > 1 ) { return $this->person_conflict( 'Multiple exact mobile matches found.', $matches, $user_id, $submission_id, $form_type, $trace ); } }
-		if ( $email ) { $matches = $this->search_exact_persons( 'Email', $payload['Email'], $email, $user_id, $submission_id, $form_type, $trace, $recovery ); if ( is_wp_error( $matches ) ) { return $matches; } if ( 1 === count( $matches ) ) { return $matches[0]; } if ( count( $matches ) > 1 ) { return $this->person_conflict( 'Multiple exact email matches found.', $matches, $user_id, $submission_id, $form_type, $trace ); } }
-		return '';
-	}
-
-	private function search_exact_persons( $field, $value, $normalized, $user_id, $submission_id, $form_type, $trace, $recovery ) {
-		$this->logger->log( 'INFO', 'person_search', ( $recovery ? 'Duplicate recovery lookup started.' : 'Exact Person search started.' ), array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user_id, 'wp_user_id' => $user_id, 'form_type' => $form_type, 'trace_id' => $trace, 'match_field' => $field ) );
-		$result = $this->api->search_person( array( $field => $value, 'IsDeleted' => 0 ), 0, 100 );
-		if ( is_wp_error( $result ) ) { return $result; }
-		$matches = array(); foreach ( $this->response_items( $result ) as $person ) { if ( ! is_array( $person ) || empty( $person['Id'] ) ) { continue; } $candidate = 'MobilePhone' === $field ? $this->normalize_mobile( $person['MobilePhone'] ?? '' ) : $this->normalize_email( $person['Email'] ?? '' ); if ( $candidate === $normalized ) { $matches[ sanitize_text_field( (string) $person['Id'] ) ] = true; } }
-		$this->logger->log( count( $matches ) > 1 ? 'WARNING' : 'INFO', 'person_search', 'Exact ' . strtolower( $field ) . ' match count: ' . count( $matches ) . '.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user_id, 'wp_user_id' => $user_id, 'form_type' => $form_type, 'trace_id' => $trace, 'match_field' => $field, 'match_count' => count( $matches ) ) );
-		return array_keys( $matches );
+		$mobile = $this->mapper->normalize_mobile( $payload['MobilePhone'] ?? '' );
+		if ( ! $mobile ) {
+			return new WP_Error( 'didar_mobile_missing', 'A normalized mobile is required for Person resolution.', array( 'trace_id' => $trace ) );
+		}
+		$matches = array();
+		foreach ( $this->mapper->mobile_lookup_variants( $mobile ) as $variant ) {
+			$result = $this->api->person_by_mobile( $variant );
+			if ( is_wp_error( $result ) ) { return $result; }
+			foreach ( $this->response_items( $result ) as $person ) {
+				if ( ! is_array( $person ) || empty( $person['Id'] ) ) { continue; }
+				$candidate = $this->mapper->normalize_mobile( $person['MobilePhone'] ?? ( $person['PhoneNumber'] ?? $variant ) );
+				if ( $candidate === $mobile ) { $matches[ sanitize_text_field( (string) $person['Id'] ) ] = true; }
+			}
+		}
+		$matches = array_keys( $matches );
+		$this->logger->log( count( $matches ) > 1 ? 'WARNING' : 'INFO', 'didar_user_person_found_by_mobile', 'Exact normalized mobile lookup completed.', array( 'wp_user_id' => $user_id, 'local_id' => $submission_id ?: $user_id, 'form_type' => $form_type, 'trace_id' => $trace, 'match_count' => count( $matches ), 'recovery' => (bool) $recovery ) );
+		if ( 1 === count( $matches ) ) { return $matches[0]; }
+		return count( $matches ) > 1 ? $this->person_conflict( 'Multiple exact mobile matches found.', $matches, $user_id, $submission_id, $form_type, $trace ) : '';
 	}
 
 	private function person_conflict( $message, $matches, $user_id, $submission_id, $form_type, $trace ) { $this->logger->log( 'ERROR', 'person_conflict', 'Ambiguous Person conflict; Deal creation stopped.', array( 'entity_type' => 'person', 'local_id' => $submission_id ?: $user_id, 'wp_user_id' => $user_id, 'form_type' => $form_type, 'trace_id' => $trace, 'match_count' => count( $matches ), 'candidate_person_ids' => $matches ) ); return new WP_Error( 'didar_person_conflict', $message, array( 'trace_id' => $trace, 'candidate_count' => count( $matches ) ) ); }
@@ -544,6 +607,7 @@ class Didar_Sync_Manager {
 	private function response_items( $response ) { $value = isset( $response['Response'] ) ? $response['Response'] : array(); if ( isset( $value['List'] ) && is_array( $value['List'] ) ) { return $value['List']; } if ( isset( $value['Items'] ) && is_array( $value['Items'] ) ) { return $value['Items']; } if ( isset( $value[0] ) ) { return $value; } return is_array( $value ) && isset( $value['Id'] ) ? array( $value ) : array(); }
 	private function normalize_mobile( $value ) { $value = strtr( trim( (string) $value ), array( '۰'=>'0','۱'=>'1','۲'=>'2','۳'=>'3','۴'=>'4','۵'=>'5','۶'=>'6','۷'=>'7','۸'=>'8','۹'=>'9','٠'=>'0','١'=>'1','٢'=>'2','٣'=>'3','٤'=>'4','٥'=>'5','٦'=>'6','٧'=>'7','٨'=>'8','٩'=>'9' ) ); $value = preg_replace( '/\D+/', '', $value ); return '00' === substr( $value, 0, 2 ) ? substr( $value, 2 ) : $value; }
 	private function normalize_email( $value ) { return strtolower( trim( sanitize_email( (string) $value ) ) ); }
+	private function is_person_not_found_error( $error ) { $data = $error->get_error_data(); return is_array( $data ) && 404 === absint( $data['status'] ?? 0 ); }
 
 	private function find_submission_by_deal( $deal_id ) { $q = new WP_Query( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => 1, 'meta_key' => self::META_DEAL_ID, 'meta_value' => $deal_id, 'no_found_rows' => true ) ); return ! empty( $q->posts[0] ) ? absint( $q->posts[0] ) : 0; }
 	private function find_submission_by_submission_id( $submission_id, $deal_id = '' ) {
@@ -611,5 +675,6 @@ class Didar_Sync_Manager {
 	private function success( $post_id, $deal_id, $internal_status = '' ) { $state = $this->state( $post_id ); $state['status'] = 'synced'; $state['last_error'] = ''; $state['last_synced_at'] = time(); $state['deal_id'] = $deal_id; $state['last_synced_internal_status'] = sanitize_key( (string) $internal_status ); update_post_meta( $post_id, self::META_STATE, $state ); return true; }
 	private function log_user_state( $user_id, $status, $error ) { $state = get_user_meta( $user_id, '_didar_person_sync_state', true ); $state = is_array( $state ) ? $state : array(); $state['status'] = $status; $state['error'] = sanitize_key( $error ); $state['attempts'] = absint( $state['attempts'] ?? 0 ) + 1; $state['updated_at'] = time(); update_user_meta( $user_id, '_didar_person_sync_state', $state ); }
 	private function queue_user_retry( $user_id ) { $state = get_user_meta( $user_id, '_didar_person_sync_state', true ); if ( is_array( $state ) && absint( $state['attempts'] ?? 0 ) < 10 ) { wp_schedule_single_event( time() + min( HOUR_IN_SECONDS, 60 * max( 1, absint( $state['attempts'] ) ) ), self::USER_HOOK, array( absint( $user_id ) ) ); } }
+	private function clear_user_retries( $user_id ) { while ( $when = wp_next_scheduled( self::USER_HOOK, array( absint( $user_id ) ) ) ) { wp_unschedule_event( $when, self::USER_HOOK, array( absint( $user_id ) ) ); } }
 	private function seen_webhook( $event_id ) { $seen = get_option( 'didar_seen_webhooks', array() ); $seen = is_array( $seen ) ? $seen : array(); if ( isset( $seen[ $event_id ] ) ) { return true; } $seen[ $event_id ] = time(); if ( count( $seen ) > 500 ) { $seen = array_slice( $seen, -500, 500, true ); } update_option( 'didar_seen_webhooks', $seen, false ); return false; }
 }

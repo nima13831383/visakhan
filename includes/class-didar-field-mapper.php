@@ -39,27 +39,40 @@ class Didar_Field_Mapper {
 		$profile = $this->wordpress_user_profile( $user );
 		$settings = $this->settings->all();
 		$owner_id = isset( $settings['didar_default_owner_id'] ) ? sanitize_text_field( (string) $settings['didar_default_owner_id'] ) : '';
-		return array(
-			'Type'        => 'Person',
+		$payload = array(
+			// The documented API value is lowercase "person".
+			'Type'        => 'person',
 			'FirstName'   => $profile['first_name'],
-			'LastName'    => $profile['last_name'],
+			// Didar requires LastName. A WordPress display name is a safe local
+			// fallback; request/submission values are intentionally never used.
+			'LastName'    => $profile['last_name'] ?: ( $profile['display_name'] ?: sanitize_text_field( (string) $user->user_login ) ),
 			'Email'       => $profile['email'],
 			'MobilePhone' => $profile['mobile'],
 			'OwnerId'     => $owner_id,
 		);
+
+		$custom = $this->person_profile_custom_fields( $profile, $settings );
+		if ( $custom ) {
+			$payload['Fields'] = $custom;
+		}
+
+		return $payload;
 	}
 
 	/** Return account/profile identity data, with Digits' canonical mobile metadata first. */
 	public function wordpress_user_profile( $user ) {
 		if ( ! $user || empty( $user->ID ) ) {
-			return array( 'first_name' => '', 'last_name' => '', 'email' => '', 'mobile' => '' );
+			return array( 'first_name' => '', 'last_name' => '', 'display_name' => '', 'email' => '', 'mobile' => '', 'gender' => '', 'profile_image_url' => '' );
 		}
 
 		return array(
 			'first_name' => sanitize_text_field( (string) get_user_meta( $user->ID, 'first_name', true ) ),
 			'last_name'  => sanitize_text_field( (string) get_user_meta( $user->ID, 'last_name', true ) ),
+			'display_name' => sanitize_text_field( (string) $user->display_name ),
 			'email'      => sanitize_email( (string) $user->user_email ),
-			'mobile'     => $this->wordpress_user_mobile( $user->ID ),
+			'mobile'     => $this->normalize_mobile( $this->wordpress_user_mobile( $user->ID ) ),
+			'gender'     => $this->user_gender( $user->ID ),
+			'profile_image_url' => $this->profile_image_url( $user->ID ),
 		);
 	}
 
@@ -74,6 +87,93 @@ class Didar_Field_Mapper {
 		$phone_no   = sanitize_text_field( (string) get_user_meta( $user_id, 'digits_phone_no', true ) );
 		$country    = sanitize_text_field( (string) get_user_meta( $user_id, 'digt_countrycode', true ) );
 		return $country . $phone_no;
+	}
+
+	/**
+	 * The documented Didar mobile lookup example uses the Iranian national
+	 * representation (0912...). Keep that representation for Iranian numbers
+	 * so Digits' +98/98/0098 variants all refer to one Person.
+	 */
+	public function normalize_mobile( $value ) {
+		$value = strtr(
+			(string) $value,
+			array(
+				'۰' => '0', '۱' => '1', '۲' => '2', '۳' => '3', '۴' => '4',
+				'۵' => '5', '۶' => '6', '۷' => '7', '۸' => '8', '۹' => '9',
+				'٠' => '0', '١' => '1', '٢' => '2', '٣' => '3', '٤' => '4',
+				'٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9',
+			)
+		);
+		$digits = preg_replace( '/\D+/', '', $value );
+		if ( 0 === strpos( $digits, '0098' ) ) {
+			$digits = substr( $digits, 2 );
+		}
+		if ( 0 === strpos( $digits, '98' ) && 12 === strlen( $digits ) && '9' === substr( $digits, 2, 1 ) ) {
+			return '0' . substr( $digits, 2 );
+		}
+		if ( 10 === strlen( $digits ) && '9' === substr( $digits, 0, 1 ) ) {
+			return '0' . $digits;
+		}
+		return $digits;
+	}
+
+	/** Return supported stored variants for duplicate-safe Didar lookup. */
+	public function mobile_lookup_variants( $value ) {
+		$canonical = $this->normalize_mobile( $value );
+		if ( ! $canonical ) {
+			return array();
+		}
+		if ( 11 === strlen( $canonical ) && '09' === substr( $canonical, 0, 2 ) ) {
+			$international = '98' . substr( $canonical, 1 );
+			return array( $canonical, '+' . $international, $international, '00' . $international );
+		}
+		return array( $canonical );
+	}
+
+	private function user_gender( $user_id ) {
+		$user_id = absint( $user_id );
+		$gender  = sanitize_text_field( (string) get_user_meta( $user_id, 'gender', true ) );
+		if ( '' === $gender ) {
+			$legacy = sanitize_text_field( (string) get_user_meta( $user_id, 'didar_gender', true ) );
+			if ( '' !== $legacy ) {
+				$gender = $legacy;
+				update_user_meta( $user_id, 'gender', $gender );
+			}
+		}
+		return in_array( $gender, array( 'male', 'female', 'مرد', 'زن', 'خانم' ), true ) ? $gender : '';
+	}
+
+	private function profile_image_url( $user_id ) {
+		$user_id = absint( $user_id );
+		$value   = get_user_meta( $user_id, 'profile_image', true );
+		if ( '' === $value || null === $value ) {
+			$legacy = get_user_meta( $user_id, 'didar_profile_image_id', true );
+			if ( '' !== $legacy && null !== $legacy ) {
+				$value = $legacy;
+				update_user_meta( $user_id, 'profile_image', $value );
+			}
+		}
+		if ( is_numeric( $value ) ) {
+			return esc_url_raw( (string) wp_get_attachment_url( absint( $value ) ) );
+		}
+		return esc_url_raw( (string) $value );
+	}
+
+	private function person_profile_custom_fields( $profile, $settings ) {
+		$mapping = isset( $settings['didar_user_person_mappings'] ) && is_array( $settings['didar_user_person_mappings'] ) ? $settings['didar_user_person_mappings'] : array();
+		$values  = array(
+			'gender'            => $profile['gender'],
+			'display_name'      => $profile['display_name'],
+			'profile_image_url' => $profile['profile_image_url'],
+		);
+		$out = array();
+		foreach ( $values as $property => $value ) {
+			$key = isset( $mapping[ $property ] ) && is_scalar( $mapping[ $property ] ) ? sanitize_text_field( (string) $mapping[ $property ] ) : '';
+			if ( $key && '' !== $value ) {
+				$out[ $key ] = $value;
+			}
+		}
+		return $out;
 	}
 
 	public function deal_fields( $form_type, $fields, $post_id = 0 ) {

@@ -36,6 +36,16 @@ class Didar_Api_Client {
 		return $this->request( '/api/contact/save', array( 'Contact' => (array) $contact ) );
 	}
 
+	/** Documented exact Person lookup; callers must never treat an error as no match. */
+	public function person_by_mobile( $mobile ) {
+		return $this->request( '/api/contact/getbyphonenumber', array( 'MobilePhone' => sanitize_text_field( (string) $mobile ) ) );
+	}
+
+	/** Documented Person detail lookup, used to detect a stale local Person link safely. */
+	public function person_by_id( $person_id ) {
+		return $this->request( '/api/contact/GetContactDetail', array( 'Id' => sanitize_text_field( (string) $person_id ) ) );
+	}
+
 	public function search_deal( $criteria, $from = 0, $limit = 10 ) {
 		return $this->request( '/api/deal/search_v2', array( 'Criteria' => (array) $criteria, 'From' => absint( $from ), 'Limit' => absint( $limit ) ) );
 	}
@@ -78,7 +88,7 @@ class Didar_Api_Client {
 			$args['body'] = wp_json_encode( $body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
 		}
 
-		$this->logger->log( 'INFO', 'api_request', 'Didar API request started.', array( 'source' => 'api_client', 'endpoint' => $path, 'http_method' => 'POST', 'request_payload' => $body, 'trace_id' => $this->trace_id ) );
+		$this->logger->log( 'INFO', 'api_request', 'Didar API request started.', array( 'source' => 'api_client', 'endpoint' => $path, 'http_method' => 'POST', 'request_payload' => $this->safe_request_payload( $path, $body ), 'trace_id' => $this->trace_id ) );
 		$response = wp_remote_post( esc_url_raw( $url ), $args );
 		if ( is_wp_error( $response ) ) {
 			$this->logger->log( 'ERROR', 'api_request', 'Didar API network error.', array( 'source' => 'api_client', 'endpoint' => $path, 'elapsed_ms' => round( ( microtime( true ) - $started ) * 1000 ), 'error_code' => $response->get_error_code(), 'error_message' => $response->get_error_message(), 'trace_id' => $this->trace_id ) );
@@ -103,5 +113,18 @@ class Didar_Api_Client {
 		$this->logger->log( 'INFO', 'api_response', 'Didar API request completed.', array( 'source' => 'api_client', 'endpoint' => $path, 'http_status' => $status, 'elapsed_ms' => round( ( microtime( true ) - $started ) * 1000 ), 'response_status' => isset( $data['Status'] ) ? $data['Status'] : '', 'trace_id' => $this->trace_id ) );
 
 		return $data;
+	}
+
+	/** Person profile values are PII; log only structural information for those endpoints. */
+	private function safe_request_payload( $path, $body ) {
+		if ( 0 === strpos( (string) $path, '/api/contact/' ) && is_array( $body ) ) {
+			$contact = isset( $body['Contact'] ) && is_array( $body['Contact'] ) ? $body['Contact'] : array();
+			return array(
+				'payload_type' => isset( $body['Contact'] ) ? 'contact' : 'contact_lookup',
+				'contact_fields' => $contact ? array_keys( $contact ) : array_keys( $body ),
+				'has_person_id' => ! empty( $contact['Id'] ) || ! empty( $body['Id'] ),
+			);
+		}
+		return $body;
 	}
 }
