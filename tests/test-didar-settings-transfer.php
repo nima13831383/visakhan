@@ -48,4 +48,54 @@ class Test_Didar_Settings_Transfer extends WP_UnitTestCase {
 		$this->assertSame( array( 'target' => 'deal_custom', 'field' => 'Field_ABC_1' ), $preview['incoming']['didar_field_mappings']['consultation']['first_name'] );
 		$this->assertSame( array( 'target' => 'deal_custom', 'field' => 'Field_DEF_2' ), $preview['incoming']['didar_field_mappings']['consultation']['last_name'] );
 	}
+
+	public function test_canonical_deal_keys_and_resolved_user_survive_missing_metadata() {
+		$user_id = self::factory()->user->create( array( 'user_login' => 'technical_unit2', 'user_email' => 'a4170500@gmail.com' ) );
+		$cache_names = array( Didar_Custom_Field_Catalog::OPTION_NAME, Didar_User_Catalog::OPTION_NAME, Didar_Workflow_Manager::PIPELINES_OPTION );
+		$saved = array(); foreach ( $cache_names as $name ) { $saved[ $name ] = get_option( $name, false ); delete_option( $name ); }
+		$data = array( 'format' => Didar_Settings_Transfer::FORMAT, 'schema_version' => 1, 'settings' => array(
+			'didar_field_mappings' => array( 'consultation' => array(
+				'first_name' => array( 'target' => 'deal_custom', 'field' => 'Field_8783_0_147' ),
+				'description' => array( 'target' => 'deal_custom', 'field' => 'Field_8783_1_152' ),
+			) ),
+			'didar_system_form_type_field_id' => 'Field_8783_0_153',
+			'didar_system_submission_id_field_id' => 'Field_8783_12_154',
+			'didar_system_user_id_field_id' => 'Field_8783_0_155',
+			'didar_broker_user_map' => array( array( 'wordpress_user_login' => 'technical_unit2', 'wordpress_user_email' => 'a4170500@gmail.com', 'didar_user_id' => 'fb4d560d-836d-4927-a81c-27e088c101a9' ) ),
+		) );
+		$preview = $this->transfer->preview( $data, 'replace' );
+		$this->assertEmpty( $preview['errors'] );
+		$this->assertSame( 2, $preview['trace']['metadata_validated']['total'] );
+		$this->assertSame( 2, $preview['trace']['metadata_validated']['deal_custom'] );
+		$result = $this->transfer->apply( $preview );
+		$this->assertNotWPError( $result );
+		$saved_settings = get_option( Didar_Settings::OPTION_NAME );
+		$this->assertSame( 'Field_8783_12_154', $saved_settings['didar_system_submission_id_field_id'] );
+		$this->assertSame( 'Field_8783_0_147', $saved_settings['didar_field_mappings']['consultation']['first_name']['field'] );
+		$this->assertSame( 'fb4d560d-836d-4927-a81c-27e088c101a9', $saved_settings['didar_broker_user_map'][ $user_id ] );
+		foreach ( $saved as $name => $value ) { if ( false === $value ) { delete_option( $name ); } else { update_option( $name, $value, false ); } }
+	}
+
+	public function test_canonical_verification_ignores_mapping_order_and_scalar_representations() {
+		$left = $this->transfer->canonicalize_portable_option( 'didar_field_mappings', array( 'consultation' => array( 'last_name' => array( 'field' => 'Field_B', 'target' => 'deal_custom' ), 'first_name' => array( 'type' => 'deal_custom', 'key' => 'Field_A' ) ) ) );
+		$right = $this->transfer->canonicalize_portable_option( 'didar_field_mappings', array( 'consultation' => array( 'first_name' => array( 'target' => 'deal_custom', 'field' => 'Field_A' ), 'last_name' => array( 'target' => 'deal_custom', 'field' => 'Field_B' ) ) ) );
+		$this->assertSame( $left, $right );
+		$this->assertSame( 1, $this->transfer->canonicalize_portable_option( 'colleague_can_view_internal_history', true ) );
+		$this->assertSame( 10, $this->transfer->canonicalize_portable_option( 'frontend_requests_per_page', '10' ) );
+	}
+
+	public function test_apply_accepts_unchanged_value_and_reports_real_post_write_mismatch() {
+		$data = array( 'format' => Didar_Settings_Transfer::FORMAT, 'schema_version' => 1, 'settings' => array( 'didar_public_status_field_id' => 'Field_expected' ) );
+		$preview = $this->transfer->preview( $data, 'replace' );
+		$filter = function ( $new_value ) { if ( 'Field_expected' === ( $new_value['didar_public_status_field_id'] ?? '' ) ) { $new_value['didar_public_status_field_id'] = 'Field_changed_after_write'; } return $new_value; };
+		add_filter( 'pre_update_option_' . Didar_Settings::OPTION_NAME, $filter );
+		$result = $this->transfer->apply( $preview );
+		remove_filter( 'pre_update_option_' . Didar_Settings::OPTION_NAME, $filter );
+		$this->assertWPError( $result );
+		$this->assertSame( 'didar_import_verify', $result->get_error_code() );
+		$this->assertSame( 'didar_public_status_field_id', $result->get_error_data()['option'] );
+		$this->assertSame( '', get_option( Didar_Settings::OPTION_NAME, array() )['didar_public_status_field_id'] ?? '' );
+		$unchanged = $this->transfer->preview( array( 'format' => Didar_Settings_Transfer::FORMAT, 'schema_version' => 1, 'settings' => array( 'didar_public_status_field_id' => '' ) ), 'replace' );
+		$this->assertNotWPError( $this->transfer->apply( $unchanged ) );
+	}
 }

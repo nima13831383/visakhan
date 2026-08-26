@@ -432,6 +432,12 @@ class Didar_Admin {
 	}
 
 	private function render_settings_import_preview( $preview ) {
+		$trace = isset( $preview['trace'] ) && is_array( $preview['trace'] ) ? $preview['trace'] : array();
+		if ( $trace ) {
+			echo '<p><strong>نگاشت‌های موجود در فایل / قابل اعمال</strong></p><table class="widefat striped"><thead><tr><th>مرحله</th><th>کل</th><th>Deal Custom</th><th>Person Native</th><th>فیلد سیستمی</th><th>نگاشت کاربر</th></tr></thead><tbody>';
+			foreach ( $trace as $stage => $counts ) { if ( ! is_array( $counts ) ) { continue; } echo '<tr><td>' . esc_html( $stage ) . ( ! empty( $counts['status'] ) ? ' (' . esc_html( $counts['status'] ) . ')' : '' ) . '</td><td>' . absint( $counts['total'] ?? 0 ) . '</td><td>' . absint( $counts['deal_custom'] ?? 0 ) . '</td><td>' . absint( $counts['person_native'] ?? 0 ) . '</td><td>' . absint( $counts['system_fields'] ?? 0 ) . '</td><td>' . absint( $counts['user_mappings'] ?? 0 ) . '</td></tr>'; }
+			echo '</tbody></table>';
+		}
 		echo '<h3>پیش‌نمایش درون‌ریزی</h3><p>خطا: <strong>' . absint( count( $preview['errors'] ) ) . '</strong> | هشدار: <strong>' . absint( count( $preview['warnings'] ) ) . '</strong> | بررسی‌نشده: <strong>' . absint( count( $preview['not_verified'] ?? array() ) ) . '</strong></p><table class="widefat striped"><thead><tr><th>دسته</th><th>اضافه می‌شود</th><th>تغییر می‌کند</th><th>بدون تغییر</th><th>نامعتبر</th></tr></thead><tbody>';
 		foreach ( $preview['diff'] as $name => $counts ) { echo '<tr><td>' . esc_html( $name ) . '</td><td>' . absint( $counts['added'] ) . '</td><td>' . absint( $counts['changed'] ) . '</td><td>' . absint( $counts['unchanged'] ) . '</td><td>' . absint( $counts['invalid'] ) . '</td></tr>'; }
 		echo '</tbody></table>';

@@ -33,14 +33,28 @@ class Didar_Workflow_Manager {
 
 	public function custom_fields() { return $this->custom_fields->fields(); }
 	public function custom_field_cache_info() { return $this->custom_fields->cache_info(); }
-	public function custom_field( $key ) { return $this->custom_fields->field( $key ); }
+	public function custom_field( $key ) {
+		$field = $this->custom_fields->field( $key );
+		if ( $field ) { return $field; }
+		// An unknown portable Field Key remains storage-valid and is rendered as an
+		// unverified saved value. Metadata is advisory and must not delete it.
+		$key = sanitize_text_field( (string) $key );
+		return array( 'key' => $key, 'title' => $key, 'field_type' => 'deal', 'is_deleted' => false, 'excluded_pipeline_ids' => array(), 'unverified' => true );
+	}
 	public function deal_fields_for_pipeline( $pipeline_id ) { return $this->custom_fields->deal_fields_for_pipeline( $pipeline_id ); }
-	public function custom_field_available_for_pipeline( $field, $pipeline_id ) { return Didar_Custom_Field_Catalog::is_available_for_pipeline( $field, $pipeline_id ); }
+	public function custom_field_available_for_pipeline( $field, $pipeline_id ) {
+		return ! empty( $field['unverified'] ) || ! $this->custom_field_metadata_is_current() || Didar_Custom_Field_Catalog::is_available_for_pipeline( $field, $pipeline_id );
+	}
 	public function custom_field_available_pipeline_ids( $field ) { return $this->custom_fields->available_pipeline_ids( $field, $this->pipelines() ); }
 	public function didar_users() { return $this->users->users(); }
 	public function didar_user_cache_info() { return $this->users->cache_info(); }
 	public function didar_user_by_user_id( $user_id ) { return $this->users->user_by_user_id( $user_id ); }
 	public function didar_user_by_id( $id ) { return $this->users->user_by_id( $id ); }
+	private function custom_field_metadata_is_current() {
+		$cache = $this->custom_fields->cache_info();
+		$stamp = ! empty( $cache['refreshed_at_gmt'] ) ? strtotime( (string) $cache['refreshed_at_gmt'] . ' UTC' ) : false;
+		return ! empty( $cache['fields'] ) && $stamp && ( time() - $stamp ) <= DAY_IN_SECONDS && empty( $cache['last_error'] );
+	}
 
 	public function refresh() {
 		$this->logger->log( 'INFO', 'didar_custom_fields_refresh_started', 'Didar metadata refresh started.', array( 'source' => 'admin' ) );
