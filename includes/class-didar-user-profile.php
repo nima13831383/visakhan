@@ -53,6 +53,11 @@ class Didar_User_Profile {
 		echo '<form method="post" enctype="multipart/form-data" class="didar-form" novalidate>';
 		wp_nonce_field( 'didar_profile_update', 'didar_profile_nonce' );
 		echo '<input type="hidden" name="didar_profile_action" value="update">';
+		// The form edits display_name, not nickname. Keep the native POST key
+		// valid for any other profile handler on this request, but do not trust it
+		// when saving: save_current_user() derives the value from current user data.
+		$nickname = $this->normalized_nickname( $user, $profile['nickname'] );
+		echo '<input type="hidden" name="nickname" value="' . esc_attr( $nickname ) . '">';
 		$this->profile_image_area( $user, $profile['profile_image_url'] );
 		echo '<header class="didar-form-header didar-profile-edit"><p class="didar-eyebrow">حساب کاربری</p><h2>ویرایش اطلاعات کاربری</h2></header>';
 		echo '<div class="didar-section didar-profile-section"><div class="didar-grid">';
@@ -157,6 +162,18 @@ class Didar_User_Profile {
 		}
 
 		if ( count( $update ) > 1 ) {
+			// wp_update_user() must receive a native, non-empty nickname. This is
+			// derived solely from stored user data, never from a mutable hidden input.
+			$update['nickname'] = $this->normalized_nickname( $user, $current['nickname'] );
+			if ( '' === $update['nickname'] ) {
+				return new WP_Error( 'didar_profile_nickname_unavailable', 'نام مستعار کاربر برای ذخیره‌سازی در دسترس نیست.' );
+			}
+			// Digits may create a non-ASCII user_login with a percent-encoded
+			// user_nicename. WordPress re-sanitizes that stored value on every
+			// update and can reduce it to an empty string before its hooks run.
+			// Preserve a core-valid nicename; repair only an invalid one without
+			// changing the login or using mobile/email identity data.
+			$update['user_nicename'] = $this->normalized_user_nicename( $user );
 			$result = wp_update_user( $update );
 			if ( is_wp_error( $result ) ) { return $result; }
 		}
@@ -171,6 +188,41 @@ class Didar_User_Profile {
 			return array( 'notice' => 'اطلاعات شما ذخیره شد. همگام‌سازی دیدار در پس‌زمینه دوباره تلاش می‌شود.' );
 		}
 		return array( 'notice' => 'اطلاعات کاربری با موفقیت ذخیره شد.' );
+	}
+
+	/**
+	 * Preserve an existing nickname; otherwise initialize it from the existing
+	 * display name, then use the immutable login as the final deterministic
+	 * WordPress-integrity fallback. This does not change user_login.
+	 */
+	private function normalized_nickname( $user, $nickname = '' ) {
+		$nickname = sanitize_text_field( (string) $nickname );
+		if ( '' !== $nickname ) {
+			return $nickname;
+		}
+
+		$display_name = $user ? sanitize_text_field( (string) $user->display_name ) : '';
+		if ( '' !== $display_name ) {
+			return $display_name;
+		}
+
+		return $user ? sanitize_text_field( (string) $user->user_login ) : '';
+	}
+
+	/** Return a value that survives WordPress' strict user_nicename sanitizer. */
+	private function normalized_user_nicename( $user ) {
+		if ( ! $user || ! $user->ID ) {
+			return '';
+		}
+
+		$nicename = sanitize_title( sanitize_user( (string) $user->user_nicename, true ) );
+		if ( '' !== $nicename ) {
+			return $nicename;
+		}
+
+		// A WordPress user ID is stable and ASCII-safe. This fallback repairs
+		// only legacy invalid nicenames; user_login itself is never modified.
+		return 'user-' . absint( $user->ID );
 	}
 
 	private function save_profile_image( $user_id ) {

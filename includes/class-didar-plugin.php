@@ -49,6 +49,9 @@ final class Didar_Plugin {
 		$this->service   = new Didar_Submission_Service( $this->registry, $this->event_log, $this->settings, $this->file_service );
 		$this->file_service->set_submission_service( $this->service );
 		$this->sync_manager = new Didar_Sync_Manager( $this->registry, $this->settings, $this->event_log, $this->service, $this->file_service, $this->logger );
+		// File replacement does not run activation hooks. Keep background workers
+		// healthy on every normal bootstrap so pending durable work cannot strand.
+		$this->ensure_runtime_workers();
 
 		new Didar_Shortcodes( $this->registry, $this->renderer, $this->validator, $this->service, $this->settings, $this->file_service, $this->request_search );
 		new Didar_User_Profile( $this->registry, $this->settings, $this->sync_manager, $this->logger );
@@ -65,6 +68,18 @@ final class Didar_Plugin {
 
 	public function backfill_last_updated() {
 		$this->event_log->backfill_last_updated();
+	}
+
+	/** Keep all recurring plugin workers healthy even when activation did not run. */
+	private function ensure_runtime_workers() {
+		$this->sync_manager->ensure_worker_schedule();
+		if ( wp_next_scheduled( 'didar_cleanup_temporary_uploads' ) ) {
+			return;
+		}
+		$result = wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', 'didar_cleanup_temporary_uploads', array(), true );
+		if ( is_wp_error( $result ) || false === $result ) {
+			$this->logger->log( 'ERROR', 'sync_schedule_failed', 'Didar temporary-upload cleanup worker could not be scheduled.', array( 'source' => 'plugin_bootstrap', 'queue_job_id' => 'didar_cleanup_temporary_uploads', 'error_code' => is_wp_error( $result ) ? $result->get_error_code() : 'schedule_failed', 'error_message' => is_wp_error( $result ) ? $result->get_error_message() : 'wp_schedule_event returned false' ) );
+		}
 	}
 
 	public static function activate() {
@@ -95,17 +110,12 @@ final class Didar_Plugin {
 
 		self::instance()->file_service->sync_storage_protection();
 
-		if ( ! wp_next_scheduled( 'didar_cleanup_temporary_uploads' ) ) {
-			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', 'didar_cleanup_temporary_uploads' );
-		}
+		self::instance()->ensure_runtime_workers();
 	}
 
 	public static function deactivate() {
 		wp_clear_scheduled_hook( Didar_Event_Log::BACKFILL_HOOK );
-		$timestamp = wp_next_scheduled( 'didar_cleanup_temporary_uploads' );
-		if ( $timestamp ) {
-			wp_unschedule_event( $timestamp, 'didar_cleanup_temporary_uploads' );
-		}
+		wp_clear_scheduled_hook( 'didar_cleanup_temporary_uploads' );
 		wp_clear_scheduled_hook( Didar_Sync_Manager::CRON_HOOK );
 		wp_clear_scheduled_hook( Didar_Sync_Manager::USER_HOOK );
 	}

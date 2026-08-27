@@ -62,18 +62,32 @@ class Didar_Field_Mapper {
 	/** Return account/profile identity data, with Digits' canonical mobile metadata first. */
 	public function wordpress_user_profile( $user ) {
 		if ( ! $user || empty( $user->ID ) ) {
-			return array( 'first_name' => '', 'last_name' => '', 'display_name' => '', 'email' => '', 'mobile' => '', 'gender' => '', 'profile_image_url' => '' );
+			return array( 'first_name' => '', 'last_name' => '', 'nickname' => '', 'display_name' => '', 'email' => '', 'mobile' => '', 'gender' => '', 'profile_image_url' => '' );
 		}
 
 		return array(
-			'first_name' => sanitize_text_field( (string) get_user_meta( $user->ID, 'first_name', true ) ),
-			'last_name'  => sanitize_text_field( (string) get_user_meta( $user->ID, 'last_name', true ) ),
+			// Digits' WooCommerce integration stores name fields under these
+			// billing keys in some registration flows. WordPress remains
+			// canonical, so those values are read only when the WP field is empty.
+			'first_name' => $this->wordpress_user_name( $user->ID, 'first_name', 'billing_first_name' ),
+			'last_name'  => $this->wordpress_user_name( $user->ID, 'last_name', 'billing_last_name' ),
+			'nickname'   => sanitize_text_field( (string) get_user_meta( $user->ID, 'nickname', true ) ),
 			'display_name' => sanitize_text_field( (string) $user->display_name ),
 			'email'      => sanitize_email( (string) $user->user_email ),
 			'mobile'     => $this->normalize_mobile( $this->wordpress_user_mobile( $user->ID ) ),
 			'gender'     => $this->user_gender( $user->ID ),
 			'profile_image_url' => $this->profile_image_url( $user->ID ),
 		);
+	}
+
+	/** Prefer canonical WordPress name metadata over the installed Digits/WooCommerce fallback. */
+	private function wordpress_user_name( $user_id, $wordpress_key, $digits_fallback_key ) {
+		$value = sanitize_text_field( (string) get_user_meta( $user_id, $wordpress_key, true ) );
+		if ( '' !== $value ) {
+			return $value;
+		}
+
+		return sanitize_text_field( (string) get_user_meta( $user_id, $digits_fallback_key, true ) );
 	}
 
 	/** Resolve the installed Digits value; do not use form-entered or guessed mobile keys. */

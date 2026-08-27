@@ -10,6 +10,9 @@ class Didar_Sync_Manager {
 	const WEBHOOK_RATE_WINDOW = 60;
 	const CRON_HOOK = 'didar_process_sync';
 	const USER_HOOK = 'didar_process_user_sync';
+	const WORKER_SCHEDULE = 'didar_every_five_minutes';
+	const LOCK_PREFIX = 'didar_submission_sync_lock_';
+	const LOCK_TTL = 120;
 	const META_DEAL_ID = '_didar_deal_id';
 	const META_PERSON_ID = '_didar_person_id';
 	const META_STATE = '_didar_sync_state';
@@ -45,12 +48,46 @@ class Didar_Sync_Manager {
 		add_action( 'didar_submission_updated', array( $this, 'queue_submission' ), 20, 1 );
 		add_action( 'didar_submission_workflow_changed', array( $this, 'queue_submission' ), 20, 1 );
 		add_action( self::CRON_HOOK, array( $this, 'process_submission' ), 10, 1 );
+		add_filter( 'cron_schedules', array( $this, 'register_cron_schedule' ) );
 		add_action( self::USER_HOOK, array( $this, 'process_user' ), 10, 1 );
 		add_action( 'rest_api_init', array( $this, 'register_webhook_route' ) );
 		add_filter( 'pre_delete_post', array( $this, 'guard_submission_delete' ), 10, 3 );
 		add_filter( 'pre_trash_post', array( $this, 'guard_submission_delete' ), 10, 3 );
 		add_action( 'transition_post_status', array( $this, 'record_submission_trash' ), 10, 3 );
 		add_action( 'before_delete_post', array( $this, 'record_submission_delete' ), 20, 2 );
+	}
+
+	/** Register the only additional interval needed for the durable submission sweep. */
+	public function register_cron_schedule( $schedules ) {
+		if ( ! isset( $schedules[ self::WORKER_SCHEDULE ] ) ) {
+			$schedules[ self::WORKER_SCHEDULE ] = array( 'interval' => 5 * MINUTE_IN_SECONDS, 'display' => 'Didar every five minutes' );
+		}
+		return $schedules;
+	}
+
+	/**
+	 * Ensure a recurring no-argument variant of CRON_HOOK exists. Per-submission
+	 * single events use the same hook with an ID argument; WP-Cron keeps them
+	 * distinct. This sweep recovers durable pending post-meta jobs if any single
+	 * event was lost or WP-Cron was unavailable when it was queued.
+	 */
+	public function ensure_worker_schedule() {
+		$submission_ready = $this->ensure_recurring_hook( self::CRON_HOOK, 'submission' );
+		$user_ready       = $this->ensure_recurring_hook( self::USER_HOOK, 'user' );
+		return $submission_ready && $user_ready;
+	}
+
+	private function ensure_recurring_hook( $hook, $entity_type ) {
+		if ( wp_next_scheduled( $hook ) ) {
+			return true;
+		}
+		$result = wp_schedule_event( time() + MINUTE_IN_SECONDS, self::WORKER_SCHEDULE, $hook, array(), true );
+		if ( is_wp_error( $result ) || false === $result ) {
+			$this->logger->log( 'ERROR', 'sync_schedule_failed', 'Didar durable worker could not be scheduled.', array( 'entity_type' => $entity_type, 'source' => 'plugin_bootstrap', 'queue_job_id' => $hook, 'error_code' => is_wp_error( $result ) ? $result->get_error_code() : 'schedule_failed', 'error_message' => is_wp_error( $result ) ? $result->get_error_message() : 'wp_schedule_event returned false' ) );
+			return false;
+		}
+		$this->logger->log( 'INFO', 'sync_worker_scheduled', 'Didar durable worker schedule was restored or created.', array( 'entity_type' => $entity_type, 'source' => 'plugin_bootstrap', 'queue_job_id' => $hook ) );
+		return true;
 	}
 
 	/** Normal customers have no request deletion path, including direct wp_delete_post calls. */
@@ -120,7 +157,8 @@ class Didar_Sync_Manager {
 		$user_id = absint( $user_id );
 		$this->logger->log( 'INFO', 'didar_user_person_sync_started', 'WordPress User to Didar Person sync queued.', array( 'entity_type' => 'user', 'local_id' => $user_id, 'direction' => 'wordpress_to_didar', 'source' => sanitize_key( $source ) ) );
 		if ( ! wp_next_scheduled( self::USER_HOOK, array( $user_id ) ) ) {
-			wp_schedule_single_event( time() + 5, self::USER_HOOK, array( $user_id ) );
+			$result = wp_schedule_single_event( time() + 5, self::USER_HOOK, array( $user_id ), true );
+			if ( is_wp_error( $result ) || false === $result ) { $this->logger->log( 'ERROR', 'sync_schedule_failed', 'Didar Person sync dispatch could not be scheduled; the durable worker sweep will retry it.', array( 'entity_type' => 'user', 'local_id' => $user_id, 'source' => sanitize_key( $source ), 'error_code' => is_wp_error( $result ) ? $result->get_error_code() : 'schedule_failed' ) ); }
 		}
 	}
 
@@ -150,10 +188,20 @@ class Didar_Sync_Manager {
 		$state['trace_id'] = Didar_Logger::trace_id( $state['trace_id'] ?? '' );
 		$state['status'] = 'pending';
 		$state['updated_at'] = time();
-		update_post_meta( $post_id, self::META_STATE, $state );
-		if ( ! wp_next_scheduled( self::CRON_HOOK, array( $post_id ) ) ) {
-			$when = time() + 5; wp_schedule_single_event( $when, self::CRON_HOOK, array( $post_id ) );
-			$this->logger->log( 'INFO', 'sync_queued', 'Submission sync hook fired and the canonical submission was queued.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'form_type' => get_post_meta( $post_id, '_didar_form_type', true ), 'owner_user_id' => $this->service->get_owner_user_id( $post_id ), 'internal_status' => $this->internal_status( $post_id ), 'create_update_mode' => get_post_meta( $post_id, self::META_DEAL_ID, true ) ? 'update' : 'create', 'sync_hook_fired' => 'yes', 'suppression' => 'off', 'trace_id' => $state['trace_id'], 'source' => 'submission_hook', 'queue_job_id' => self::CRON_HOOK, 'scheduled_at' => Didar_Logger::display_timestamp( $when, DATE_ATOM ) ) );
+		if ( false === update_post_meta( $post_id, self::META_STATE, $state ) && ! metadata_exists( 'post', $post_id, self::META_STATE ) ) {
+			$this->log_queue_failure( $post_id, $state, 'queue_persist_failed', 'The durable submission sync state could not be saved.' );
+			return;
+		}
+		$this->logger->log( 'INFO', 'sync_queue_persisted', 'Submission sync state was durably persisted.', $this->sync_context( $post_id, $state ) );
+		$this->ensure_worker_schedule();
+		if ( ! $this->schedule_submission( $post_id, time(), 'submission_hook' ) ) {
+			return;
+		}
+		// Ask WordPress to spawn the due single event now. This is asynchronous and
+		// bounded by core's cron lock; the recurring worker remains the fallback.
+		$this->logger->log( 'INFO', 'sync_immediate_started', 'Immediate best-effort sync dispatch started after durable queue persistence.', $this->sync_context( $post_id, $state ) );
+		if ( function_exists( 'spawn_cron' ) ) {
+			spawn_cron( time() );
 		}
 	}
 
@@ -178,7 +226,10 @@ class Didar_Sync_Manager {
 		return $this->process_submission( $post_id );
 	}
 
-	public function process_user( $user_id, $source = 'wp_cron' ) {
+	public function process_user( $user_id = 0, $source = 'wp_cron' ) {
+		if ( ! absint( $user_id ) ) {
+			return $this->process_pending_users();
+		}
 		$user = get_user_by( 'id', absint( $user_id ) );
 		if ( ! $user || ! $this->enabled() ) { return new WP_Error( 'didar_user_sync_unavailable', 'User or Didar configuration is unavailable.' ); }
 		$settings = $this->settings->all();
@@ -192,12 +243,40 @@ class Didar_Sync_Manager {
 		return $result;
 	}
 
-	public function process_submission( $post_id ) {
+	/** Sweep durable pending submissions in bounded batches; individual events remain faster-path dispatch. */
+	private function process_pending_submissions() {
+		$this->logger->log( 'INFO', 'sync_worker_started', 'Durable submission sync worker started.', array( 'entity_type' => 'submission', 'source' => 'wp_cron' ) );
+		$query = new WP_Query( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => 10, 'no_found_rows' => true, 'meta_key' => self::META_STATE, 'meta_value' => 'pending', 'meta_compare' => 'LIKE', 'orderby' => 'ID', 'order' => 'ASC' ) );
+		foreach ( $query->posts as $post_id ) {
+			$this->process_submission( absint( $post_id ) );
+		}
+		return true;
+	}
+
+	/** Sweep retryable Person state too, so a missed one-off user event self-recovers. */
+	private function process_pending_users() {
+		$query = new WP_User_Query( array( 'fields' => 'ID', 'number' => 10, 'meta_key' => '_didar_person_sync_state', 'meta_value' => 'pending', 'meta_compare' => 'LIKE' ) );
+		foreach ( (array) $query->get_results() as $user_id ) {
+			$this->process_user( absint( $user_id ), 'wp_cron_sweep' );
+		}
+		return true;
+	}
+
+	public function process_submission( $post_id = 0 ) {
+		if ( ! absint( $post_id ) ) {
+			return $this->process_pending_submissions();
+		}
 		$post = get_post( absint( $post_id ) );
 		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type || ! $this->enabled() ) {
 			$this->logger->log( 'WARNING', 'sync_skipped', 'Submission sync stopped before execution.', array( 'entity_type' => 'submission', 'local_id' => absint( $post_id ), 'source' => 'sync_execution', 'skip_reason' => ! $post ? 'missing_post' : ( Didar_Post_Type::POST_TYPE !== $post->post_type ? 'invalid_post_type' : 'didar_api_not_configured' ) ) );
 			return new WP_Error( 'didar_sync_stopped', 'Sync stopped before execution.' );
 		}
+		$lock = $this->acquire_submission_lock( $post->ID );
+		if ( ! $lock ) {
+			$this->logger->log( 'INFO', 'sync_locked', 'Submission sync skipped because another request owns the active lock.', $this->sync_context( $post->ID, $this->state( $post->ID ) ) );
+			return new WP_Error( 'didar_sync_locked', 'Submission sync is already in progress.' );
+		}
+		try {
 		$form_type = sanitize_key( (string) get_post_meta( $post->ID, '_didar_form_type', true ) );
 		$state = $this->state( $post->ID ); $trace = Didar_Logger::trace_id( $state['trace_id'] ?? '' ); $state['trace_id'] = $trace; $state['last_attempt_at'] = time(); update_post_meta( $post->ID, self::META_STATE, $state );
 		$this->api->set_trace_id( $trace );
@@ -310,6 +389,9 @@ class Didar_Sync_Manager {
 		$this->logger->log( 'INFO', 'deal_persist', 'Deal ID stored in WordPress; sync marked successful.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'external_id' => $deal_id, 'form_type' => $form_type, 'trace_id' => $trace ) );
 		$this->success( $post->ID, $deal_id, $internal_status );
 		return true;
+		} finally {
+			$this->release_submission_lock( $post->ID, $lock );
+		}
 	}
 
 	public function register_webhook_route() {
@@ -672,10 +754,22 @@ class Didar_Sync_Manager {
 	private function response_object( $response ) { return isset( $response['Response'] ) && is_array( $response['Response'] ) ? $response['Response'] : array(); }
 	private function enabled() { return $this->api->is_configured(); }
 	private function state( $post_id ) { $state = get_post_meta( $post_id, self::META_STATE, true ); return is_array( $state ) ? $state : array( 'status' => 'new', 'attempts' => 0 ); }
-	private function fail( $post_id, $error, $pending = false ) { $state = $this->state( $post_id ); $state['status'] = $pending ? 'pending' : 'failed'; $state['last_error'] = sanitize_key( $error ); $state['attempts'] = absint( $state['attempts'] ?? 0 ) + 1; $state['updated_at'] = time(); update_post_meta( $post_id, self::META_STATE, $state ); $this->events->add( $post_id, 'didar_sync_failed', null, null, array( 'source' => 'Didar', 'error' => sanitize_key( $error ), 'attempt' => $state['attempts'] ) ); $this->logger->log( $pending && $state['attempts'] < 10 ? 'WARNING' : 'ERROR', 'sync_failure', $pending && $state['attempts'] < 10 ? 'Sync failed; retry scheduled.' : 'Sync final failure.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'form_type' => get_post_meta( $post_id, '_didar_form_type', true ), 'trace_id' => $state['trace_id'] ?? '', 'retry_count' => $state['attempts'], 'error_code' => $error ) ); if ( $pending && $state['attempts'] < 10 ) { $when = time() + min( HOUR_IN_SECONDS, 60 * max( 1, $state['attempts'] ) ); wp_schedule_single_event( $when, self::CRON_HOOK, array( $post_id ) ); $this->logger->log( 'INFO', 'retry_scheduled', 'Didar sync retry scheduled.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'trace_id' => $state['trace_id'] ?? '', 'retry_count' => $state['attempts'], 'retry_delay' => $when - time(), 'scheduled_at' => Didar_Logger::display_timestamp( $when, DATE_ATOM ) ) ); } return new WP_Error( sanitize_key( $error ), 'Didar synchronization failed.', array( 'trace_id' => $state['trace_id'] ?? '', 'retry_scheduled' => $pending && $state['attempts'] < 10 ) ); }
+	private function sync_context( $post_id, $state = array() ) { return array( 'entity_type' => 'submission', 'local_id' => absint( $post_id ), 'form_type' => get_post_meta( $post_id, '_didar_form_type', true ), 'trace_id' => $state['trace_id'] ?? '', 'source' => 'submission_hook' ); }
+	private function log_queue_failure( $post_id, $state, $code, $message ) { $this->logger->log( 'ERROR', 'sync_queue_failed', $message, $this->sync_context( $post_id, $state ) + array( 'error_code' => sanitize_key( $code ) ) ); }
+	private function schedule_submission( $post_id, $when, $source ) {
+		if ( wp_next_scheduled( self::CRON_HOOK, array( absint( $post_id ) ) ) ) { return true; }
+		$result = wp_schedule_single_event( $when, self::CRON_HOOK, array( absint( $post_id ) ), true );
+		$state = $this->state( $post_id );
+		if ( is_wp_error( $result ) || false === $result ) { $this->logger->log( 'ERROR', 'sync_schedule_failed', 'Durable submission sync was persisted but its prompt dispatch could not be scheduled; the recurring worker will retry it.', $this->sync_context( $post_id, $state ) + array( 'source' => $source, 'error_code' => is_wp_error( $result ) ? $result->get_error_code() : 'schedule_failed', 'error_message' => is_wp_error( $result ) ? $result->get_error_message() : 'wp_schedule_single_event returned false' ) ); return false; }
+		$this->logger->log( 'INFO', 'sync_queued', 'Submission sync was durably persisted and scheduled for prompt dispatch.', $this->sync_context( $post_id, $state ) + array( 'source' => $source, 'queue_job_id' => self::CRON_HOOK, 'scheduled_at' => Didar_Logger::display_timestamp( $when, DATE_ATOM ) ) );
+		return true;
+	}
+	private function acquire_submission_lock( $post_id ) { $key = self::LOCK_PREFIX . absint( $post_id ); $token = wp_generate_uuid4(); $now = time(); if ( add_option( $key, array( 'token' => $token, 'expires_at' => $now + self::LOCK_TTL ), '', false ) ) { return $token; } $existing = get_option( $key, array() ); if ( is_array( $existing ) && absint( $existing['expires_at'] ?? 0 ) < $now ) { delete_option( $key ); if ( add_option( $key, array( 'token' => $token, 'expires_at' => $now + self::LOCK_TTL ), '', false ) ) { return $token; } } return ''; }
+	private function release_submission_lock( $post_id, $token ) { $key = self::LOCK_PREFIX . absint( $post_id ); $existing = get_option( $key, array() ); if ( is_array( $existing ) && hash_equals( (string) ( $existing['token'] ?? '' ), (string) $token ) ) { delete_option( $key ); } }
+	private function fail( $post_id, $error, $pending = false ) { $state = $this->state( $post_id ); $state['status'] = $pending ? 'pending' : 'failed'; $state['last_error'] = sanitize_key( $error ); $state['attempts'] = absint( $state['attempts'] ?? 0 ) + 1; $state['updated_at'] = time(); update_post_meta( $post_id, self::META_STATE, $state ); $this->events->add( $post_id, 'didar_sync_failed', null, null, array( 'source' => 'Didar', 'error' => sanitize_key( $error ), 'attempt' => $state['attempts'] ) ); $retry = $pending && $state['attempts'] < 10; $operation = $retry ? 'sync_worker_item_failed' : ( $pending ? 'sync_retry_exhausted' : 'sync_permanent_failure' ); $message = $retry ? 'Sync failed; durable retry remains pending.' : ( $pending ? 'Sync retry limit was exhausted.' : 'Sync stopped on a permanent validation or identity error.' ); $this->logger->log( $retry ? 'WARNING' : 'ERROR', $operation, $message, $this->sync_context( $post_id, $state ) + array( 'retry_count' => $state['attempts'], 'error_code' => $error ) ); if ( $retry ) { $when = time() + min( HOUR_IN_SECONDS, 60 * max( 1, $state['attempts'] ) ); if ( $this->schedule_submission( $post_id, $when, 'retry' ) ) { $this->logger->log( 'INFO', 'sync_retry_scheduled', 'Didar sync retry scheduled; durable worker sweep is also available.', $this->sync_context( $post_id, $state ) + array( 'retry_count' => $state['attempts'], 'retry_delay' => $when - time(), 'scheduled_at' => Didar_Logger::display_timestamp( $when, DATE_ATOM ) ) ); } } return new WP_Error( sanitize_key( $error ), 'Didar synchronization failed.', array( 'trace_id' => $state['trace_id'] ?? '', 'retry_scheduled' => $retry ) ); }
 	private function success( $post_id, $deal_id, $internal_status = '' ) { $state = $this->state( $post_id ); $state['status'] = 'synced'; $state['last_error'] = ''; $state['last_synced_at'] = time(); $state['deal_id'] = $deal_id; $state['last_synced_internal_status'] = sanitize_key( (string) $internal_status ); update_post_meta( $post_id, self::META_STATE, $state ); return true; }
 	private function log_user_state( $user_id, $status, $error ) { $state = get_user_meta( $user_id, '_didar_person_sync_state', true ); $state = is_array( $state ) ? $state : array(); $state['status'] = $status; $state['error'] = sanitize_key( $error ); $state['attempts'] = absint( $state['attempts'] ?? 0 ) + 1; $state['updated_at'] = time(); update_user_meta( $user_id, '_didar_person_sync_state', $state ); }
-	private function queue_user_retry( $user_id ) { $state = get_user_meta( $user_id, '_didar_person_sync_state', true ); if ( is_array( $state ) && absint( $state['attempts'] ?? 0 ) < 10 ) { wp_schedule_single_event( time() + min( HOUR_IN_SECONDS, 60 * max( 1, absint( $state['attempts'] ) ) ), self::USER_HOOK, array( absint( $user_id ) ) ); } }
+	private function queue_user_retry( $user_id ) { $state = get_user_meta( $user_id, '_didar_person_sync_state', true ); if ( is_array( $state ) && absint( $state['attempts'] ?? 0 ) < 10 && ! wp_next_scheduled( self::USER_HOOK, array( absint( $user_id ) ) ) ) { $result = wp_schedule_single_event( time() + min( HOUR_IN_SECONDS, 60 * max( 1, absint( $state['attempts'] ) ) ), self::USER_HOOK, array( absint( $user_id ) ), true ); if ( is_wp_error( $result ) || false === $result ) { $this->logger->log( 'ERROR', 'sync_schedule_failed', 'Didar Person retry dispatch could not be scheduled; the durable worker sweep will retry it.', array( 'entity_type' => 'user', 'local_id' => absint( $user_id ), 'error_code' => is_wp_error( $result ) ? $result->get_error_code() : 'schedule_failed' ) ); } } }
 	private function clear_user_retries( $user_id ) { while ( $when = wp_next_scheduled( self::USER_HOOK, array( absint( $user_id ) ) ) ) { wp_unschedule_event( $when, self::USER_HOOK, array( absint( $user_id ) ) ); } }
 	private function seen_webhook( $event_id ) { $seen = get_option( 'didar_seen_webhooks', array() ); $seen = is_array( $seen ) ? $seen : array(); if ( isset( $seen[ $event_id ] ) ) { return true; } $seen[ $event_id ] = time(); if ( count( $seen ) > 500 ) { $seen = array_slice( $seen, -500, 500, true ); } update_option( 'didar_seen_webhooks', $seen, false ); return false; }
 }

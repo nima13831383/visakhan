@@ -74,7 +74,10 @@ class Didar_Event_Log {
 		if ( get_option( self::BACKFILL_OPTION, false ) || wp_next_scheduled( self::BACKFILL_HOOK ) ) {
 			return;
 		}
-		wp_schedule_single_event( time() + 10, self::BACKFILL_HOOK );
+		$result = wp_schedule_single_event( time() + 10, self::BACKFILL_HOOK, array(), true );
+		if ( is_wp_error( $result ) || false === $result ) {
+			self::log_database_error( 'didar_backfill_schedule_failed', is_wp_error( $result ) ? $result->get_error_code() : 'wp_schedule_single_event returned false' );
+		}
 	}
 
 	public function backfill_last_updated() {
@@ -86,7 +89,10 @@ class Didar_Event_Log {
 		if ( count( $ids ) < 250 ) {
 			update_option( self::BACKFILL_OPTION, 1, false );
 		} else {
-			wp_schedule_single_event( time() + 10, self::BACKFILL_HOOK );
+			$result = wp_schedule_single_event( time() + 10, self::BACKFILL_HOOK, array(), true );
+			if ( is_wp_error( $result ) || false === $result ) {
+				self::log_database_error( 'didar_backfill_schedule_failed', is_wp_error( $result ) ? $result->get_error_code() : 'wp_schedule_single_event returned false' );
+			}
 		}
 	}
 
