@@ -427,20 +427,21 @@ class Didar_Sync_Manager {
 			if ( 'deal_custom' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $fields ) ) { $new[ $key ] = $fields[ $map['field'] ]; $changed_field_keys[] = $key; }
 			if ( 'deal_native' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $data ) ) { $new[ $key ] = $data[ $map['field'] ]; $changed_field_keys[] = $key; }
 		}
+		$meaningful_change = $new !== $old;
 		if ( $new !== $old ) { update_post_meta( $post_id, '_didar_fields', $new ); }
 		$stage = isset( $data['PipelineStageId'] ) ? sanitize_text_field( $data['PipelineStageId'] ) : '';
 		$pipeline = isset( $data['PipelineId'] ) ? sanitize_text_field( $data['PipelineId'] ) : '';
 		$status = $this->workflow->reverse_mapping( $form_type, $pipeline, $stage );
 		if ( $status ) {
 			$old_status = (string) get_post_meta( $post_id, '_didar_internal_status', true );
-			if ( $old_status !== $status ) { update_post_meta( $post_id, '_didar_internal_status', $status ); $this->events->add( $post_id, 'internal_status_changed', $old_status, $status, array( 'form_type' => $form_type, 'old_status_key' => $old_status, 'old_status_label' => $this->workflow->status_label( $form_type, $old_status ), 'new_status_key' => $status, 'new_status_label' => $this->workflow->status_label( $form_type, $status ), 'pipeline_id' => $pipeline, 'pipeline_stage_id' => $stage, 'source' => 'didar', 'actor' => 0 ) ); }
+			if ( $old_status !== $status ) { $meaningful_change = true; update_post_meta( $post_id, '_didar_internal_status', $status ); $this->events->add( $post_id, 'internal_status_changed', $old_status, $status, array( 'form_type' => $form_type, 'old_status_key' => $old_status, 'old_status_label' => $this->workflow->status_label( $form_type, $old_status ), 'new_status_key' => $status, 'new_status_label' => $this->workflow->status_label( $form_type, $status ), 'pipeline_id' => $pipeline, 'pipeline_stage_id' => $stage, 'source' => 'didar', 'actor' => 0 ) ); }
 		} elseif ( $stage ) {
 			$this->logger->log( 'WARNING', 'workflow_mapping_conflict', 'Didar webhook stage does not match this form workflow; local status was not changed.', array( 'form_type' => $form_type, 'local_id' => $post_id, 'pipeline_id' => $pipeline, 'pipeline_stage_id' => $stage, 'source' => 'didar_webhook' ) );
 		}
-		$settings = $this->settings->all(); $public_field = isset( $settings['didar_public_status_field_id'] ) ? sanitize_text_field( $settings['didar_public_status_field_id'] ) : ''; if ( $public_field && isset( $fields[ $public_field ] ) && isset( Didar_Reference_Data::statuses()[ sanitize_key( $fields[ $public_field ] ) ] ) ) { update_post_meta( $post_id, '_didar_public_status', sanitize_key( $fields[ $public_field ] ) ); update_post_meta( $post_id, '_didar_status', sanitize_key( $fields[ $public_field ] ) ); }
+		$settings = $this->settings->all(); $public_field = isset( $settings['didar_public_status_field_id'] ) ? sanitize_text_field( $settings['didar_public_status_field_id'] ) : ''; if ( $public_field && isset( $fields[ $public_field ] ) && isset( Didar_Reference_Data::statuses()[ sanitize_key( $fields[ $public_field ] ) ] ) ) { $public_status = sanitize_key( $fields[ $public_field ] ); if ( $public_status !== (string) get_post_meta( $post_id, '_didar_public_status', true ) ) { $meaningful_change = true; } update_post_meta( $post_id, '_didar_public_status', $public_status ); update_post_meta( $post_id, '_didar_status', $public_status ); }
 		$owner = isset( $data['OwnerId'] ) ? $this->wp_user_for_didar( $data['OwnerId'] ) : 0;
-		if ( $owner ) { update_post_meta( $post_id, '_didar_assigned_user_id', $owner ); }
-		$this->events->add( $post_id, 'didar_webhook_received', $old, $new, array( 'source' => 'Didar', 'event_id' => $event_id, 'entity_id' => isset( $data['Id'] ) ? $data['Id'] : '', 'request_snapshot_only' => true ) );
+		if ( $owner ) { if ( (int) get_post_meta( $post_id, '_didar_assigned_user_id', true ) !== (int) $owner ) { $meaningful_change = true; } update_post_meta( $post_id, '_didar_assigned_user_id', $owner ); }
+		$this->events->add( $post_id, 'didar_webhook_received', $old, $new, array( 'source' => 'Didar', 'event_id' => $event_id, 'entity_id' => isset( $data['Id'] ) ? $data['Id'] : '', 'request_snapshot_only' => true, 'meaningful_request_change' => $meaningful_change ) );
 		$this->logger->log( 'INFO', 'webhook_apply', 'Didar Deal webhook updated request snapshot fields only; WordPress user profile was not modified.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'deal', 'external_id' => $deal_id, 'local_id' => $post_id, 'wp_user_id' => get_post_field( 'post_author', $post_id ), 'form_type' => $form_type, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook', 'changed_field_keys' => array_values( array_unique( $changed_field_keys ) ) ) );
 	}
 

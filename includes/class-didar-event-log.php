@@ -8,6 +8,87 @@ class Didar_Event_Log {
 	const SCHEMA_VERSION         = '1.0.0';
 	const SCHEMA_VERSION_OPTION  = 'didar_event_schema_version';
 	const SCHEMA_VERIFIED_OPTION = 'didar_event_schema_verified_version';
+	const LAST_UPDATED_META      = '_didar_last_updated_at';
+	const BACKFILL_HOOK           = 'didar_backfill_last_updated';
+	const BACKFILL_OPTION         = 'didar_last_updated_backfill_complete';
+
+	/**
+	 * Event types which represent a meaningful request change.
+	 *
+	 * Diagnostic/synchronization failure events deliberately do not appear here.
+	 */
+	private static function meaningful_event_types() {
+		return array(
+			'request_created',
+			'request_owner_changed',
+			'submission_data_updated',
+			'public_status_changed',
+			'public_note_changed',
+			'internal_status_changed',
+			'internal_note_changed',
+			'assignment_changed',
+			'request_assigned',
+			'request_reassigned',
+			'assignment_removed',
+			'applicant_note_changed',
+			'file_added',
+			'file_replaced',
+			'file_removed',
+		);
+	}
+
+	public function touch_last_updated( $submission_id, $timestamp = null ) {
+		$submission_id = absint( $submission_id );
+		$timestamp     = null === $timestamp ? current_time( 'timestamp', true ) : absint( $timestamp );
+		if ( ! $submission_id || Didar_Post_Type::POST_TYPE !== get_post_type( $submission_id ) || ! $timestamp ) {
+			return false;
+		}
+
+		$current = absint( get_post_meta( $submission_id, self::LAST_UPDATED_META, true ) );
+		if ( $timestamp <= $current ) {
+			return $current;
+		}
+
+		update_post_meta( $submission_id, self::LAST_UPDATED_META, $timestamp );
+		return $timestamp;
+	}
+
+	public function get_last_updated_timestamp( $submission_id, $backfill = false ) {
+		$submission_id = absint( $submission_id );
+		$stored        = absint( get_post_meta( $submission_id, self::LAST_UPDATED_META, true ) );
+		if ( $stored ) {
+			return $stored;
+		}
+
+		$timestamp = $this->latest_meaningful_event_timestamp( $submission_id );
+		if ( ! $timestamp ) {
+			$timestamp = (int) get_post_time( 'U', true, $submission_id );
+		}
+		if ( $backfill && $timestamp ) {
+			$this->touch_last_updated( $submission_id, $timestamp );
+		}
+		return $timestamp;
+	}
+
+	public function maybe_schedule_backfill() {
+		if ( get_option( self::BACKFILL_OPTION, false ) || wp_next_scheduled( self::BACKFILL_HOOK ) ) {
+			return;
+		}
+		wp_schedule_single_event( time() + 10, self::BACKFILL_HOOK );
+	}
+
+	public function backfill_last_updated() {
+		global $wpdb;
+		$ids = $wpdb->get_col( $wpdb->prepare( "SELECT p.ID FROM {$wpdb->posts} p LEFT JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = %s WHERE p.post_type = %s AND p.post_status <> 'trash' AND m.post_id IS NULL ORDER BY p.ID ASC LIMIT 250", self::LAST_UPDATED_META, Didar_Post_Type::POST_TYPE ) );
+		foreach ( (array) $ids as $submission_id ) {
+			$this->get_last_updated_timestamp( $submission_id, true );
+		}
+		if ( count( $ids ) < 250 ) {
+			update_option( self::BACKFILL_OPTION, 1, false );
+		} else {
+			wp_schedule_single_event( time() + 10, self::BACKFILL_HOOK );
+		}
+	}
 
 	public static function table_name() {
 		global $wpdb;
@@ -152,7 +233,24 @@ class Didar_Event_Log {
 			array( '%d', '%s', '%d', '%s', '%s', '%s', '%s' )
 		);
 
-		return false !== $result ? (int) $wpdb->insert_id : false;
+		if ( false === $result ) {
+			return false;
+		}
+
+		$event_id = (int) $wpdb->insert_id;
+		if ( in_array( $event_type, self::meaningful_event_types(), true ) || ( 'didar_webhook_received' === $event_type && ! empty( $metadata['meaningful_request_change'] ) ) ) {
+			$this->touch_last_updated( $submission_id );
+		}
+		return $event_id;
+	}
+
+	private function latest_meaningful_event_timestamp( $submission_id ) {
+		global $wpdb;
+		$types = array_map( 'sanitize_key', self::meaningful_event_types() );
+		$placeholders = implode( ',', array_fill( 0, count( $types ), '%s' ) );
+		$sql = $wpdb->prepare( "SELECT created_at_gmt FROM " . self::table_name() . " WHERE submission_id = %d AND (event_type IN ({$placeholders}) OR (event_type = 'didar_webhook_received' AND event_meta LIKE '%\\\"meaningful_request_change\\\":true%')) ORDER BY created_at_gmt DESC, event_id DESC LIMIT 1", array_merge( array( absint( $submission_id ) ), $types ) );
+		$value = $wpdb->get_var( $sql );
+		return $value ? strtotime( $value . ' UTC' ) : 0;
 	}
 
 	public function get_for_submission( $submission_id, $limit = 100 ) {

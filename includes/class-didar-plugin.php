@@ -31,6 +31,7 @@ final class Didar_Plugin {
 		add_action( 'init', array( 'Didar_Post_Type', 'register' ) );
 		add_action( 'plugins_loaded', array( 'Didar_Access_Control', 'maybe_upgrade' ), 5 );
 		add_action( 'plugins_loaded', array( 'Didar_Schema_Manager', 'maybe_repair' ), 5 );
+		add_action( 'didar_backfill_last_updated', array( $this, 'backfill_last_updated' ) );
 		add_action( 'admin_notices', array( 'Didar_Schema_Manager', 'render_admin_notice' ) );
 		add_action( 'network_admin_notices', array( 'Didar_Schema_Manager', 'render_admin_notice' ) );
 		Didar_Access_Control::register_hooks();
@@ -40,6 +41,7 @@ final class Didar_Plugin {
 		$this->event_log = new Didar_Event_Log();
 		$this->logger    = new Didar_Logger();
 		Didar_Logger::maybe_upgrade();
+		$this->event_log->maybe_schedule_backfill();
 		$this->request_search = new Didar_Request_Search();
 		$this->file_service = new Didar_File_Service( $this->registry, $this->settings, $this->event_log );
 		$this->renderer  = new Didar_Field_Renderer( $this->settings, $this->file_service );
@@ -59,6 +61,10 @@ final class Didar_Plugin {
 
 	public function load_textdomain() {
 		load_plugin_textdomain( 'didar', false, dirname( plugin_basename( DIDAR_FILE ) ) . '/languages' );
+	}
+
+	public function backfill_last_updated() {
+		$this->event_log->backfill_last_updated();
 	}
 
 	public static function activate() {
@@ -95,6 +101,7 @@ final class Didar_Plugin {
 	}
 
 	public static function deactivate() {
+		wp_clear_scheduled_hook( Didar_Event_Log::BACKFILL_HOOK );
 		$timestamp = wp_next_scheduled( 'didar_cleanup_temporary_uploads' );
 		if ( $timestamp ) {
 			wp_unschedule_event( $timestamp, 'didar_cleanup_temporary_uploads' );

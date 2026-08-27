@@ -23,7 +23,7 @@ class Didar_Settings_Transfer {
 	}
 
 	private function portable_option_keys() {
-		return array( 'didar_form_workflows', 'didar_field_mappings', 'didar_broker_user_map', 'didar_default_owner_id', 'didar_default_pipeline_id', 'didar_system_form_type_field_id', 'didar_system_submission_id_field_id', 'didar_system_user_id_field_id', 'didar_public_status_field_id', 'field_required_overrides', 'profile_field_states', 'didar_user_person_mappings', 'colleague_can_view_internal_history', 'frontend_requests_per_page', 'file_download_mode', 'didar_debug_logging' );
+		return array( 'didar_form_workflows', 'didar_field_mappings', 'didar_broker_user_map', 'didar_form_default_assignees', 'didar_default_owner_id', 'didar_default_pipeline_id', 'didar_system_form_type_field_id', 'didar_system_submission_id_field_id', 'didar_system_user_id_field_id', 'didar_public_status_field_id', 'field_required_overrides', 'profile_field_states', 'didar_user_person_mappings', 'colleague_can_view_internal_history', 'frontend_requests_per_page', 'file_download_mode', 'didar_debug_logging' );
 	}
 
 	/** Runtime-shaped portable values; unlike export, user maps remain keyed by local WP user ID. */
@@ -44,6 +44,7 @@ class Didar_Settings_Transfer {
 		$out['profile_field_states'] = isset( $out['profile_field_states'] ) && is_array( $out['profile_field_states'] ) ? $out['profile_field_states'] : Didar_Settings::PROFILE_FIELD_STATES;
 		$out['didar_user_person_mappings'] = isset( $out['didar_user_person_mappings'] ) && is_array( $out['didar_user_person_mappings'] ) ? $out['didar_user_person_mappings'] : array();
 		$out['didar_broker_user_map'] = $this->export_user_mappings( $out['didar_broker_user_map'] ?? array() );
+		$out['didar_form_default_assignees'] = $this->export_form_default_assignees( $out['didar_form_default_assignees'] ?? array() );
 		if ( isset( $out['didar_field_mappings'] ) && is_array( $out['didar_field_mappings'] ) ) {
 			$normalized_mappings = array();
 			foreach ( $out['didar_field_mappings'] as $form_type => $maps ) {
@@ -98,6 +99,11 @@ class Didar_Settings_Transfer {
 			$proposed['didar_broker_user_map'] = $resolved['mappings'];
 			$warnings = array_merge( $warnings, $resolved['warnings'] );
 		}
+		if ( array_key_exists( 'didar_form_default_assignees', $incoming ) ) {
+			$resolved = $this->resolve_form_default_assignees( $incoming['didar_form_default_assignees'] );
+			$proposed['didar_form_default_assignees'] = array_replace( (array) ( $proposed['didar_form_default_assignees'] ?? array() ), $resolved['mappings'] );
+			$warnings = array_merge( $warnings, $resolved['warnings'] );
+		}
 		$this->validate( $incoming, $proposed, $warnings, $errors, $not_verified );
 		// Validation is advisory: it annotates portable values and never removes them.
 		$trace['metadata_validated'] = $this->mapping_trace( $incoming );
@@ -141,7 +147,7 @@ class Didar_Settings_Transfer {
 	public function latest_backup() { $all = get_option( self::BACKUPS_OPTION, array() ); return is_array( $all ) && $all ? end( $all ) : array(); }
 
 	private function normalize( $raw, &$warnings, &$errors ) {
-		$out = array(); $allowed = array_keys( $this->portable_settings( array_fill_keys( array( 'didar_form_workflows','didar_field_mappings','didar_broker_user_map','didar_default_owner_id','didar_default_pipeline_id','didar_system_form_type_field_id','didar_system_submission_id_field_id','didar_system_user_id_field_id','didar_public_status_field_id','field_required_overrides','profile_field_states','didar_user_person_mappings','colleague_can_view_internal_history','frontend_requests_per_page','file_download_mode','didar_debug_logging' ), null ) ) );
+		$out = array(); $allowed = array_keys( $this->portable_settings( array_fill_keys( array( 'didar_form_workflows','didar_field_mappings','didar_broker_user_map','didar_form_default_assignees','didar_default_owner_id','didar_default_pipeline_id','didar_system_form_type_field_id','didar_system_submission_id_field_id','didar_system_user_id_field_id','didar_public_status_field_id','field_required_overrides','profile_field_states','didar_user_person_mappings','colleague_can_view_internal_history','frontend_requests_per_page','file_download_mode','didar_debug_logging' ), null ) ) );
 		foreach ( (array) $raw as $key => $value ) { if ( in_array( $key, $allowed, true ) ) { $out[$key] = $value; } else { $warnings[] = 'گزینه ناشناخته «' . sanitize_text_field( (string) $key ) . '» نادیده گرفته شد.'; } }
 		foreach ( array( 'didar_form_workflows','didar_field_mappings','field_required_overrides','profile_field_states','didar_user_person_mappings' ) as $key ) { if ( isset( $out[$key] ) && ! is_array( $out[$key] ) ) { $errors[] = 'ساختار «' . $key . '» معتبر نیست.'; unset( $out[$key] ); } }
 		foreach ( array( 'didar_form_workflows', 'didar_field_mappings', 'field_required_overrides' ) as $key ) {
@@ -238,8 +244,10 @@ class Didar_Settings_Transfer {
 	}
 
 	private function export_user_mappings( $map ) { $out=array(); foreach((array)$map as $wp_id=>$didar_id){ $u=get_user_by('id',absint($wp_id)); if($u){$out[]=array('wordpress_user_id'=>absint($wp_id),'wordpress_user_login'=>$u->user_login,'wordpress_user_email'=>$u->user_email,'didar_user_id'=>sanitize_text_field((string)$didar_id));} } return $out; }
+	private function export_form_default_assignees( $map ) { $out=array(); foreach((array)$map as $form_type=>$wp_id){ $form_type=sanitize_key((string)$form_type); $u=get_user_by('id',absint($wp_id)); if($form_type && $u){$out[]=array('form_type'=>$form_type,'wordpress_user_id'=>absint($u->ID),'wordpress_user_login'=>$u->user_login,'wordpress_user_email'=>$u->user_email);} } return $out; }
+	private function resolve_form_default_assignees( $items ) { $out=array(); $warnings=array(); foreach((array)$items as $item){ if(!is_array($item))continue; $form=sanitize_key($item['form_type']??''); if(!$form||!$this->registry->get($form)){ $warnings[]='مسئول پیش‌فرض برای فرم ناشناخته نادیده گرفته شد.'; continue; } $login=sanitize_user($item['wordpress_user_login']??'',true); $email=sanitize_email($item['wordpress_user_email']??''); $u=$login?get_user_by('login',$login):false; if(!$u&&$email)$u=get_user_by('email',$email); if(!$u||!user_can($u,'didar_receive_requests')){ $warnings[]='مسئول پیش‌فرض فرم '.$form.' در این سایت پیدا نشد یا مجاز نیست؛ تنظیم نشد.'; continue; } $out[$form]=(int)$u->ID; } return array('mappings'=>$out,'warnings'=>$warnings); }
 	private function resolve_user_mappings( $items ) { $out=array(); $warnings=array(); foreach((array)$items as $item){ if(!is_array($item)) continue; $login=sanitize_user($item['wordpress_user_login']??'',true); $email=sanitize_email($item['wordpress_user_email']??''); $user=$login?get_user_by('login',$login):false; if(!$user && $email) $user=get_user_by('email',$email); if(!$user){$warnings[]='کاربر WordPress برای نگاشت دیدار یافت نشد؛ نگاشت رد شد.';continue;} $didar=sanitize_text_field((string)($item['didar_user_id']??'')); if(!$didar)continue; $catalog=$this->workflow->didar_users(); if($catalog && (!$this->workflow->didar_user_by_user_id($didar) || !empty($this->workflow->didar_user_by_user_id($didar)['is_disabled']))) $warnings[]='UserId دیدار «'.$didar.'» معتبر یا فعال نیست.'; $out[$user->ID]=$didar; } return array('mappings'=>$out,'warnings'=>$warnings); }
-	private function portable_defaults() { return array( 'didar_form_workflows'=>array(),'didar_field_mappings'=>array(),'didar_broker_user_map'=>array(),'didar_default_owner_id'=>'','didar_default_pipeline_id'=>'','didar_system_form_type_field_id'=>'','didar_system_submission_id_field_id'=>'','didar_system_user_id_field_id'=>'','didar_public_status_field_id'=>'','field_required_overrides'=>array(),'profile_field_states'=>Didar_Settings::PROFILE_FIELD_STATES,'didar_user_person_mappings'=>array(),'colleague_can_view_internal_history'=>0,'frontend_requests_per_page'=>Didar_Settings::DEFAULT_REQUESTS_PER_PAGE,'file_download_mode'=>Didar_Settings::DEFAULT_FILE_DOWNLOAD_MODE,'didar_debug_logging'=>'off' ); }
+	private function portable_defaults() { return array( 'didar_form_workflows'=>array(),'didar_field_mappings'=>array(),'didar_broker_user_map'=>array(),'didar_form_default_assignees'=>array(),'didar_default_owner_id'=>'','didar_default_pipeline_id'=>'','didar_system_form_type_field_id'=>'','didar_system_submission_id_field_id'=>'','didar_system_user_id_field_id'=>'','didar_public_status_field_id'=>'','field_required_overrides'=>array(),'profile_field_states'=>Didar_Settings::PROFILE_FIELD_STATES,'didar_user_person_mappings'=>array(),'colleague_can_view_internal_history'=>0,'frontend_requests_per_page'=>Didar_Settings::DEFAULT_REQUESTS_PER_PAGE,'file_download_mode'=>Didar_Settings::DEFAULT_FILE_DOWNLOAD_MODE,'didar_debug_logging'=>'off' ); }
 
 	/**
 	 * Produces the runtime semantic form used by post-write verification. Export
@@ -271,6 +279,9 @@ class Didar_Settings_Transfer {
 					if ( $wp_user_id && $didar_user_id ) { $out[ $wp_user_id ] = $didar_user_id; }
 				}
 				ksort( $out, SORT_NUMERIC ); return $out;
+
+			case 'didar_form_default_assignees':
+				$out = array(); foreach ( (array) $value as $form_type => $user_id ) { $form_type = sanitize_key( (string) $form_type ); $user_id = absint( $user_id ); if ( $form_type && $user_id ) { $out[ $form_type ] = $user_id; } } ksort( $out, SORT_STRING ); return $out;
 
 			case 'didar_form_workflows':
 				$out = array();

@@ -15,6 +15,7 @@ class Didar_Admin {
 	private $logger;
 	private $workflow;
 	private $settings_transfer;
+	private $events;
 	private $state_cache = array();
 	private static $saving = false;
 
@@ -29,6 +30,7 @@ class Didar_Admin {
 		$this->logger = new Didar_Logger();
 		$this->workflow = new Didar_Workflow_Manager( $registry, $this->settings, $this->logger );
 		$this->settings_transfer = new Didar_Settings_Transfer( $registry, $this->settings, $this->logger );
+		$this->events = new Didar_Event_Log();
 
 		add_action( 'add_meta_boxes_' . Didar_Post_Type::POST_TYPE, array( $this, 'add_meta_boxes' ) );
 		add_action( 'save_post_' . Didar_Post_Type::POST_TYPE, array( $this, 'save_submission' ), 10, 3 );
@@ -37,9 +39,13 @@ class Didar_Admin {
 		add_action( 'admin_menu', array( $this, 'add_settings_page' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_filter( 'manage_' . Didar_Post_Type::POST_TYPE . '_posts_columns', array( $this, 'columns' ) );
+		add_filter( 'manage_' . Didar_Post_Type::POST_TYPE . '_posts_columns', array( $this, 'add_last_updated_column' ), 11 );
+		add_filter( 'manage_edit-' . Didar_Post_Type::POST_TYPE . '_sortable_columns', array( $this, 'sortable_columns' ) );
 		add_action( 'manage_' . Didar_Post_Type::POST_TYPE . '_posts_custom_column', array( $this, 'column_content' ), 10, 2 );
+		add_action( 'manage_' . Didar_Post_Type::POST_TYPE . '_posts_custom_column', array( $this, 'last_updated_column_content' ), 20, 2 );
 		add_action( 'restrict_manage_posts', array( $this, 'filters' ) );
 		add_action( 'pre_get_posts', array( $this, 'filter_query' ) );
+		add_filter( 'posts_clauses', array( $this, 'last_updated_order_clauses' ), 10, 2 );
 		add_filter( 'post_row_actions', array( $this, 'request_row_actions' ), 10, 2 );
 		add_filter( 'views_edit-' . Didar_Post_Type::POST_TYPE, array( $this, 'assignment_views' ) );
 		add_filter( 'option_page_capability_didar_page_settings', array( $this, 'settings_capability' ) );
@@ -52,6 +58,27 @@ class Didar_Admin {
 		add_action( 'admin_post_didar_settings_import_preview', array( $this, 'settings_import_preview' ) );
 		add_action( 'admin_post_didar_settings_import_apply', array( $this, 'settings_import_apply' ) );
 		add_action( 'admin_post_didar_rotate_webhook_secret', array( $this, 'rotate_webhook_secret' ) );
+	}
+
+	public function render_form_default_assignees() {
+		$settings = $this->settings->all();
+		$defaults = is_array( $settings['didar_form_default_assignees'] ?? null ) ? $settings['didar_form_default_assignees'] : array();
+		$users = $this->service->eligible_assignees();
+		echo '<div class="didar-form-default-assignees">';
+		foreach ( $this->registry->all() as $form_type => $form ) {
+			$selected = absint( $defaults[ $form_type ] ?? 0 );
+			echo '<p><label><strong>' . esc_html( $form['label'] ) . '</strong> <code>' . esc_html( $form_type ) . '</code><br><select name="' . esc_attr( Didar_Settings::OPTION_NAME . '[didar_form_default_assignees][' . $form_type . ']' ) . '"><option value="0">بدون مسئول پیش‌فرض</option>';
+			foreach ( $users as $user ) {
+				echo '<option value="' . absint( $user->ID ) . '" ' . selected( $selected, $user->ID, false ) . '>' . esc_html( $user->display_name . ' (' . $user->user_login . ') #' . $user->ID ) . '</option>';
+			}
+			if ( $selected && ! $this->service->is_eligible_assignee( $selected ) ) {
+				$stale = get_user_by( 'id', $selected );
+				$label = $stale ? $stale->display_name . ' — دیگر مجاز نیست' : 'کاربر حذف‌شده';
+				echo '<option value="' . $selected . '" selected>⚠ ' . esc_html( $label ) . ' #' . $selected . '</option>';
+			}
+			echo '</select></label></p>';
+		}
+		echo '</div>';
 	}
 
 	public function add_settings_page() {
@@ -174,6 +201,8 @@ class Didar_Admin {
 		add_settings_section( 'didar_crm_workflow', __( 'گردش کار فرم‌ها در دیدار', 'didar' ), '__return_false', 'didar-page-settings' );
 		add_settings_field( 'didar_form_workflows', __( 'گردش کار فرم‌ها', 'didar' ), array( $this, 'render_form_workflows' ), 'didar-page-settings', 'didar_crm_workflow' );
 		add_settings_field( 'didar_broker_user_map', __( 'کاربر WordPress ← User دیدار', 'didar' ), array( $this, 'render_broker_map' ), 'didar-page-settings', 'didar_crm_workflow' );
+		add_settings_section( 'didar_form_default_assignees_section', __( 'مسئول پیش‌فرض فرم‌ها', 'didar' ), '__return_false', 'didar-page-settings' );
+		add_settings_field( 'didar_form_default_assignees', __( 'مسئول پیش‌فرض فرم‌ها', 'didar' ), array( $this, 'render_form_default_assignees' ), 'didar-page-settings', 'didar_form_default_assignees_section' );
 		add_settings_field( 'didar_public_status_field_id', __( 'Custom Field وضعیت عمومی Deal', 'didar' ), array( $this, 'render_didar_text_setting' ), 'didar-page-settings', 'didar_crm_workflow', array( 'key' => 'didar_public_status_field_id', 'description' => 'اختیاری؛ برای Public Status است، نه Pipeline Stage.' ) );
 
 		add_settings_section( 'didar_crm_field_mapping', __( 'نگاشت فیلدهای فرم به Didar', 'didar' ), array( $this, 'render_didar_mapping_description' ), 'didar-page-settings' );
@@ -251,6 +280,21 @@ class Didar_Admin {
 		$output['didar_default_owner_id'] = $this->normalize_didar_user_mapping( $output['didar_default_owner_id'], $current['didar_default_owner_id'] ?? '', 0, 'didar_default_owner_id' );
 		$system_pipelines = array(); foreach ( $output['didar_form_workflows'] as $workflow ) { if ( ! empty( $workflow['pipeline_id'] ) ) { $system_pipelines[] = $workflow['pipeline_id']; } } $system_pipelines = array_values( array_unique( $system_pipelines ) );
 		foreach ( array( 'didar_system_form_type_field_id', 'didar_system_submission_id_field_id', 'didar_system_user_id_field_id', 'didar_public_status_field_id' ) as $system_key ) { $field_key = $output[ $system_key ] ?? ''; if ( ! $field_key ) { continue; } $metadata = $this->workflow->custom_field( $field_key ); $valid = Didar_Custom_Field_Catalog::is_deal_field( $metadata ); foreach ( $system_pipelines as $pipeline_id ) { $valid = $valid && $this->workflow->custom_field_available_for_pipeline( $metadata, $pipeline_id ); } if ( ! $valid ) { $output[ $system_key ] = $current[ $system_key ] ?? ''; add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_system_custom_field_' . $system_key, __( 'کاستوم‌فیلد سیستمی انتخاب‌شده در همه کاریزهای فعال قابل استفاده نیست.', 'didar' ), 'error' ); $this->logger->log( 'WARNING', 'didar_custom_field_mapping_invalid', 'Rejected invalid system Deal Custom Field mapping.', array( 'setting' => $system_key, 'custom_field_key' => $field_key, 'custom_field_id' => $metadata['id'] ?? '', 'pipeline_ids' => $system_pipelines ) ); } }
+		$output['didar_form_default_assignees'] = array();
+		$submitted_defaults = isset( $input['didar_form_default_assignees'] ) && is_array( $input['didar_form_default_assignees'] ) ? $input['didar_form_default_assignees'] : array();
+		$current_defaults = isset( $current['didar_form_default_assignees'] ) && is_array( $current['didar_form_default_assignees'] ) ? $current['didar_form_default_assignees'] : array();
+		foreach ( $this->registry->all() as $form_type => $form ) {
+			$candidate = isset( $submitted_defaults[ $form_type ] ) && ! is_array( $submitted_defaults[ $form_type ] ) ? absint( $submitted_defaults[ $form_type ] ) : 0;
+			if ( ! $candidate ) {
+				continue;
+			}
+			if ( $this->service->is_eligible_assignee( $candidate ) ) {
+				$output['didar_form_default_assignees'][ $form_type ] = $candidate;
+			} elseif ( absint( $current_defaults[ $form_type ] ?? 0 ) === $candidate ) {
+				$output['didar_form_default_assignees'][ $form_type ] = $candidate;
+				add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_form_default_assignee_' . $form_type, __( 'مسئول پیش‌فرض این فرم دیگر مجاز به دریافت درخواست نیست و بدون تغییر حفظ شد.', 'didar' ), 'warning' );
+			}
+		}
 		$output['didar_broker_user_map'] = array();
 		$submitted_brokers = isset( $input['didar_broker_user_map'] ) && is_array( $input['didar_broker_user_map'] ) ? $input['didar_broker_user_map'] : array();
 		foreach ( $submitted_brokers as $wp_user_id => $didar_user_id ) { $wp_user_id = absint( $wp_user_id ); if ( ! $wp_user_id || ! is_scalar( $didar_user_id ) || '' === trim( (string) $didar_user_id ) ) { continue; } $candidate = sanitize_text_field( wp_unslash( $didar_user_id ) ); $normalized = $this->normalize_didar_user_mapping( $candidate, $current['didar_broker_user_map'][ $wp_user_id ] ?? '', $wp_user_id, 'didar_broker_user_map' ); if ( $normalized ) { $output['didar_broker_user_map'][ $wp_user_id ] = $normalized; } }
@@ -808,7 +852,7 @@ class Didar_Admin {
 				$assigned_id = absint( wp_unslash( $_POST['didar_assigned_user_id'] ) );
 				if ( $assigned_id && ! $this->service->is_eligible_assignee( $assigned_id ) ) {
 					$note_errors['assigned_user'] = __( 'کاربر انتخاب‌شده مجاز به دریافت درخواست نیست.', 'didar' );
-				} else {
+				} elseif ( $assigned_id || $stored_type ) {
 					$workflow_changes['assigned_user_id'] = $assigned_id;
 				}
 			}
@@ -989,6 +1033,30 @@ class Didar_Admin {
 		}
 	}
 
+	public function add_last_updated_column( $columns ) {
+		$result = array();
+		foreach ( $columns as $key => $label ) {
+			$result[ $key ] = $label;
+			if ( 'date' === $key ) {
+				$result['last_updated'] = __( 'تاریخ آپدیت', 'didar' );
+			}
+		}
+		return $result;
+	}
+
+	public function sortable_columns( $columns ) {
+		$columns['last_updated'] = 'last_updated';
+		return $columns;
+	}
+
+	public function last_updated_column_content( $column, $post_id ) {
+		if ( 'last_updated' !== $column ) {
+			return;
+		}
+		$timestamp = $this->events->get_last_updated_timestamp( $post_id, true );
+		echo $timestamp ? esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $timestamp, wp_timezone() ) ) : '—';
+	}
+
 	public function filters( $post_type ) {
 		if ( Didar_Post_Type::POST_TYPE !== $post_type ) {
 			return;
@@ -1011,6 +1079,9 @@ class Didar_Admin {
 			return;
 		}
 		$this->request_search->apply_to_query( $query, $query->get( 's' ) );
+		if ( 'last_updated' === $query->get( 'orderby' ) ) {
+			$query->set( 'didar_orderby_last_updated', true );
+		}
 		$meta_query = array();
 		if ( ! empty( $_GET['didar_form_type_filter'] ) && ! is_array( $_GET['didar_form_type_filter'] ) ) {
 			$type = sanitize_key( wp_unslash( $_GET['didar_form_type_filter'] ) );
@@ -1044,6 +1115,20 @@ class Didar_Admin {
 			}
 			$query->set( 'meta_query', $meta_query );
 		}
+	}
+
+	public function last_updated_order_clauses( $clauses, $query ) {
+		if ( ! is_admin() || ! $query->is_main_query() || ! $query->get( 'didar_orderby_last_updated' ) ) {
+			return $clauses;
+		}
+		global $wpdb;
+		$alias = 'didar_last_updated_pm';
+		if ( false === strpos( $clauses['join'], $alias ) ) {
+			$clauses['join'] .= $wpdb->prepare( " LEFT JOIN {$wpdb->postmeta} AS {$alias} ON {$wpdb->posts}.ID = {$alias}.post_id AND {$alias}.meta_key = %s", Didar_Event_Log::LAST_UPDATED_META );
+		}
+		$order = 'ASC' === strtoupper( (string) $query->get( 'order' ) ) ? 'ASC' : 'DESC';
+		$clauses['orderby'] = "COALESCE(CAST({$alias}.meta_value AS UNSIGNED), UNIX_TIMESTAMP({$wpdb->posts}.post_date_gmt)) {$order}, {$wpdb->posts}.ID {$order}";
+		return $clauses;
 	}
 
 	public function request_row_actions( $actions, $post ) {

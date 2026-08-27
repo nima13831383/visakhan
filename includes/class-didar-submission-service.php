@@ -68,6 +68,7 @@ class Didar_Submission_Service {
 			null,
 			array( 'form_type' => $form_type, 'owner_user_id' => $author_id, 'public_status' => $default_status, 'internal_status' => $default_status )
 		);
+		$this->apply_default_assignee( $post_id, $form_type );
 		$this->logger->log( 'INFO', 'submission_saved', 'WordPress submission saved.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'wp_user_id' => $author_id, 'form_type' => $form_type, 'source' => 'submission_service' ) );
 		$this->attach_files( $post_id, $form_type, $data, array(), true );
 		do_action( 'didar_submission_created', $post_id );
@@ -86,6 +87,7 @@ class Didar_Submission_Service {
 		$post_id = wp_insert_post( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'publish', 'post_author' => $author_id, 'post_title' => sprintf( '%s — %s', $form['label'], current_time( 'Y-m-d H:i' ) ), 'meta_input' => array( '_didar_form_type' => $form_type, '_didar_created_by_user_id' => 0, '_didar_status' => $default_status, '_didar_public_status' => $default_status, '_didar_public_note' => '', '_didar_internal_status' => $default_status, '_didar_internal_note' => '', '_didar_assigned_user_id' => '', '_didar_fields' => (array) $data, '_didar_shared_note' => sanitize_textarea_field( $shared_note ) ) ), true );
 		if ( is_wp_error( $post_id ) ) { return $post_id; }
 		$this->events->add( $post_id, 'request_created', null, array( 'form_type' => $form_type, 'owner_user_id' => $author_id, 'source' => 'Didar' ) );
+		$this->apply_default_assignee( $post_id, $form_type );
 		return $post_id;
 	}
 
@@ -140,6 +142,7 @@ class Didar_Submission_Service {
 				null,
 				array( 'form_type' => $form_type, 'owner_user_id' => isset( $post_update['post_author'] ) ? (int) $post_update['post_author'] : $old_owner )
 			);
+			$this->apply_default_assignee( $post_id, $form_type );
 		} else {
 			$this->record_data_changes( $post_id, $form_type, $old_fields, $data );
 			if ( isset( $post_update['post_author'] ) ) {
@@ -276,9 +279,9 @@ class Didar_Submission_Service {
 		return true;
 	}
 
-	public function update_workflow( $post_id, $changes ) {
+	public function update_workflow( $post_id, $changes, $internal = false ) {
 		$post = get_post( $post_id );
-		if ( ! $post || ! Didar_Access_Control::can_edit_request( $post_id ) || ! is_array( $changes ) ) {
+		if ( ! $post || ( ! $internal && ! Didar_Access_Control::can_edit_request( $post_id ) ) || ! is_array( $changes ) ) {
 			return new WP_Error( 'forbidden', __( 'شما اجازه انجام این کار را ندارید.', 'didar' ) );
 		}
 
@@ -292,7 +295,7 @@ class Didar_Submission_Service {
 
 		$prepared = array();
 		foreach ( $changes as $key => $value ) {
-			if ( ! isset( $definitions[ $key ] ) || ! current_user_can( $definitions[ $key ]['cap'] ) ) {
+			if ( ! isset( $definitions[ $key ] ) || ( $internal && 'assigned_user_id' !== $key ) || ( ! $internal && ! current_user_can( $definitions[ $key ]['cap'] ) ) ) {
 				return new WP_Error( 'forbidden_workflow_change', __( 'شما اجازه تغییر این بخش از گردش کار را ندارید.', 'didar' ) );
 			}
 			$definition = $definitions[ $key ];
@@ -357,6 +360,9 @@ class Didar_Submission_Service {
 				$event_type = ! $new_value ? 'assignment_removed' : ( $old_value ? 'request_reassigned' : 'request_assigned' );
 			}
 			$meta = array();
+			if ( $internal && 'assigned_user_id' === $key ) {
+				$meta = array( 'form_type' => sanitize_key( (string) get_post_meta( $post_id, '_didar_form_type', true ) ), 'source' => 'default_form_assignee' );
+			}
 			if ( 'internal_status' === $key ) {
 				$form_type = sanitize_key( (string) get_post_meta( $post_id, '_didar_form_type', true ) );
 				$mapping = $this->workflow->mapping( $form_type, $new_value );
@@ -494,9 +500,28 @@ class Didar_Submission_Service {
 				'capability' => 'didar_receive_requests',
 				'orderby'    => 'display_name',
 				'order'      => 'ASC',
-				'fields'     => array( 'ID', 'display_name', 'user_email' ),
+				'fields'     => array( 'ID', 'display_name', 'user_email', 'user_login' ),
 			)
 		);
+	}
+
+	public function default_assignee_id( $form_type ) {
+		$form_type = sanitize_key( (string) $form_type );
+		$defaults  = $this->settings->all();
+		$user_id   = absint( $defaults['didar_form_default_assignees'][ $form_type ] ?? 0 );
+		return $user_id && $this->is_eligible_assignee( $user_id ) ? $user_id : 0;
+	}
+
+	private function apply_default_assignee( $post_id, $form_type ) {
+		$user_id = $this->default_assignee_id( $form_type );
+		if ( ! $user_id || $this->get_assigned_user_id( $post_id ) ) {
+			return false;
+		}
+		$result = $this->update_workflow( $post_id, array( 'assigned_user_id' => $user_id ), true );
+		if ( is_wp_error( $result ) ) {
+			return false;
+		}
+		return true;
 	}
 
 	public function is_eligible_assignee( $user_id ) {
