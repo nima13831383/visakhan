@@ -27,14 +27,19 @@ class Didar_User_Profile {
 			return $this->notice( 'برای ویرایش اطلاعات کاربری ابتدا وارد حساب خود شوید.', 'warning' );
 		}
 
+		wp_enqueue_script( 'didar-user-profile', DIDAR_URL . 'assets/js/user-profile.js', array(), DIDAR_VERSION, true );
 		$user    = wp_get_current_user();
-		$notice  = '';
+		$notice  = $this->profile_success_notice();
 		$errors  = array();
 		if ( $this->is_profile_request() ) {
 			$result = $this->save_current_user( $user );
 			if ( is_wp_error( $result ) ) {
 				$errors[] = $result->get_error_message();
 			} else {
+				$redirect = add_query_arg( 'didar_profile_updated', '1', $this->profile_redirect_url() );
+				if ( wp_safe_redirect( $redirect ) ) {
+					exit;
+				}
 				$notice = $result['notice'];
 				$user   = wp_get_current_user();
 			}
@@ -48,25 +53,67 @@ class Didar_User_Profile {
 		echo '<form method="post" enctype="multipart/form-data" class="didar-form" novalidate>';
 		wp_nonce_field( 'didar_profile_update', 'didar_profile_nonce' );
 		echo '<input type="hidden" name="didar_profile_action" value="update">';
-		echo '<header class="didar-form-header"><p class="didar-eyebrow">حساب کاربری</p><h2>اطلاعات کاربری</h2></header>';
+		$this->profile_image_area( $user, $profile['profile_image_url'] );
+		echo '<header class="didar-form-header didar-profile-edit"><p class="didar-eyebrow">حساب کاربری</p><h2>ویرایش اطلاعات کاربری</h2></header>';
 		echo '<div class="didar-section didar-profile-section"><div class="didar-grid">';
 		$this->text_field( 'first_name', 'نام', $profile['first_name'] );
 		$this->text_field( 'last_name', 'نام خانوادگی', $profile['last_name'] );
-		$this->gender_field( $profile['gender'] );
 		$this->text_field( 'display_name', 'نام نمایشی', $profile['display_name'] );
+		$this->gender_field( $profile['gender'] );
 		$this->text_field( 'mobile', 'شماره تلفن', $profile['mobile'], 'tel' );
 		$this->text_field( 'email', 'ایمیل', $profile['email'], 'email' );
 		echo '</div></div>';
-		if ( 'disabled' !== $this->settings->profile_field_state( 'profile_image' ) ) { echo '<div class="didar-section didar-profile-image-section"><div class="didar-grid">'; $this->image_field( $user->ID, $profile['profile_image_url'] ); echo '</div></div>'; }
 		echo '<div class="didar-actions"><button type="submit" class="didar-submit"><span>ذخیره تغییرات</span><span class="didar-spinner" aria-hidden="true"></span></button></div>';
 		echo '</form></div>';
 		return ob_get_clean();
+	}
+
+	private function profile_image_area( $user, $url ) {
+		$state = $this->settings->profile_field_state( 'profile_image' );
+		if ( 'disabled' === $state ) { return; }
+
+		echo '<div class="didar-profile-image-area">';
+		echo '<div class="didar-profile-avatar">';
+		if ( $url ) {
+			echo '<img src="' . esc_url( $url ) . '" alt="تصویر پروفایل" width="120" height="120">';
+		} else {
+			$avatar = get_avatar( $user->ID, 120, '', 'تصویر پروفایل', array( 'class' => array( 'didar-profile-avatar__image' ) ) );
+			if ( $avatar ) {
+				echo $avatar;
+			} else {
+				$initial = function_exists( 'mb_substr' ) ? mb_substr( $user->display_name ?: $user->user_login, 0, 1, 'UTF-8' ) : substr( $user->display_name ?: $user->user_login, 0, 1 );
+				echo '<span class="didar-profile-avatar__fallback" aria-hidden="true">' . esc_html( $initial ) . '</span>';
+			}
+		}
+		echo '</div>';
+		if ( 'editable' === $state ) {
+			echo '<input id="didar-profile-image" class="screen-reader-text" type="file" name="didar_profile_image" accept="image/jpeg,image/png,image/gif,image/webp">';
+			echo '<label class="didar-profile-image-picker" for="didar-profile-image">تغییر تصویر</label>';
+		}
+		echo '</div>';
 	}
 
 	private function is_profile_request() {
 		return isset( $_POST['didar_profile_action'], $_POST['didar_profile_nonce'] )
 			&& ! is_array( $_POST['didar_profile_action'] )
 			&& 'update' === sanitize_key( wp_unslash( $_POST['didar_profile_action'] ) );
+	}
+
+	private function profile_success_notice() {
+		if ( isset( $_GET['didar_profile_updated'] ) && ! is_array( $_GET['didar_profile_updated'] ) && '1' === sanitize_key( wp_unslash( $_GET['didar_profile_updated'] ) ) ) {
+			return 'اطلاعات کاربری با موفقیت بروزرسانی شد.';
+		}
+		return '';
+	}
+
+	private function profile_redirect_url() {
+		$referer = wp_validate_redirect( wp_get_referer(), '' );
+		if ( $referer ) {
+			return remove_query_arg( array( 'didar_profile_updated', 'didar_profile_action', 'didar_profile_nonce' ), $referer );
+		}
+
+		$request_uri = isset( $_SERVER['REQUEST_URI'] ) && ! is_array( $_SERVER['REQUEST_URI'] ) ? wp_unslash( $_SERVER['REQUEST_URI'] ) : '/';
+		return remove_query_arg( array( 'didar_profile_updated', 'didar_profile_action', 'didar_profile_nonce' ), home_url( $request_uri ) );
 	}
 
 	private function save_current_user( $user ) {
@@ -100,7 +147,7 @@ class Didar_User_Profile {
 				if ( $owner && absint( $owner ) !== absint( $user->ID ) ) { return new WP_Error( 'didar_profile_email_exists', 'این نشانی ایمیل قبلاً استفاده شده است.' ); }
 				$update['user_email'] = $value;
 			} elseif ( 'gender' === $field ) {
-				if ( $value && ! in_array( $value, array( 'male', 'female', 'مرد', 'زن', 'خانم' ), true ) ) { return new WP_Error( 'didar_profile_gender_invalid', 'مقدار جنسیت معتبر نیست.' ); }
+				if ( ! in_array( $value, array( 'male', 'female' ), true ) ) { return new WP_Error( 'didar_profile_gender_invalid', 'مقدار جنسیت معتبر نیست.' ); }
 				$meta['gender'] = $value;
 			} elseif ( 'display_name' === $field ) {
 				$update['display_name'] = $value;
@@ -156,19 +203,11 @@ class Didar_User_Profile {
 	private function gender_field( $value ) {
 		$state = $this->settings->profile_field_state( 'gender' );
 		if ( 'disabled' === $state ) { return; }
-		$options = array( '' => '— انتخاب نشده —', 'male' => 'مرد', 'female' => 'زن', 'مرد' => 'مرد', 'زن' => 'زن', 'خانم' => 'خانم' );
+		$options = array( 'female' => 'زن', 'male' => 'مرد' );
 		$html = '<p class="didar-field"><label class="didar-label" for="didar-profile-gender">جنسیت' . ( 'readonly' === $state ? ' <small>فقط خواندنی</small>' : '' ) . '</label><select id="didar-profile-gender" aria-label="جنسیت"' . ( 'readonly' === $state ? ' disabled aria-readonly="true"' : ' name="didar_profile[gender]"' ) . '>';
+		if ( '' === $value ) { $html .= '<option value="" disabled selected>— انتخاب جنسیت —</option>'; }
 		foreach ( $options as $option_value => $option_label ) { $html .= '<option value="' . esc_attr( $option_value ) . '" ' . selected( $value, $option_value, false ) . '>' . esc_html( $option_label ) . '</option>'; }
 		echo $html . '</select></p>';
-	}
-
-	private function image_field( $user_id, $url ) {
-		$state = $this->settings->profile_field_state( 'profile_image' );
-		if ( 'disabled' === $state ) { return; }
-		echo '<p class="didar-field"><label class="didar-label" for="didar-profile-image">تصویر پروفایل' . ( 'readonly' === $state ? ' <small>فقط خواندنی</small>' : '' ) . '</label>';
-		if ( $url ) { echo '<br><img src="' . esc_url( $url ) . '" alt="" width="80" height="80" style="object-fit:cover;border-radius:50%">'; }
-		if ( 'editable' === $state ) { echo '<input id="didar-profile-image" type="file" name="didar_profile_image" accept="image/jpeg,image/png,image/gif,image/webp">'; }
-		echo '</p>';
 	}
 
 	private function notice( $message, $type ) { return '<div class="didar-notice didar-notice--' . esc_attr( $type ) . '" role="status">' . esc_html( $message ) . '</div>'; }

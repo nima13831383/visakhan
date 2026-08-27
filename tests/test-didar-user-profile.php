@@ -47,7 +47,19 @@ class Didar_User_Profile_Test extends WP_UnitTestCase {
 		$this->assertSame( 'female', $mapper->wordpress_user_profile( get_user_by( 'id', $user_id ) )['gender'] );
 		$this->assertSame( 'female', get_user_meta( $user_id, 'gender', true ) );
 		update_user_meta( $user_id, 'gender', 'مرد' );
-		$this->assertSame( 'مرد', $mapper->wordpress_user_profile( get_user_by( 'id', $user_id ) )['gender'] );
+		$this->assertSame( 'male', $mapper->wordpress_user_profile( get_user_by( 'id', $user_id ) )['gender'] );
+		$this->assertSame( 'male', get_user_meta( $user_id, 'gender', true ) );
+	}
+
+	public function test_legacy_female_gender_values_normalize_to_female() {
+		$user_id = self::factory()->user->create();
+		$this->user_ids[] = $user_id;
+		$mapper = new Didar_Field_Mapper( new Didar_Form_Registry(), new Didar_Settings() );
+		foreach ( array( 'female', 'زن', 'خانم' ) as $value ) {
+			update_user_meta( $user_id, 'gender', $value );
+			$this->assertSame( 'female', $mapper->wordpress_user_profile( get_user_by( 'id', $user_id ) )['gender'] );
+			$this->assertSame( 'female', get_user_meta( $user_id, 'gender', true ) );
+		}
 	}
 
 	public function test_profile_image_uses_canonical_value_and_migrates_legacy_identifier() {

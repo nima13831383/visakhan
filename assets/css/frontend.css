@@ -234,7 +234,63 @@
 .didar-error { color: var(--didar-error); font-size: .88rem; font-weight: 700; margin: 7px 0 0; }
 
 /* Profile fields intentionally extend the shared form language above. */
-.didar-profile-form .didar-profile-section > .didar-grid > .didar-field:has(input[type="file"]) { grid-column: 1 / -1; }
+.didar-profile-image-area {
+  align-items: center;
+  background: var(--didar-surface);
+  border-bottom: 1px solid var(--didar-border);
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  padding: 24px;
+}
+.didar-profile-avatar {
+  background: var(--didar-accent-soft);
+  border: 1px solid var(--didar-border-strong);
+  border-radius: 50%;
+  flex: 0 0 120px;
+  height: 120px;
+  overflow: hidden;
+  width: 120px;
+}
+.didar-profile-avatar img,
+.didar-profile-avatar__image {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+.didar-profile-avatar__fallback {
+  align-items: center;
+  color: var(--didar-primary);
+  display: flex;
+  font-size: 2rem;
+  font-weight: 800;
+  height: 100%;
+  justify-content: center;
+  width: 100%;
+}
+.didar-profile-image-picker {
+  align-items: center;
+  background: var(--didar-primary);
+  border: 1px solid var(--didar-primary);
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: .88rem;
+  font-weight: 750;
+  min-height: 44px;
+  padding: 9px 16px;
+  transition: background-color .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+.didar-profile-image-picker:hover { background: var(--didar-primary-hover); border-color: var(--didar-primary-hover); }
+.didar-profile-image-area input[type="file"]:focus + .didar-profile-image-picker {
+  border-color: var(--didar-primary);
+  box-shadow: 0 0 0 4px rgba(255, 193, 0, .3);
+  outline: 2px solid var(--didar-primary);
+  outline-offset: 1px;
+}
+.didar-profile-edit { border-top: 1px solid var(--didar-border); }
 .didar-profile-form input[readonly] {
   background: #f4f4f4;
   color: var(--didar-muted);
@@ -577,6 +633,8 @@
   .didar-app { margin: 14px 0; }
   .didar-form, .didar-submissions, .didar-submission-details { border-radius: 12px; }
   .didar-form-header, .didar-list-header { padding: 24px 20px; }
+  .didar-profile-image-area { flex-direction: column; gap: 12px; padding: 20px; }
+  .didar-profile-avatar { flex-basis: 88px; height: 88px; width: 88px; }
   .didar-section { margin: 16px 12px; padding: 17px; }
   .didar-grid { grid-template-columns: 1fr; }
   .didar-field--wide { grid-column: auto; }

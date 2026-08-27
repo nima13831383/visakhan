@@ -137,10 +137,20 @@ class Didar_Field_Mapper {
 			$legacy = sanitize_text_field( (string) get_user_meta( $user_id, 'didar_gender', true ) );
 			if ( '' !== $legacy ) {
 				$gender = $legacy;
-				update_user_meta( $user_id, 'gender', $gender );
 			}
 		}
-		return in_array( $gender, array( 'male', 'female', 'مرد', 'زن', 'خانم' ), true ) ? $gender : '';
+		$canonical = array(
+			'female' => 'female',
+			'زن'     => 'female',
+			'خانم'   => 'female',
+			'male'   => 'male',
+			'مرد'    => 'male',
+		);
+		$gender   = $canonical[ $gender ] ?? '';
+		if ( $gender && $gender !== (string) get_user_meta( $user_id, 'gender', true ) ) {
+			update_user_meta( $user_id, 'gender', $gender );
+		}
+		return $gender;
 	}
 
 	private function profile_image_url( $user_id ) {
