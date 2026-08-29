@@ -30,6 +30,7 @@ class Didar_Settings_Transfer {
 	private function portable_runtime_settings( $source ) {
 		$source = is_array( $source ) ? $source : array();
 		$out = array();
+		$out['didar_form_field_defaults'] = isset( $source['didar_form_field_defaults'] ) && is_array( $source['didar_form_field_defaults'] ) ? $source['didar_form_field_defaults'] : array();
 		foreach ( $this->portable_option_keys() as $key ) { if ( array_key_exists( $key, $source ) ) { $out[ $key ] = $source[ $key ]; } }
 		return $out;
 	}
@@ -254,7 +255,11 @@ class Didar_Settings_Transfer {
 	 * transport shapes (notably broker descriptors) must never be compared here.
 	 */
 	public function canonicalize_portable_option( $option_name, $value ) {
-		switch ( $option_name ) {
+		 switch ( $option_name ) {
+			case 'didar_form_field_defaults':
+				$out = array(); $catalog = new Didar_User_Profile_Value_Catalog();
+				foreach ( (array) $value as $form_type => $fields ) { foreach ( (array) $fields as $field_key => $source ) { $source = sanitize_key( (string) $source ); if ( $source && in_array( $source, $catalog->keys(), true ) ) { $out[ sanitize_key( $form_type ) ][ sanitize_key( $field_key ) ] = $source; } } }
+				return $this->sort_associative( $out );
 			case 'didar_field_mappings':
 				$out = array();
 				foreach ( (array) $value as $form_type => $maps ) {

@@ -62,7 +62,7 @@ class Didar_Field_Mapper {
 	/** Return account/profile identity data, with Digits' canonical mobile metadata first. */
 	public function wordpress_user_profile( $user ) {
 		if ( ! $user || empty( $user->ID ) ) {
-			return array( 'first_name' => '', 'last_name' => '', 'nickname' => '', 'display_name' => '', 'email' => '', 'mobile' => '', 'gender' => '', 'profile_image_url' => '' );
+			return array( 'first_name' => '', 'last_name' => '', 'nickname' => '', 'display_name' => '', 'email' => '', 'mobile' => '', 'gender' => '', 'birth_date' => '', 'national_id' => '', 'profile_image_url' => '' );
 		}
 
 		return array(
@@ -76,6 +76,8 @@ class Didar_Field_Mapper {
 			'email'      => sanitize_email( (string) $user->user_email ),
 			'mobile'     => $this->normalize_mobile( $this->wordpress_user_mobile( $user->ID ) ),
 			'gender'     => $this->user_gender( $user->ID ),
+			'birth_date' => sanitize_text_field( (string) get_user_meta( $user->ID, Didar_User_Profile_Value_Catalog::BIRTH_DATE_META, true ) ),
+			'national_id' => sanitize_text_field( (string) get_user_meta( $user->ID, Didar_User_Profile_Value_Catalog::NATIONAL_ID_META, true ) ),
 			'profile_image_url' => $this->profile_image_url( $user->ID ),
 		);
 	}
@@ -187,6 +189,8 @@ class Didar_Field_Mapper {
 		$mapping = isset( $settings['didar_user_person_mappings'] ) && is_array( $settings['didar_user_person_mappings'] ) ? $settings['didar_user_person_mappings'] : array();
 		$values  = array(
 			'gender'            => $profile['gender'],
+			'birth_date'       => $profile['birth_date'],
+			'national_id'      => $profile['national_id'],
 			'display_name'      => $profile['display_name'],
 			'profile_image_url' => $profile['profile_image_url'],
 		);

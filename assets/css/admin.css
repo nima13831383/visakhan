@@ -374,6 +374,17 @@ body.post-type-didar_submission #poststuff .postbox .hndle::before {
   width: 100%;
 }
 
+.didar-settings-page .didar-unified-field-settings { display: grid; gap: 12px; max-width: 1200px; }
+.didar-settings-page .didar-unified-field-settings__form { background: #fff; border: 1px solid #dcdcde; border-radius: 6px; }
+.didar-settings-page .didar-unified-field-settings__form > summary { cursor: pointer; padding: 12px 14px; }
+.didar-settings-page .didar-unified-field-settings__form > summary .description { margin-inline-start: 8px; }
+.didar-settings-page .didar-unified-field-settings__table-wrap { overflow-x: auto; }
+.didar-settings-page .didar-unified-field-settings table { border-width: 1px 0 0; min-width: 760px; }
+.didar-settings-page .didar-unified-field-settings th,
+.didar-settings-page .didar-unified-field-settings td { vertical-align: middle; }
+.didar-settings-page .didar-unified-field-settings td code { direction: ltr; display: inline-block; }
+.didar-settings-page .didar-unified-field-settings select { max-width: 100%; }
+
 .didar-settings-page .didar-field-mapping-form td:last-child {
   min-width: 0;
   width: 65%;

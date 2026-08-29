@@ -36,6 +36,8 @@ require_once DIDAR_PATH . 'includes/class-didar-submission-service.php';
 require_once DIDAR_PATH . 'includes/class-didar-api-client.php';
 require_once DIDAR_PATH . 'includes/class-didar-custom-field-catalog.php';
 require_once DIDAR_PATH . 'includes/class-didar-user-catalog.php';
+require_once DIDAR_PATH . 'includes/class-didar-user-profile-value-catalog.php';
+require_once DIDAR_PATH . 'includes/class-didar-date-service.php';
 require_once DIDAR_PATH . 'includes/class-didar-workflow-manager.php';
 require_once DIDAR_PATH . 'includes/class-didar-settings-transfer.php';
 require_once DIDAR_PATH . 'includes/class-didar-field-mapper.php';

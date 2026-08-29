@@ -618,6 +618,10 @@ class Didar_Submission_Service {
 		if ( '' === $value || null === $value || array() === $value ) {
 			return '—';
 		}
+		if ( 'date' === ( $field['type'] ?? '' ) ) {
+			$display = ( new Didar_Date_Service() )->format_for_display( $value );
+			return $display ? $display : (string) $value;
+		}
 		if ( in_array( $field['type'], array( 'select', 'radio' ), true ) ) {
 			$options = $field['options'];
 			if ( ! empty( $field['legacy_options'] ) ) {

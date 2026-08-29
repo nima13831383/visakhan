@@ -103,9 +103,8 @@ class Didar_Validator {
 				if ( '' === trim( $raw ) ) {
 					return '';
 				}
-				$value = $this->normalize_digits( sanitize_text_field( $raw ) );
-				$date  = DateTime::createFromFormat( '!Y-m-d', $value );
-				if ( ! $date || $date->format( 'Y-m-d' ) !== $value ) {
+				$value = ( new Didar_Date_Service() )->normalize_input( sanitize_text_field( $raw ) );
+				if ( ! $value ) {
 					return new WP_Error( 'invalid_date', sprintf( __( 'تاریخ «%s» معتبر نیست.', 'didar' ), $label ) );
 				}
 				return $value;

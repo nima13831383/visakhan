@@ -7,11 +7,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Didar_Field_Renderer {
 	private $settings;
 	private $files;
+	private $profile_catalog;
+	private $profile_resolver;
 
 	public function __construct( Didar_Settings $settings = null, Didar_File_Service $files = null ) {
 		$this->settings = $settings ? $settings : new Didar_Settings();
 		$this->files    = $files;
+		$this->profile_catalog = new Didar_User_Profile_Value_Catalog();
 	}
+
+	public function set_profile_resolver( $resolver ) { $this->profile_resolver = is_callable( $resolver ) ? $resolver : null; }
 
 	public function render_sections( $form, $values = array(), $errors = array(), $context = 'frontend', $submission_id = 0 ) {
 		$form_type = isset( $form['type'] ) ? sanitize_key( $form['type'] ) : '';
@@ -41,6 +46,14 @@ class Didar_Field_Renderer {
 				$field['form_type'] = $form_type;
 				$field['required']  = $this->settings->is_required( $form_type, $field['name'], ! empty( $field['required'] ) );
 				$value = array_key_exists( $field['name'], $values ) ? $values[ $field['name'] ] : ( isset( $field['default'] ) ? $field['default'] : '' );
+				if ( ! array_key_exists( $field['name'], $values ) && 'frontend' === $context && is_user_logged_in() ) {
+					$source = $this->settings->profile_default_source( $form_type, $field['name'] );
+					if ( $source ) {
+						$user = wp_get_current_user();
+						$profile_value = $this->profile_catalog->resolve_for_user( $source, $user, $this->profile_resolver );
+						if ( '' !== $profile_value ) { $value = $profile_value; }
+					}
+				}
 				$error = isset( $errors[ $field['name'] ] ) ? $errors[ $field['name'] ] : '';
 				if ( ! empty( $field['required'] ) && '' === (string) $value && ! empty( $field['legacy_required_fallback'] ) && ! empty( $values[ $field['legacy_required_fallback'] ] ) ) {
 					$field['required']    = false;
@@ -90,7 +103,10 @@ class Didar_Field_Renderer {
 			}
 			echo '</label>';
 
-			switch ( $type ) {
+			 switch ( $type ) {
+				case 'date':
+					$this->render_date( $field, $value, $id, $input_name, $described, $error );
+					break;
 				case 'textarea':
 				echo '<textarea ' . $this->attributes( $field, $id, $input_name, $described, $error ) . ' rows="5">' . esc_textarea( (string) $value ) . '</textarea>';
 					break;
@@ -128,6 +144,13 @@ class Didar_Field_Renderer {
 			echo '<p class="didar-error" id="' . esc_attr( $id . '-error' ) . '" role="alert">' . esc_html( $error ) . '</p>';
 		}
 		echo '</div>';
+	}
+
+	private function render_date( $field, $value, $id, $name, $described, $error ) {
+		$service = new Didar_Date_Service(); $display = $service->format_for_display( $value );
+		$visible = $this->attributes( $field, $id . '-jalali', $name . '_display', $described, $error ) . ' data-didar-datepicker="jalali" data-didar-date-target="' . esc_attr( $id . '-canonical' ) . '"';
+		echo '<input type="text" value="' . esc_attr( $display ) . '" ' . $visible . ' placeholder="۱۴۰۵/۰۱/۰۱" autocomplete="off">';
+		echo '<input type="hidden" id="' . esc_attr( $id . '-canonical' ) . '" name="' . esc_attr( $name ) . '" value="' . esc_attr( $value ) . '">';
 	}
 
 	private function attributes( $field, $id, $name, $described, $error ) {

@@ -21,6 +21,8 @@ class Didar_Settings {
 		'mobile'       => 'readonly',
 		'email'        => 'editable',
 		'profile_image'=> 'disabled',
+		'birth_date'   => 'editable',
+		'national_id'  => 'editable',
 	);
 
 	/** Return a cryptographically random path credential for the inbound webhook. */
@@ -104,5 +106,11 @@ class Didar_Settings {
 		}
 
 		return (bool) $registry_default;
+	}
+
+	public function profile_default_source( $form_type, $field_key ) {
+		$settings = $this->all();
+		$value = $settings['didar_form_field_defaults'][ sanitize_key( $form_type ) ][ sanitize_key( $field_key ) ] ?? '';
+		return in_array( $value, ( new Didar_User_Profile_Value_Catalog() )->keys(), true ) ? $value : '';
 	}
 }

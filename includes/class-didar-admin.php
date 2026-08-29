@@ -175,19 +175,8 @@ class Didar_Admin {
 			'didar_file_settings'
 		);
 
-		add_settings_section(
-			'didar_field_requirement_settings',
-			__( 'تنظیمات فیلدهای فرم‌ها', 'didar' ),
-			array( $this, 'render_requirement_settings_description' ),
-			'didar-page-settings'
-		);
-		add_settings_field(
-			'didar_field_required_overrides',
-			__( 'ضروری / اختیاری', 'didar' ),
-			array( $this, 'render_field_requirement_settings' ),
-			'didar-page-settings',
-			'didar_field_requirement_settings'
-		);
+		add_settings_section( 'didar_form_field_settings', __( 'تنظیمات فیلدهای فرم‌ها', 'didar' ), array( $this, 'render_form_field_settings_description' ), 'didar-page-settings' );
+		add_settings_field( 'didar_form_field_settings_table', __( 'تنظیمات فیلدها', 'didar' ), array( $this, 'render_form_field_settings' ), 'didar-page-settings', 'didar_form_field_settings' );
 
 		add_settings_section( 'didar_crm_connection', __( 'اتصال به دیدار CRM', 'didar' ), '__return_false', 'didar-page-settings' );
 		add_settings_field( 'didar_api_key', __( 'کلید API دیدار', 'didar' ), array( $this, 'render_didar_api_key' ), 'didar-page-settings', 'didar_crm_connection' );
@@ -196,6 +185,7 @@ class Didar_Admin {
 		add_settings_field( 'didar_webhook_secret', __( 'توکن پروژه برای وب‌هوک', 'didar' ), array( $this, 'render_didar_secret' ), 'didar-page-settings', 'didar_crm_connection', array( 'key' => 'didar_webhook_secret' ) );
 		add_settings_field( 'didar_webhook_security', __( 'امنیت وب‌هوک دیدار', 'didar' ), array( $this, 'render_webhook_security' ), 'didar-page-settings', 'didar_crm_connection' );
 		add_settings_field( 'didar_debug_logging', __( 'گزارش‌گیری تشخیصی دیدار', 'didar' ), array( $this, 'render_debug_logging' ), 'didar-page-settings', 'didar_crm_connection' );
+		add_settings_field( 'didar_date_engine_status', __( 'موتور تقویم فارسی', 'didar' ), array( $this, 'render_date_engine_status' ), 'didar-page-settings', 'didar_crm_connection' );
 		add_settings_field( 'didar_system_field_ids', __( 'فیلدهای سیستمی Deal', 'didar' ), array( $this, 'render_system_field_ids' ), 'didar-page-settings', 'didar_crm_connection' );
 
 		add_settings_section( 'didar_crm_workflow', __( 'گردش کار فرم‌ها در دیدار', 'didar' ), '__return_false', 'didar-page-settings' );
@@ -205,8 +195,6 @@ class Didar_Admin {
 		add_settings_field( 'didar_form_default_assignees', __( 'مسئول پیش‌فرض فرم‌ها', 'didar' ), array( $this, 'render_form_default_assignees' ), 'didar-page-settings', 'didar_form_default_assignees_section' );
 		add_settings_field( 'didar_public_status_field_id', __( 'Custom Field وضعیت عمومی Deal', 'didar' ), array( $this, 'render_didar_text_setting' ), 'didar-page-settings', 'didar_crm_workflow', array( 'key' => 'didar_public_status_field_id', 'description' => 'اختیاری؛ برای Public Status است، نه Pipeline Stage.' ) );
 
-		add_settings_section( 'didar_crm_field_mapping', __( 'نگاشت فیلدهای فرم به Didar', 'didar' ), array( $this, 'render_didar_mapping_description' ), 'didar-page-settings' );
-		add_settings_field( 'didar_field_mappings', __( 'نگاشت فیلدها', 'didar' ), array( $this, 'render_didar_field_mappings' ), 'didar-page-settings', 'didar_crm_field_mapping' );
 	}
 
 	public function settings_capability() {
@@ -231,18 +219,17 @@ class Didar_Admin {
 		$submitted_overrides = isset( $input['field_required_overrides'] ) && is_array( $input['field_required_overrides'] ) ? $input['field_required_overrides'] : array();
 		$clean_overrides     = array();
 		foreach ( $this->registry->all() as $form_type => $form ) {
-			if ( empty( $submitted_overrides[ $form_type ] ) || ! is_array( $submitted_overrides[ $form_type ] ) ) {
-				continue;
-			}
 			foreach ( $this->registry->fields( $form_type ) as $field_key => $field ) {
-				if ( ! empty( $field['internal'] ) || 'honeypot' === $field['type'] || ! isset( $submitted_overrides[ $form_type ][ $field_key ] ) || is_array( $submitted_overrides[ $form_type ][ $field_key ] ) ) {
-					continue;
-				}
+				if ( ! empty( $field['internal'] ) || 'honeypot' === $field['type'] ) { continue; }
+				if ( isset( $current['field_required_overrides'][ $form_type ][ $field_key ] ) ) { $clean_overrides[ $form_type ][ $field_key ] = (bool) $current['field_required_overrides'][ $form_type ][ $field_key ]; }
+				if ( ! isset( $submitted_overrides[ $form_type ][ $field_key ] ) || is_array( $submitted_overrides[ $form_type ][ $field_key ] ) ) { continue; }
 				$state = sanitize_key( wp_unslash( $submitted_overrides[ $form_type ][ $field_key ] ) );
 				if ( 'required' === $state ) {
 					$clean_overrides[ $form_type ][ $field_key ] = true;
 				} elseif ( 'optional' === $state ) {
 					$clean_overrides[ $form_type ][ $field_key ] = false;
+				} elseif ( 'default' === $state ) {
+					unset( $clean_overrides[ $form_type ][ $field_key ] );
 				}
 			}
 		}
@@ -255,7 +242,7 @@ class Didar_Admin {
 		}
 		$output['didar_user_person_mappings'] = array();
 		$submitted_person_mappings = isset( $input['didar_user_person_mappings'] ) && is_array( $input['didar_user_person_mappings'] ) ? $input['didar_user_person_mappings'] : array();
-		foreach ( array( 'gender', 'display_name', 'profile_image_url' ) as $property ) {
+		foreach ( array( 'gender', 'display_name', 'profile_image_url', 'birth_date', 'national_id' ) as $property ) {
 			$key = isset( $submitted_person_mappings[ $property ] ) && is_scalar( $submitted_person_mappings[ $property ] ) ? sanitize_text_field( wp_unslash( $submitted_person_mappings[ $property ] ) ) : '';
 			if ( $key ) { $output['didar_user_person_mappings'][ $property ] = $key; }
 		}
@@ -298,10 +285,21 @@ class Didar_Admin {
 		$output['didar_broker_user_map'] = array();
 		$submitted_brokers = isset( $input['didar_broker_user_map'] ) && is_array( $input['didar_broker_user_map'] ) ? $input['didar_broker_user_map'] : array();
 		foreach ( $submitted_brokers as $wp_user_id => $didar_user_id ) { $wp_user_id = absint( $wp_user_id ); if ( ! $wp_user_id || ! is_scalar( $didar_user_id ) || '' === trim( (string) $didar_user_id ) ) { continue; } $candidate = sanitize_text_field( wp_unslash( $didar_user_id ) ); $normalized = $this->normalize_didar_user_mapping( $candidate, $current['didar_broker_user_map'][ $wp_user_id ] ?? '', $wp_user_id, 'didar_broker_user_map' ); if ( $normalized ) { $output['didar_broker_user_map'][ $wp_user_id ] = $normalized; } }
-		$output['didar_field_mappings'] = array();
+		$output['didar_form_field_defaults'] = isset( $current['didar_form_field_defaults'] ) && is_array( $current['didar_form_field_defaults'] ) ? $current['didar_form_field_defaults'] : array();
+		$submitted_profile_defaults = isset( $input['didar_form_field_defaults'] ) && is_array( $input['didar_form_field_defaults'] ) ? $input['didar_form_field_defaults'] : array();
+		$profile_catalog = new Didar_User_Profile_Value_Catalog();
+		foreach ( $this->registry->all() as $form_type => $form ) {
+			foreach ( $this->registry->fields( $form_type ) as $field_key => $field ) {
+				if ( ! array_key_exists( $field_key, $submitted_profile_defaults[ $form_type ] ?? array() ) ) { continue; }
+				$source = $submitted_profile_defaults[ $form_type ][ $field_key ];
+				if ( is_scalar( $source ) && '' === sanitize_key( $source ) ) { unset( $output['didar_form_field_defaults'][ $form_type ][ $field_key ] ); }
+				elseif ( is_scalar( $source ) && in_array( sanitize_key( $source ), $profile_catalog->keys(), true ) ) { $output['didar_form_field_defaults'][ $form_type ][ $field_key ] = sanitize_key( $source ); }
+			}
+		}
+		$output['didar_field_mappings'] = isset( $current['didar_field_mappings'] ) && is_array( $current['didar_field_mappings'] ) ? $current['didar_field_mappings'] : array();
 		$submitted_mappings = isset( $input['didar_field_mappings'] ) && is_array( $input['didar_field_mappings'] ) ? $input['didar_field_mappings'] : array();
 		$targets = array( 'person_native', 'person_custom', 'deal_native', 'deal_custom' );
-		foreach ( $this->registry->all() as $form_type => $form ) { foreach ( $this->registry->fields( $form_type ) as $field_key => $field ) { if ( ! empty( $field['internal'] ) || 'honeypot' === $field['type'] ) { continue; } $raw = isset( $submitted_mappings[ $form_type ][ $field_key ] ) && is_array( $submitted_mappings[ $form_type ][ $field_key ] ) ? $submitted_mappings[ $form_type ][ $field_key ] : array(); $target = isset( $raw['target'] ) && in_array( sanitize_key( $raw['target'] ), $targets, true ) ? sanitize_key( $raw['target'] ) : ''; $field_name = isset( $raw['field'] ) && is_scalar( $raw['field'] ) ? sanitize_text_field( wp_unslash( $raw['field'] ) ) : ''; if ( ! $target || ! $field_name ) { continue; } if ( 'deal_custom' === $target ) { $pipeline_id = $output['didar_form_workflows'][ $form_type ]['pipeline_id'] ?? ( $this->workflow->workflow( $form_type )['pipeline_id'] ?? '' ); $metadata = $this->workflow->custom_field( $field_name ); $valid = $pipeline_id && Didar_Custom_Field_Catalog::is_deal_field( $metadata ) && $this->workflow->custom_field_available_for_pipeline( $metadata, $pipeline_id ); if ( ! $valid ) { $current_map = $current['didar_field_mappings'][ $form_type ][ $field_key ] ?? array(); if ( is_array( $current_map ) && ( $current_map['field'] ?? '' ) === $field_name && ( $current_map['target'] ?? '' ) === $target ) { $output['didar_field_mappings'][ $form_type ][ $field_key ] = $current_map; } add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_custom_field_' . $form_type . '_' . $field_key, __( 'فیلد انتخاب‌شده در کاریز فعلی قابل استفاده نیست و ذخیره نشد.', 'didar' ), 'error' ); $this->logger->log( 'WARNING', 'didar_custom_field_mapping_invalid', 'Rejected invalid Deal Custom Field mapping.', array( 'form_type' => $form_type, 'field_key' => $field_key, 'custom_field_key' => $field_name, 'custom_field_id' => $metadata['id'] ?? '', 'pipeline_id' => $pipeline_id ) ); $this->logger->log( 'WARNING', 'didar_custom_field_pipeline_mismatch', 'Deal Custom Field is unavailable for the selected pipeline.', array( 'form_type' => $form_type, 'field_key' => $field_key, 'custom_field_key' => $field_name, 'pipeline_id' => $pipeline_id ) ); continue; } } $output['didar_field_mappings'][ $form_type ][ $field_key ] = array( 'target' => $target, 'field' => $field_name ); } }
+		foreach ( $this->registry->all() as $form_type => $form ) { foreach ( $this->registry->fields( $form_type ) as $field_key => $field ) { if ( ! empty( $field['internal'] ) || 'honeypot' === $field['type'] || ! array_key_exists( $field_key, $submitted_mappings[ $form_type ] ?? array() ) ) { continue; } $raw = is_array( $submitted_mappings[ $form_type ][ $field_key ] ) ? $submitted_mappings[ $form_type ][ $field_key ] : array(); $target = isset( $raw['target'] ) && in_array( sanitize_key( $raw['target'] ), $targets, true ) ? sanitize_key( $raw['target'] ) : ''; $field_name = isset( $raw['field'] ) && is_scalar( $raw['field'] ) ? sanitize_text_field( wp_unslash( $raw['field'] ) ) : ''; if ( ! $target || ! $field_name ) { unset( $output['didar_field_mappings'][ $form_type ][ $field_key ] ); continue; } if ( 'deal_custom' === $target ) { $pipeline_id = $output['didar_form_workflows'][ $form_type ]['pipeline_id'] ?? ( $this->workflow->workflow( $form_type )['pipeline_id'] ?? '' ); $metadata = $this->workflow->custom_field( $field_name ); $valid = $pipeline_id && Didar_Custom_Field_Catalog::is_deal_field( $metadata ) && $this->workflow->custom_field_available_for_pipeline( $metadata, $pipeline_id ); if ( ! $valid ) { $current_map = $current['didar_field_mappings'][ $form_type ][ $field_key ] ?? array(); if ( is_array( $current_map ) && ( $current_map['field'] ?? '' ) === $field_name && ( $current_map['target'] ?? '' ) === $target ) { $output['didar_field_mappings'][ $form_type ][ $field_key ] = $current_map; } add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_custom_field_' . $form_type . '_' . $field_key, __( 'فیلد انتخاب‌شده در کاریز فعلی قابل استفاده نیست و ذخیره نشد.', 'didar' ), 'error' ); $this->logger->log( 'WARNING', 'didar_custom_field_mapping_invalid', 'Rejected invalid Deal Custom Field mapping.', array( 'form_type' => $form_type, 'field_key' => $field_key, 'custom_field_key' => $field_name, 'custom_field_id' => $metadata['id'] ?? '', 'pipeline_id' => $pipeline_id ) ); $this->logger->log( 'WARNING', 'didar_custom_field_pipeline_mismatch', 'Deal Custom Field is unavailable for the selected pipeline.', array( 'form_type' => $form_type, 'field_key' => $field_key, 'custom_field_key' => $field_name, 'pipeline_id' => $pipeline_id ) ); continue; } } $output['didar_field_mappings'][ $form_type ][ $field_key ] = array( 'target' => $target, 'field' => $field_name ); } }
 		foreach ( (array) ( $current['didar_field_mappings'] ?? array() ) as $form_type => $maps ) { foreach ( (array) $maps as $field_key => $map ) { if ( is_array( $map ) && in_array( $map['target'] ?? '', array( 'person_native', 'person_custom', 'deal_native' ), true ) && ! isset( $output['didar_field_mappings'][ $form_type ][ $field_key ] ) ) { $output['didar_field_mappings'][ $form_type ][ $field_key ] = $map; } } }
 		$protection = $this->files->sync_storage_protection( $output['file_download_mode'] );
 		if ( is_wp_error( $protection ) ) {
@@ -326,11 +324,13 @@ class Didar_Admin {
 			$name  = Didar_Settings::OPTION_NAME . '[profile_field_states][' . $field . ']';
 			echo '<tr><td><strong>' . esc_html( $label ) . '</strong></td><td><select name="' . esc_attr( $name ) . '"><option value="editable" ' . selected( $value, 'editable', false ) . '>قابل ویرایش</option><option value="readonly" ' . selected( $value, 'readonly', false ) . '>فقط خواندنی</option><option value="disabled" ' . selected( $value, 'disabled', false ) . '>غیرفعال / مخفی</option></select>' . ( 'mobile' === $field ? ' <span class="description">ویرایش مستقیم شماره تلفن غیرفعال است.</span>' : '' ) . '</td></tr>';
 		}
+		foreach ( array( 'birth_date' => 'تاریخ تولد', 'national_id' => 'کد ملی' ) as $field => $label ) { $value = sanitize_key( (string) ( $states[ $field ] ?? Didar_Settings::PROFILE_FIELD_STATES[ $field ] ) ); $name = Didar_Settings::OPTION_NAME . '[profile_field_states][' . $field . ']'; echo '<tr><td><strong>' . esc_html( $label ) . '</strong></td><td><select name="' . esc_attr( $name ) . '"><option value="editable" ' . selected( $value, 'editable', false ) . '>قابل ویرایش</option><option value="readonly" ' . selected( $value, 'readonly', false ) . '>فقط خواندنی</option><option value="disabled" ' . selected( $value, 'disabled', false ) . '>غیرفعال / مخفی</option></select></td></tr>'; }
 		echo '</tbody></table>';
 	}
 
 	public function render_user_person_mappings() {
 		$settings = $this->settings->all();
+		$this->render_new_profile_mapping_fields( $settings );
 		$mapping  = isset( $settings['didar_user_person_mappings'] ) && is_array( $settings['didar_user_person_mappings'] ) ? $settings['didar_user_person_mappings'] : array();
 		$labels   = array( 'gender' => 'جنسیت', 'display_name' => 'نام نمایشی', 'profile_image_url' => 'نشانی تصویر پروفایل' );
 		echo '<table class="widefat striped"><thead><tr><th>WordPress User/Profile</th><th>Didar Person native field</th></tr></thead><tbody>';
@@ -345,8 +345,17 @@ class Didar_Admin {
 		}
 	}
 
+	private function render_new_profile_mapping_fields( $settings ) {
+		$mapping = isset( $settings['didar_user_person_mappings'] ) && is_array( $settings['didar_user_person_mappings'] ) ? $settings['didar_user_person_mappings'] : array();
+		foreach ( array( 'birth_date' => 'تاریخ تولد', 'national_id' => 'کد ملی' ) as $property => $label ) {
+			$name = Didar_Settings::OPTION_NAME . '[didar_user_person_mappings][' . $property . ']';
+			echo '<p><label>' . esc_html( $label ) . ' <input type="text" class="regular-text" name="' . esc_attr( $name ) . '" value="' . esc_attr( $mapping[ $property ] ?? '' ) . '" placeholder="Field_..."></label></p>';
+		}
+	}
+
 	public function render_didar_api_key() { $value = $this->settings->all(); echo '<input type="password" autocomplete="new-password" class="regular-text" name="' . esc_attr( Didar_Settings::OPTION_NAME ) . '[didar_api_key]" value="" placeholder="' . esc_attr( empty( $value['didar_api_key'] ) ? '' : '••••••••' ) . '">'; echo '<p class="description">کلید در سمت سرور استفاده می‌شود و در صفحه یا گزارش‌ها نمایش داده نمی‌شود.</p>'; if ( ! empty( $value['didar_api_key'] ) ) { $url = wp_nonce_url( admin_url( 'admin-post.php?action=didar_test_connection' ), 'didar_test_connection' ); echo '<p><a class="button" href="' . esc_url( $url ) . '">آزمون اتصال دیدار</a></p>'; } }
 	public function render_debug_logging() { $s = $this->settings->all(); $v = $s['didar_debug_logging'] ?? 'off'; echo '<select name="' . esc_attr( Didar_Settings::OPTION_NAME ) . '[didar_debug_logging]"><option value="off" ' . selected( $v, 'off', false ) . '>خاموش</option><option value="errors" ' . selected( $v, 'errors', false ) . '>فقط هشدار و خطا</option><option value="verbose" ' . selected( $v, 'verbose', false ) . '>کامل (Verbose)</option></select><p class="description">این گزینه مستقل از WP_DEBUG است؛ اطلاعات حساس و کلیدهای API هرگز ثبت نمی‌شوند.</p>'; }
+	public function render_date_engine_status() { $label = Didar_Date_Service::intl_available() ? 'IntlCalendar' : 'Internal fallback'; $class = Didar_Date_Service::is_supported() ? 'notice-success' : 'notice-error'; echo '<span class="' . esc_attr( $class ) . '">' . esc_html( $label ) . '</span><p class="description">نمایش تاریخ جلالی و ذخیره‌سازی Gregorian ISO بدون نیاز به تنظیمات سرور انجام می‌شود.</p>'; }
 	public function test_didar_connection() { if ( ! current_user_can( 'didar_manage_settings' ) || ! check_admin_referer( 'didar_test_connection' ) ) { wp_die( esc_html__( 'درخواست نامعتبر است.', 'didar' ), '', array( 'response' => 403 ) ); } $result = ( new Didar_Api_Client( $this->settings ) )->test_connection(); $url = add_query_arg( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'page' => 'didar-page-settings', 'didar_connection' => is_wp_error( $result ) ? 'failed' : 'success' ), admin_url( 'edit.php' ) ); wp_safe_redirect( $url ); exit; }
 	public function render_didar_secret( $args ) { echo '<p class="description">کلید مسیر به‌صورت تصادفی تولید می‌شود و در خروجی تنظیمات قرار نمی‌گیرد. برای تغییر آن از بخش امنیت وب‌هوک استفاده کنید.</p>'; }
 	public function render_webhook_security() {
@@ -387,7 +396,12 @@ class Didar_Admin {
 	private function didar_user_label( $user ) { $identity = ! empty( $user['code'] ) ? '#' . $user['code'] : ( $user['user_name'] ?? '' ); return trim( ( $user['display_name'] ?? '' ) . ' (' . $identity . ')' . ( ! empty( $user['is_owner'] ) ? ' — مالک' : '' ) ); }
 	private function normalize_didar_user_mapping( $candidate, $current, $wp_user_id, $setting ) { $candidate = sanitize_text_field( (string) $candidate ); $current = sanitize_text_field( (string) $current ); $users = $this->workflow->didar_users(); if ( ! $candidate || ! $users ) { return $candidate; } $user = $this->workflow->didar_user_by_user_id( $candidate ); if ( $user && empty( $user['is_disabled'] ) ) { return $candidate; } $legacy = $this->workflow->didar_user_by_id( $candidate ); if ( $legacy && empty( $legacy['is_disabled'] ) && $candidate === $current ) { $this->logger->log( 'INFO', 'didar_user_mapping_migrated', 'Legacy Didar Id mapping migrated to canonical UserId.', array( 'wp_user_id' => absint( $wp_user_id ), 'legacy_didar_id' => $candidate, 'didar_user_id' => $legacy['user_id'], 'code' => $legacy['code'] ?? '', 'setting' => $setting ) ); return $legacy['user_id']; } if ( $candidate === $current ) { $this->logger->log( 'WARNING', 'didar_user_mapping_stale', 'Existing Didar User mapping is stale or disabled and was preserved.', array( 'wp_user_id' => absint( $wp_user_id ), 'didar_user_id' => $candidate, 'setting' => $setting ) ); add_settings_error( Didar_Settings::OPTION_NAME, 'didar_stale_user_' . $setting . '_' . absint( $wp_user_id ), __( 'نگاشت ذخیره‌شده کاربر دیدار معتبر یا فعال نیست و بدون تغییر حفظ شد.', 'didar' ), 'warning' ); return $candidate; } $this->logger->log( 'WARNING', 'didar_user_mapping_invalid', 'Rejected invalid Didar UserId mapping.', array( 'wp_user_id' => absint( $wp_user_id ), 'didar_user_id' => $candidate, 'setting' => $setting ) ); add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_user_' . $setting . '_' . absint( $wp_user_id ), __( 'کاربر انتخاب‌شده دیدار معتبر یا فعال نیست و ذخیره نشد.', 'didar' ), 'error' ); return $current; }
 	public function render_didar_mapping_description() { echo '<p>کلید داخلی فرم و فیلد مبنای نگاشت است، نه برچسب فارسی. مقدار خالی یعنی عدم همگام‌سازی. هر مقدار واردشده در فرم، از جمله نام، نام خانوادگی، موبایل و ایمیل، snapshot همان Deal است و در صورت نیاز باید به Deal Custom Field نگاشت شود. اطلاعات Person فقط از پروفایل WordPress کاربر و جریان ثبت‌نام می‌آید؛ نگاشت فرم نباید پروفایل Person را تغییر دهد.</p>'; }
-	public function render_didar_field_mappings() { $this->render_didar_field_mappings_selector(); }
+	public function render_didar_field_mappings() { $this->render_didar_field_mappings_selector(); $this->render_profile_default_mappings(); }
+	private function render_profile_default_mappings() {
+		$settings = $this->settings->all(); $catalog = new Didar_User_Profile_Value_Catalog(); $sources = $catalog->sources();
+		echo '<h3>مقدار پیش‌فرض</h3><p class="description">در صورت انتخاب، مقدار این فیلد هنگام نمایش فرم از اطلاعات پروفایل کاربر پر می‌شود و کاربر همچنان می‌تواند آن را ویرایش کند.</p>';
+		foreach ( $this->registry->all() as $form_type => $form ) { echo '<table class="widefat striped"><thead><tr><th>' . esc_html( $form['label'] ) . '</th><th>مقدار پیش‌فرض</th></tr></thead><tbody>'; foreach ( $this->registry->fields( $form_type ) as $field_key => $field ) { if ( ! empty( $field['internal'] ) || 'honeypot' === $field['type'] ) { continue; } $name = Didar_Settings::OPTION_NAME . '[didar_form_field_defaults][' . $form_type . '][' . $field_key . ']'; $selected = $settings['didar_form_field_defaults'][ $form_type ][ $field_key ] ?? ''; echo '<tr><td>' . esc_html( $field['label'] ) . ' <code>' . esc_html( $field_key ) . '</code></td><td><select name="' . esc_attr( $name ) . '"><option value="">بدون مقدار پیش‌فرض</option>'; foreach ( $sources as $source_key => $source ) { echo '<option value="' . esc_attr( $source_key ) . '" ' . selected( $selected, $source_key, false ) . '>' . esc_html( $source['label'] ) . '</option>'; } echo '</select></td></tr>'; } echo '</tbody></table>'; }
+	}
 	public function render_didar_field_mappings_selector() { $s = $this->settings->all(); $defaults = new Didar_Field_Mapper( $this->registry, $this->settings ); echo '<script type="application/json" id="didar-custom-field-catalog">' . wp_json_encode( array( 'fields' => $this->workflow->custom_fields(), 'pipelines' => $this->workflow->pipelines() ), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) . '</script><p>فیلد دیدار از کاستوم‌فیلدهای معامله و بر اساس کاریز انتخاب‌شده برای همین فرم تعیین می‌شود.</p>'; foreach ( $this->registry->all() as $form_type => $form ) { $pipeline_id = $this->workflow->workflow( $form_type )['pipeline_id'] ?? ''; echo '<div class="didar-field-mapping-form" data-didar-field-mapping="' . esc_attr( $form_type ) . '"><h3>' . esc_html( $form['label'] ) . '</h3><table class="widefat striped"><tbody>'; foreach ( $this->registry->fields( $form_type ) as $key => $field ) { if ( ! empty( $field['internal'] ) || 'honeypot' === $field['type'] ) { continue; } $map = $s['didar_field_mappings'][ $form_type ][ $key ] ?? $defaults->mapping( $form_type, $key ); $map = $this->normalize_mapping_for_display( $map ); $base = Didar_Settings::OPTION_NAME . '[didar_field_mappings][' . $form_type . '][' . $key . ']'; echo '<tr><td><strong>' . esc_html( $field['label'] ) . '</strong><br><code>' . esc_html( $key ) . '</code></td><td><input type="hidden" name="' . esc_attr( $base . '[target]' ) . '" value="deal_custom">'; $this->render_custom_field_select( $base . '[field]', $map['field'], $pipeline_id ? array( $pipeline_id ) : array() ); echo '</td></tr>'; } echo '</tbody></table></div>'; } }
 	private function normalize_mapping_for_display( $map ) { if ( is_scalar( $map ) ) { return array( 'target' => 'deal_custom', 'field' => sanitize_text_field( (string) $map ) ); } if ( ! is_array( $map ) ) { return array( 'target' => '', 'field' => '' ); } return array( 'target' => sanitize_key( (string) ( $map['target'] ?? ( $map['type'] ?? 'deal_custom' ) ) ), 'field' => sanitize_text_field( (string) ( $map['field'] ?? ( $map['key'] ?? '' ) ) ) ); }
 	private function configured_pipeline_ids() { $ids = array(); foreach ( $this->registry->all() as $form_type => $form ) { $id = $this->workflow->workflow( $form_type )['pipeline_id'] ?? ''; if ( $id ) { $ids[] = $id; } } return array_values( array_unique( $ids ) ); }
@@ -468,6 +482,49 @@ class Didar_Admin {
 
 	public function render_requirement_settings_description() {
 		echo '<p>' . esc_html__( 'فقط وضعیت ضروری بودن قابل تغییر است. «پیش‌فرض» همیشه از تعریف فعلی Form Registry استفاده می‌کند.', 'didar' ) . '</p>';
+	}
+
+	public function render_form_field_settings_description() {
+		echo '<p>' . esc_html__( 'در این بخش می‌توانید وضعیت ضروری بودن، نگاشت به Didar و مقدار پیش‌فرض هر فیلد را در یک محل مدیریت کنید.', 'didar' ) . '</p>';
+	}
+
+	public function render_form_field_settings() {
+		$settings  = $this->settings->all();
+		$overrides = isset( $settings['field_required_overrides'] ) && is_array( $settings['field_required_overrides'] ) ? $settings['field_required_overrides'] : array();
+		$defaults  = isset( $settings['didar_form_field_defaults'] ) && is_array( $settings['didar_form_field_defaults'] ) ? $settings['didar_form_field_defaults'] : array();
+		$mappings  = isset( $settings['didar_field_mappings'] ) && is_array( $settings['didar_field_mappings'] ) ? $settings['didar_field_mappings'] : array();
+		$catalog   = new Didar_User_Profile_Value_Catalog();
+		$sources   = $catalog->sources();
+		$mapper    = new Didar_Field_Mapper( $this->registry, $this->settings );
+
+		echo '<script type="application/json" id="didar-custom-field-catalog">' . wp_json_encode( array( 'fields' => $this->workflow->custom_fields(), 'pipelines' => $this->workflow->pipelines() ), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) . '</script><p class="description">فیلد دیدار از کاستوم‌فیلدهای معامله و بر اساس کاریز انتخاب‌شده برای همین فرم تعیین می‌شود.</p><div class="didar-unified-field-settings">';
+		$form_index = 0;
+		foreach ( $this->registry->all() as $form_type => $form ) {
+			$fields = array_filter( $this->registry->fields( $form_type ), function ( $field ) { return empty( $field['internal'] ) && 'honeypot' !== ( $field['type'] ?? '' ); } );
+			$pipeline_id = $this->workflow->workflow( $form_type )['pipeline_id'] ?? '';
+			echo '<details class="didar-unified-field-settings__form didar-field-mapping-form" data-didar-field-mapping="' . esc_attr( $form_type ) . '"' . ( 0 === $form_index ? ' open' : '' ) . '><summary><strong>' . esc_html( $form['label'] ) . '</strong> <span class="description">' . esc_html( sprintf( _n( '%d فیلد', '%d فیلد', count( $fields ), 'didar' ), count( $fields ) ) ) . '</span></summary>';
+			echo '<div class="didar-unified-field-settings__table-wrap"><table class="widefat striped"><thead><tr><th>' . esc_html__( 'فیلد', 'didar' ) . '</th><th>' . esc_html__( 'وضعیت', 'didar' ) . '</th><th>' . esc_html__( 'نگاشت Didar', 'didar' ) . '</th><th>' . esc_html__( 'مقدار پیش‌فرض', 'didar' ) . '</th></tr></thead><tbody>';
+			foreach ( $fields as $field_key => $field ) {
+				$default_required = ! empty( $field['required'] );
+				$has_override     = isset( $overrides[ $form_type ] ) && is_array( $overrides[ $form_type ] ) && array_key_exists( $field_key, $overrides[ $form_type ] );
+				$required_value   = $has_override ? ( $overrides[ $form_type ][ $field_key ] ? 'required' : 'optional' ) : 'default';
+				$map              = $mappings[ $form_type ][ $field_key ] ?? $mapper->mapping( $form_type, $field_key );
+				$map              = $this->normalize_mapping_for_display( $map );
+				$base             = Didar_Settings::OPTION_NAME . '[didar_field_mappings][' . $form_type . '][' . $field_key . ']';
+				$required_name    = Didar_Settings::OPTION_NAME . '[field_required_overrides][' . $form_type . '][' . $field_key . ']';
+				$default_name     = Didar_Settings::OPTION_NAME . '[didar_form_field_defaults][' . $form_type . '][' . $field_key . ']';
+				echo '<tr><td><strong>' . esc_html( $field['label'] ) . '</strong><br><code>' . esc_html( $field_key ) . '</code></td>';
+				echo '<td><select name="' . esc_attr( $required_name ) . '"><option value="default" ' . selected( $required_value, 'default', false ) . '>' . esc_html__( 'پیش‌فرض', 'didar' ) . ' (' . esc_html( $default_required ? __( 'ضروری', 'didar' ) : __( 'اختیاری', 'didar' ) ) . ')</option><option value="required" ' . selected( $required_value, 'required', false ) . '>' . esc_html__( 'ضروری', 'didar' ) . '</option><option value="optional" ' . selected( $required_value, 'optional', false ) . '>' . esc_html__( 'اختیاری', 'didar' ) . '</option></select></td>';
+				echo '<td><input type="hidden" name="' . esc_attr( $base . '[target]' ) . '" value="deal_custom">';
+				$this->render_custom_field_select( $base . '[field]', $map['field'], $pipeline_id ? array( $pipeline_id ) : array() );
+				echo '</td><td><select name="' . esc_attr( $default_name ) . '"><option value="">' . esc_html__( 'بدون مقدار پیش‌فرض', 'didar' ) . '</option>';
+				foreach ( $sources as $source_key => $source ) { echo '<option value="' . esc_attr( $source_key ) . '" ' . selected( $defaults[ $form_type ][ $field_key ] ?? '', $source_key, false ) . '>' . esc_html( $source['label'] ) . '</option>'; }
+				echo '</select></td></tr>';
+			}
+			echo '</tbody></table></div></details>';
+			$form_index++;
+		}
+		echo '</div>';
 	}
 
 	public function render_field_requirement_settings() {
@@ -993,8 +1050,10 @@ class Didar_Admin {
 			return;
 		}
 		wp_enqueue_style( 'didar-admin', DIDAR_URL . 'assets/css/admin.css', array(), DIDAR_VERSION );
-		if ( $is_settings ) { wp_enqueue_script( 'didar-admin', DIDAR_URL . 'assets/js/admin.js', array(), DIDAR_VERSION, true ); return; }
+		wp_enqueue_style( 'didar-jalali-datepicker', DIDAR_URL . 'assets/css/jalali-datepicker.css', array( 'didar-admin' ), DIDAR_VERSION );
+		if ( $is_settings ) { wp_enqueue_script( 'didar-admin', DIDAR_URL . 'assets/js/admin.js', array(), DIDAR_VERSION, true ); wp_enqueue_script( 'didar-jalali-datepicker', DIDAR_URL . 'assets/js/jalali-datepicker.js', array(), DIDAR_VERSION, true ); return; }
 		wp_enqueue_script( 'didar-admin', DIDAR_URL . 'assets/js/admin.js', array(), DIDAR_VERSION, true );
+		wp_enqueue_script( 'didar-jalali-datepicker', DIDAR_URL . 'assets/js/jalali-datepicker.js', array(), DIDAR_VERSION, true );
 		wp_localize_script( 'didar-admin', 'didarAdmin', array( 'ajaxUrl' => admin_url( 'admin-ajax.php' ), 'nonce' => wp_create_nonce( 'didar_admin_fields' ), 'uploadNonce' => wp_create_nonce( 'didar_upload_file' ), 'removeNonce' => wp_create_nonce( 'didar_remove_file' ), 'loading' => __( 'در حال بارگذاری فیلدها…', 'didar' ), 'error' => __( 'بارگذاری فیلدها انجام نشد.', 'didar' ), 'messages' => array( 'uploading' => __( 'در حال بارگذاری…', 'didar' ), 'uploadInProgress' => __( 'تا پایان بارگذاری فایل صبر کنید.', 'didar' ), 'uploadError' => __( 'بارگذاری فایل انجام نشد.', 'didar' ), 'remove' => __( 'حذف', 'didar' ), 'removeError' => __( 'حذف فایل انجام نشد.', 'didar' ), 'fileLimit' => __( 'برای این فیلد حداکثر %d فایل مجاز است.', 'didar' ) ) ) );
 	}
 

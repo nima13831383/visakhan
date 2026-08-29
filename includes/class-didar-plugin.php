@@ -45,6 +45,8 @@ final class Didar_Plugin {
 		$this->request_search = new Didar_Request_Search();
 		$this->file_service = new Didar_File_Service( $this->registry, $this->settings, $this->event_log );
 		$this->renderer  = new Didar_Field_Renderer( $this->settings, $this->file_service );
+		$profile_mapper = new Didar_Field_Mapper( $this->registry, $this->settings, null, $this->logger );
+		$this->renderer->set_profile_resolver( array( $profile_mapper, 'wordpress_user_profile' ) );
 		$this->validator = new Didar_Validator( $this->registry, $this->settings, $this->file_service );
 		$this->service   = new Didar_Submission_Service( $this->registry, $this->event_log, $this->settings, $this->file_service );
 		$this->file_service->set_submission_service( $this->service );

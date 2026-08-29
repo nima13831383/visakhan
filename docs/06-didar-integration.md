@@ -1,8 +1,12 @@
 # یکپارچگی Didar CRM
 
+تاریخ تولد و کد ملی فقط در صورت تنظیم شناسه Custom Field در نگاشت پروفایل به Person ارسال می‌شوند. این نگاشت از نگاشت فیلد فرم به Deal مستقل است و شناسه Person موجود را تغییر نمی‌دهد.
+
 `Didar_Api_Client` درخواست‌های POST به `/api/contact/save`، `/api/contact/getbyphonenumber`، `/api/deal/search_v2` و `/api/deal/save_v2` ارسال می‌کند. کلید API در `didar_settings` است؛ آن را در مستندات یا log عمومی قرار ندهید.
 
 ## Person
+
+فیلدهای «تاریخ تولد» و «کد ملی» از متاهای `_didar_birth_date` و `_didar_national_id` خوانده می‌شوند و فقط در صورت تنظیم Custom Field به Person ارسال می‌گردند. این نگاشت از نگاشت فیلدهای فرم به Deal مستقل است.
 
 هویت محلی WordPress User است و شناسهٔ خارجی در user meta `_didar_person_id` پایدار می‌ماند. sync به owner پیش‌فرض Didar و موبایل نیاز دارد. lookup دقیق موبایل و بررسی شناسهٔ ذخیره‌شده پیش از create/update انجام می‌شود؛ ابهام Person، ایجاد Deal را متوقف می‌کند.
 

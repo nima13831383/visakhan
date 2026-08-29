@@ -1,7 +1,11 @@
 # پایگاه‌داده و ذخیره‌سازی
 
+`_didar_birth_date` مقدار تاریخ را به‌شکل `YYYY-MM-DD` و `_didar_national_id` کد ملی را به‌شکل رشته نگه می‌دارد. برای کاربران موجود مهاجرت اجباری لازم نیست؛ مقدار غایب خالی در نظر گرفته می‌شود.
+
 | کلید/محل | موجودیت | کاربرد |
 |---|---|---|
+
+`_didar_birth_date` با قالب canonical `YYYY-MM-DD` و `_didar_national_id` به‌صورت رشته ذخیره می‌شود؛ مهاجرت اجباری لازم نیست.
 | `didar_submission` | `wp_posts` | درخواست |
 | `_didar_form_type` | post meta | نوع فرم |
 | `_didar_fields` | post meta | دادهٔ فرم |

@@ -1,0 +1,35 @@
+(function () {
+    'use strict';
+    var persian = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
+    var months = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
+    var fmt, title;
+    try {
+        fmt = new Intl.DateTimeFormat('fa-IR-u-ca-persian', { year: 'numeric', month: 'numeric', day: 'numeric' });
+        title = new Intl.DateTimeFormat('fa-IR-u-ca-persian', { year: 'numeric', month: 'long' });
+    } catch (error) {
+        fmt = null;
+        title = null;
+    }
+    function digits(value) { return String(value).replace(/[۰-۹]/g, function (c) { return String('۰۱۲۳۴۵۶۷۸۹'.indexOf(c)); }).replace(/[٠-٩]/g, function (c) { return String('٠١٢٣٤٥٦٧٨٩'.indexOf(c)); }); }
+    function parts(date) { var p = {}; if (!fmt || !fmt.formatToParts) return p; fmt.formatToParts(date).forEach(function (x) { if (x.type === 'year' || x.type === 'month' || x.type === 'day') p[x.type] = parseInt(digits(x.value), 10); }); return p; }
+    function iso(date) { return date.getUTCFullYear() + '-' + String(date.getUTCMonth() + 1).padStart(2, '0') + '-' + String(date.getUTCDate()).padStart(2, '0'); }
+    function fromIso(value) { var m = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : new Date(); }
+    function fromJalali(year, month, day) { var guess = Date.UTC(year + 621, 2, 21), date = new Date(guess - 370 * 86400000); for (var i = 0; i < 750; i += 1) { var p = parts(date); if (p.year === year && p.month === month && p.day === day) return date; date = new Date(date.getTime() + 86400000); } return null; }
+    function currentJalali() { var p = parts(new Date()); return p.year ? p : { year: 1400, month: 1, day: 1 }; }
+    function show(input) {
+        if (!fmt || !title) return;
+        if (input._didarPicker) return;
+        input._didarPicker = true;
+        var hidden = document.getElementById(input.getAttribute('data-didar-date-target')), wrap = document.createElement('div'), current = currentJalali(), selected = parts(fromIso(hidden && hidden.value)), view = { year: selected.year || current.year, month: selected.month || current.month };
+        var minYear = parseInt(input.getAttribute('data-didar-min-year'), 10), maxYear = parseInt(input.getAttribute('data-didar-max-year'), 10); minYear = isNaN(minYear) ? current.year - 120 : minYear; maxYear = isNaN(maxYear) ? current.year + 20 : maxYear; minYear = Math.min(minYear, view.year); maxYear = Math.max(maxYear, view.year);
+        wrap.className = 'didar-jalali-picker'; input.parentNode.appendChild(wrap);
+        function draw() { var start = fromJalali(view.year, view.month, 1), next = fromJalali(view.month === 12 ? view.year + 1 : view.year, view.month === 12 ? 1 : view.month + 1, 1); if (!start || !next) return; var html = '<div class="didar-jalali-picker__nav"><button type="button" data-step="-1" aria-label="ماه قبل">‹</button><strong>' + title.format(start) + '</strong><button type="button" data-step="1" aria-label="ماه بعد">›</button></div><div class="didar-jalali-picker__week"><span>ش</span><span>ی</span><span>د</span><span>س</span><span>چ</span><span>پ</span><span>ج</span></div><div class="didar-jalali-picker__days">'; var offset = (start.getUTCDay() + 1) % 7; for (var blank = 0; blank < offset; blank += 1) html += '<i></i>'; for (var date = start; date < next; date = new Date(date.getTime() + 86400000)) { var p = parts(date); html += '<button type="button" data-date="' + iso(date) + '">' + String(p.day).replace(/\d/g, function (n) { return persian[n]; }) + '</button>'; } wrap.innerHTML = html + '</div><button type="button" class="didar-jalali-picker__clear">پاک کردن</button>'; }
+        function enhance() { var nav = wrap.querySelector('.didar-jalali-picker__nav'), strong = nav && nav.querySelector('strong'); if (!nav || !strong) return; var month = document.createElement('select'), year = document.createElement('select'); month.setAttribute('data-month', ''); month.setAttribute('aria-label', 'انتخاب ماه'); year.setAttribute('data-year', ''); year.setAttribute('aria-label', 'انتخاب سال'); months.forEach(function (name, index) { month.add(new Option(name, index + 1, false, index + 1 === view.month)); }); for (var y = minYear; y <= maxYear; y += 1) year.add(new Option(String(y).replace(/\d/g, function (n) { return persian[n]; }), y, false, y === view.year)); strong.replaceWith(month); nav.insertBefore(year, nav.lastElementChild); }
+        function open() { draw(); enhance(); wrap.hidden = false; }
+        input.addEventListener('focus', open); input.addEventListener('click', open); input.addEventListener('input', function () { var m = digits(input.value).replace(/-/g, '/').match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/), date = m && fromJalali(+m[1], +m[2], +m[3]); if (date && hidden) hidden.value = iso(date); else if (hidden) hidden.value = ''; });
+        wrap.addEventListener('click', function (event) { event.stopPropagation(); var button = event.target.closest('button'); if (!button) return; if (button.hasAttribute('data-step')) { view.month += +button.getAttribute('data-step'); if (view.month < 1) { view.month = 12; view.year -= 1; } if (view.month > 12) { view.month = 1; view.year += 1; } if (view.year < minYear) { view.year = minYear; view.month = 1; } if (view.year > maxYear) { view.year = maxYear; view.month = 12; } draw(); enhance(); wrap.hidden = false; return; } if (button.hasAttribute('data-date')) { var date = fromIso(button.getAttribute('data-date')), p = parts(date); selected = p; input.value = String(p.year).replace(/\d/g, function (n) { return persian[n]; }) + '/' + String(p.month).padStart(2, '0').replace(/\d/g, function (n) { return persian[n]; }) + '/' + String(p.day).padStart(2, '0').replace(/\d/g, function (n) { return persian[n]; }); if (hidden) hidden.value = iso(date); input.dispatchEvent(new Event('change', { bubbles: true })); wrap.hidden = true; } else if (button.classList.contains('didar-jalali-picker__clear')) { input.value = ''; if (hidden) hidden.value = ''; input.dispatchEvent(new Event('change', { bubbles: true })); wrap.hidden = true; } });
+        wrap.addEventListener('change', function (event) { event.stopPropagation(); if (event.target.hasAttribute('data-month')) { view.month = parseInt(event.target.value, 10); draw(); enhance(); wrap.hidden = false; } if (event.target.hasAttribute('data-year')) { view.year = parseInt(event.target.value, 10); draw(); enhance(); wrap.hidden = false; } }); document.addEventListener('click', function (event) { if (event.target !== input && !wrap.contains(event.target)) wrap.hidden = true; }); input.addEventListener('keydown', function (event) { if (event.key === 'Escape') { wrap.hidden = true; input.blur(); } }); open();
+    }
+    function init() { document.querySelectorAll('[data-didar-datepicker="jalali"]').forEach(show); }
+    document.addEventListener('DOMContentLoaded', function () { init(); document.querySelectorAll('.didar-jalali-picker').forEach(function (picker) { picker.hidden = true; }); }); window.didarInitJalaliDatepickers = init;
+}());

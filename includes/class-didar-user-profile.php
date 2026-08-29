@@ -23,11 +23,13 @@ class Didar_User_Profile {
 
 	public function shortcode( $atts = array() ) {
 		wp_enqueue_style( 'didar-frontend', DIDAR_URL . 'assets/css/frontend.css', array(), DIDAR_VERSION );
+		wp_enqueue_style( 'didar-jalali-datepicker', DIDAR_URL . 'assets/css/jalali-datepicker.css', array( 'didar-frontend' ), DIDAR_VERSION );
 		if ( ! is_user_logged_in() ) {
 			return $this->notice( 'برای ویرایش اطلاعات کاربری ابتدا وارد حساب خود شوید.', 'warning' );
 		}
 
 		wp_enqueue_script( 'didar-user-profile', DIDAR_URL . 'assets/js/user-profile.js', array(), DIDAR_VERSION, true );
+		wp_enqueue_script( 'didar-jalali-datepicker', DIDAR_URL . 'assets/js/jalali-datepicker.js', array(), DIDAR_VERSION, true );
 		$user    = wp_get_current_user();
 		$notice  = $this->profile_success_notice();
 		$errors  = array();
@@ -65,6 +67,8 @@ class Didar_User_Profile {
 		$this->text_field( 'last_name', 'نام خانوادگی', $profile['last_name'] );
 		$this->text_field( 'display_name', 'نام نمایشی', $profile['display_name'] );
 		$this->gender_field( $profile['gender'] );
+		$this->text_field( 'birth_date', 'تاریخ تولد', $profile['birth_date'], 'date' );
+		$this->text_field( 'national_id', 'کد ملی', $profile['national_id'], 'text' );
 		$this->text_field( 'mobile', 'شماره تلفن', $profile['mobile'], 'tel' );
 		$this->text_field( 'email', 'ایمیل', $profile['email'], 'email' );
 		echo '</div></div>';
@@ -131,7 +135,7 @@ class Didar_User_Profile {
 		$current   = $this->mapper->wordpress_user_profile( $user );
 		$update    = array( 'ID' => $user->ID );
 		$meta      = array();
-		foreach ( array( 'first_name', 'last_name', 'display_name', 'email', 'gender', 'mobile' ) as $field ) {
+		foreach ( array( 'first_name', 'last_name', 'display_name', 'email', 'gender', 'mobile', 'birth_date', 'national_id' ) as $field ) {
 			if ( ! array_key_exists( $field, $submitted ) || is_array( $submitted[ $field ] ) ) { continue; }
 			$state = $this->settings->profile_field_state( $field );
 			$value = 'email' === $field ? sanitize_email( $submitted[ $field ] ) : ( 'gender' === $field ? sanitize_text_field( $submitted[ $field ] ) : sanitize_text_field( $submitted[ $field ] ) );
@@ -146,7 +150,14 @@ class Didar_User_Profile {
 				}
 				continue;
 			}
-			if ( 'email' === $field ) {
+			if ( 'birth_date' === $field ) {
+				$value = ( new Didar_Date_Service() )->normalize_input( $value );
+				if ( ! $value ) { return new WP_Error( 'didar_profile_birth_date_invalid', 'تاریخ تولد معتبر نیست.' ); }
+				$meta[ Didar_User_Profile_Value_Catalog::BIRTH_DATE_META ] = $value;
+			} elseif ( 'national_id' === $field ) {
+				if ( '' !== $value && ! preg_match( '/^[0-9]+$/', $value ) ) { return new WP_Error( 'didar_profile_national_id_invalid', 'کد ملی باید فقط شامل رقم باشد.' ); }
+				$meta[ Didar_User_Profile_Value_Catalog::NATIONAL_ID_META ] = $value;
+			} elseif ( 'email' === $field ) {
 				if ( ! is_email( $value ) ) { return new WP_Error( 'didar_profile_email_invalid', 'نشانی ایمیل معتبر نیست.' ); }
 				$owner = email_exists( $value );
 				if ( $owner && absint( $owner ) !== absint( $user->ID ) ) { return new WP_Error( 'didar_profile_email_exists', 'این نشانی ایمیل قبلاً استفاده شده است.' ); }
@@ -247,7 +258,15 @@ class Didar_User_Profile {
 		if ( 'disabled' === $state ) { return; }
 		$id = 'didar-profile-' . sanitize_html_class( $field );
 		echo '<p class="didar-field"><label class="didar-label" for="' . esc_attr( $id ) . '">' . esc_html( $label ) . ( 'readonly' === $state ? ' <small>فقط خواندنی</small>' : '' ) . '</label>';
-		echo '<input id="' . esc_attr( $id ) . '" aria-label="' . esc_attr( $label ) . '" type="' . esc_attr( $type ) . '" value="' . esc_attr( $value ) . '"' . ( 'readonly' === $state ? ' readonly aria-readonly="true"' : ' name="didar_profile[' . esc_attr( $field ) . ']"' ) . '>';
+		if ( 'birth_date' === $field ) {
+			$service = new Didar_Date_Service(); $display = $service->format_for_display( $value ); $today = $service->to_jalali( current_time( 'Y-m-d' ) ); $year = preg_match( '/^(\d{4})\//', $today, $match ) ? (int) $match[1] : 1400;
+			echo '<input id="' . esc_attr( $id ) . '-jalali" aria-label="' . esc_attr( $label ) . '" type="text" value="' . esc_attr( $display ) . '" data-didar-datepicker="jalali" data-didar-date-target="' . esc_attr( $id . '-canonical' ) . '" data-didar-min-year="' . esc_attr( $year - 120 ) . '" data-didar-max-year="' . esc_attr( $year ) . '" placeholder="۱۴۰۵/۰۱/۰۱" autocomplete="off"' . ( 'readonly' === $state ? ' readonly aria-readonly="true"' : '' ) . '>';
+			$canonical_name = 'readonly' === $state ? '' : ' name="didar_profile[' . esc_attr( $field ) . ']"';
+			echo '<input type="hidden" id="' . esc_attr( $id . '-canonical' ) . '"' . $canonical_name . ' value="' . esc_attr( $value ) . '">';
+			echo '</p>'; return;
+		}
+		$extra = 'national_id' === $field ? ' inputmode="numeric" pattern="[0-9]+" autocomplete="off"' : '';
+		echo '<input id="' . esc_attr( $id ) . '" aria-label="' . esc_attr( $label ) . '" type="' . esc_attr( $type ) . '" value="' . esc_attr( $value ) . '"' . $extra . ( 'readonly' === $state ? ' readonly aria-readonly="true"' : ' name="didar_profile[' . esc_attr( $field ) . ']"' ) . '>';
 		if ( 'mobile' === $field && 'readonly' === $state ) { echo '<small class="didar-description">شماره همراه از طریق سیستم ورود سایت مدیریت می‌شود.</small>'; }
 		echo '</p>';
 	}
