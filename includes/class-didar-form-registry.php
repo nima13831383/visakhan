@@ -78,6 +78,14 @@ class Didar_Form_Registry {
 		);
 	}
 
+	private function national_id_field( $name = 'national_id' ) {
+		return $this->field( $name, 'کد ملی', 'text', false, array( 'semantic' => 'national_id', 'inputmode' => 'numeric', 'pattern' => '[0-9]+' ) );
+	}
+
+	private function passport_number_field( $name = 'passport_number' ) {
+		return $this->field( $name, 'شماره گذرنامه', 'text', false, array( 'semantic' => 'passport_number', 'placeholder' => 'A12345678', 'maxlength' => 9, 'pattern' => '[A-Za-z][0-9]{8}', 'autocapitalize' => 'characters' ) );
+	}
+
 	private function section( $label, $fields, $description = '' ) {
 		return array( 'label' => $label, 'description' => $description, 'fields' => $fields );
 	}
@@ -165,7 +173,7 @@ class Didar_Form_Registry {
 						$this->field( 'mobile', 'شماره موبایل', 'text', true, array( 'autocomplete' => 'tel', 'inputmode' => 'tel' ) ),
 						$this->field( 'email', 'ایمیل', 'email', false, array( 'autocomplete' => 'email' ) ),
 						$this->field( 'current_nationality', 'ملیت فعلی', 'text', true ),
-						$this->field( 'passport_number', 'شماره گذرنامه', 'text' ),
+						$this->passport_number_field(),
 						$this->field( 'birth_country', 'کشور محل تولد', 'select', false, array( 'options' => $country_lists['embassy_appointment'], 'allow_legacy' => true ) ),
 						$this->field( 'gender', 'جنسیت', 'radio', true, array( 'options' => array( 'boy' => 'مرد', 'grill' => 'زن' ) ) ),
 						$this->field( 'passport_issue_place', 'محل صدور گذرنامه', 'text' ),
@@ -191,11 +199,11 @@ class Didar_Form_Registry {
 						$this->field( 'birth_date', 'تاریخ تولد', 'date' ), $this->field( 'birth_place', 'محل تولد' ),
 						$this->field( 'gender', 'جنسیت', 'select', false, array( 'options' => array( 'male' => 'مرد', 'female' => 'زن' ) ) ),
 						$this->field( 'marital_status', 'وضعیت تاهل', 'select', false, array( 'options' => array( 'single' => 'مجرد', 'married' => 'متاهل', 'divorced' => 'مطلقه', 'widowed' => 'بیوه' ) ) ),
-						$this->field( 'children_count', 'تعداد فرزندان', 'number', false, array( 'min' => 0 ) ), $this->field( 'children_ages', 'سن فرزندان' ), $this->field( 'national_id', 'کد ملی', 'text', false, array( 'inputmode' => 'numeric' ) ),
+						$this->field( 'children_count', 'تعداد فرزندان', 'number', false, array( 'min' => 0 ) ), $this->field( 'children_ages', 'سن فرزندان' ), $this->national_id_field(),
 					) ),
 					'passport' => $this->section( 'اطلاعات پاسپورت', array(
 						$this->field( 'passport_type', 'نوع پاسپورت', 'select', false, array( 'options' => array( 'ordinary' => 'معمولی', 'diplomatic' => 'دیپلمات', 'service' => 'پاسپورت خدمت', 'official' => 'پاسپورت اداری', 'special' => 'پاسپورت مخصوص', 'other' => 'پاسپورت‌های دیگر' ) ) ),
-						$this->field( 'passport_number', 'شماره پاسپورت' ), $this->field( 'passport_issue_date', 'تاریخ صدور پاسپورت', 'date' ), $this->field( 'passport_expiry_date', 'تاریخ انقضا پاسپورت', 'date' ), $this->field( 'passport_issuer_country', 'کشور صادر کننده', 'select', false, array( 'options' => $country_lists['traveler_evaluation'], 'allow_legacy' => true ) ),
+						$this->passport_number_field(), $this->field( 'passport_issue_date', 'تاریخ صدور پاسپورت', 'date' ), $this->field( 'passport_expiry_date', 'تاریخ انقضا پاسپورت', 'date' ), $this->field( 'passport_issuer_country', 'کشور صادر کننده', 'select', false, array( 'options' => $country_lists['traveler_evaluation'], 'allow_legacy' => true ) ),
 					) ),
 					'family_address' => $this->section( 'روابط خانوادگی و آدرس', array(
 						$this->field( 'eu_family_relation', 'روابط خانوادگی با یک شهروند اتحادیه اروپا، سوئیس یا بریتانیا', 'select', false, array( 'options' => array( 'spouse' => 'همسر', 'child' => 'فرزند', 'grandchild' => 'نوه', 'relative' => 'عضو فامیل', 'in_law' => 'وابسته سببی', 'other' => 'سایر' ) ) ),
@@ -246,8 +254,8 @@ class Didar_Form_Registry {
 				'default_status' => 'pending_review',
 				'sections'       => array(
 					'identity' => $this->section( 'اطلاعات هویتی و تماسی', array(
-						$this->field( 'full_name', 'نام و نام خانوادگی' ), $this->field( 'birth_surname', 'نام خانوادگی زمان تولد' ), $this->field( 'birth_date', 'تاریخ تولد', 'date' ), $this->field( 'birth_city', 'شهر محل تولد' ), $this->field( 'birth_country', 'کشور محل تولد', 'select', false, array( 'options' => $country_lists['visa_request'] ) ),
-						$this->field( 'current_nationality', 'تابعیت فعلی' ), $this->field( 'birth_nationality', 'تابعیت زمان تولد' ), $this->field( 'national_id', 'کد ملی', 'text', false, array( 'inputmode' => 'numeric' ) ), $this->field( 'marital_status', 'وضعیت تاهل', 'select', false, array( 'options' => array( 'single' => 'مجرد', 'married' => 'متاهل' ) ) ),
+						$this->field( 'first_name', 'نام', 'text', false, array( 'autocomplete' => 'given-name' ) ), $this->field( 'last_name', 'نام خانوادگی', 'text', false, array( 'autocomplete' => 'family-name' ) ), $this->field( 'birth_surname', 'نام خانوادگی زمان تولد' ), $this->field( 'birth_date', 'تاریخ تولد', 'date' ), $this->field( 'birth_city', 'شهر محل تولد' ), $this->field( 'birth_country', 'کشور محل تولد', 'select', false, array( 'options' => $country_lists['visa_request'] ) ),
+						$this->field( 'current_nationality', 'تابعیت فعلی' ), $this->field( 'birth_nationality', 'تابعیت زمان تولد' ), $this->national_id_field(), $this->field( 'marital_status', 'وضعیت تاهل', 'select', false, array( 'options' => array( 'single' => 'مجرد', 'married' => 'متاهل' ) ) ),
 						$this->field( 'mobile', 'موبایل', 'text', false, array( 'inputmode' => 'tel', 'autocomplete' => 'tel' ) ), $this->field( 'email', 'ایمیل', 'email', false, array( 'autocomplete' => 'email' ) ), $this->field( 'residential_address', 'آدرس کامل مسکونی', 'textarea' ), $this->field( 'postal_code', 'کد پستی', 'text', false, array( 'inputmode' => 'numeric' ) ),
 					) ),
 					'academic' => $this->section( 'مدارک تحصیلی', array(
@@ -255,7 +263,7 @@ class Didar_Form_Registry {
 						$this->field( 'invitation_type', 'نوع دعوت‌نامه', 'select', false, array( 'options' => array( 'family' => 'دیدار خانواده', 'friend' => 'دیدار دوست', 'spouse_family' => 'دیدار همسر', 'business' => 'سفر تجاری', 'conference' => 'کنفرانس', 'academic_research' => 'سفر علمی/تحقیقاتی', 'cultural_sports' => 'فرهنگی/ورزشی', 'medical' => 'درمان', 'tourism' => 'توریسم (بدون دعوت‌نامه شخصی)' ) ) ),
 					) ),
 					'travel_documents' => $this->section( 'مدارک سفر', array(
-						$this->field( 'passport_number', 'شماره گذرنامه' ), $this->field( 'passport_expiry', 'تاریخ انقضای گذرنامه', 'date' ), $this->field( 'passport_issuer_country', 'کشور صادرکننده پاسپورت', 'select', false, array( 'options' => $country_lists['visa_request'] ) ), $this->field( 'travel_destination', 'مقصد سفر', 'select', false, array( 'options' => $country_lists['visa_request'] ) ),
+						$this->passport_number_field(), $this->field( 'passport_expiry', 'تاریخ انقضای گذرنامه', 'date' ), $this->field( 'passport_issuer_country', 'کشور صادرکننده پاسپورت', 'select', false, array( 'options' => $country_lists['visa_request'] ) ), $this->field( 'travel_destination', 'مقصد سفر', 'select', false, array( 'options' => $country_lists['visa_request'] ) ),
 					) ),
 					'documents' => $this->section( 'مدارک', array(
 						$this->field( 'personal_photo', 'عکس شخصی', 'file', false, $visa_document_upload ),
@@ -280,12 +288,18 @@ class Didar_Form_Registry {
 							'full_name'   => array( 'label' => 'نام و نام خانوادگی', 'type' => 'text' ),
 							'age'         => array( 'label' => 'سن', 'type' => 'text', 'inputmode' => 'numeric' ),
 							'occupation'  => array( 'label' => 'شغل', 'type' => 'select', 'options' => $occupation_lists['visa_request'] ),
-							'national_id' => array( 'label' => 'کد ملی', 'type' => 'text', 'inputmode' => 'numeric' ),
+							'national_id' => array( 'label' => 'کد ملی', 'type' => 'text', 'semantic' => 'national_id', 'inputmode' => 'numeric', 'pattern' => '[0-9]+' ),
+							'passport_number' => array( 'label' => 'شماره گذرنامه', 'type' => 'text', 'semantic' => 'passport_number', 'placeholder' => 'A12345678', 'maxlength' => 9, 'pattern' => '[A-Za-z][0-9]{8}', 'autocapitalize' => 'characters' ),
 							'email'       => array( 'label' => 'ایمیل', 'type' => 'email', 'autocomplete' => 'email' ),
 							'phone'       => array( 'label' => 'شماره تماس', 'type' => 'text', 'inputmode' => 'tel', 'autocomplete' => 'tel' ),
+							'personal_photo' => array_merge( array( 'label' => 'عکس شخصی', 'type' => 'file' ), $visa_document_upload ),
+							'passport_main_page' => array_merge( array( 'label' => 'صفحه اصلی گذرنامه', 'type' => 'file' ), $visa_document_upload ),
+							'round_trip_ticket' => array_merge( array( 'label' => 'بلیط رفت و برگشت', 'type' => 'file' ), $visa_document_upload ),
+							'other_documents' => array_merge( array( 'label' => 'سایر مدارک', 'type' => 'file' ), $visa_document_upload ),
 						) ) ),
 					) ),
 				),
+				'legacy_fields' => array( $this->field( 'full_name', 'نام و نام خانوادگی (قدیمی)' ) ),
 			),
 		);
 	}

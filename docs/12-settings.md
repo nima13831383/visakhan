@@ -9,3 +9,5 @@
 تنظیمات فیلدهای فرم اکنون در یک جدول یکپارچه برای هر فرم نمایش داده می‌شود؛ هر ردیف هم‌زمان وضعیت ضروری/اختیاری، نگاشت Didar و «مقدار پیش‌فرض» را مدیریت می‌کند. کلیدهای ذخیره‌سازی قبلی حفظ شده‌اند.
 
 cacheهای pipeline، custom field و user Didar runtime هستند و منبع پیکربندی قابل‌انتقال نیستند. API key، secret، pipeline/stage و user mapping محیط‌وابسته‌اند؛ پیش از تغییر، metadata دیدار را refresh و mapping را اعتبارسنجی کنید.
+# Visa settings
+`first_name` and `last_name` are independent rows in unified settings for Didar mapping and profile defaults. Repeater child settings remain unsupported by the current top-level settings table.

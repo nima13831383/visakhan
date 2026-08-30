@@ -19,3 +19,5 @@
 | `didar_seen_webhooks` | option | dedupe webhook |
 
 جدول event log و جدول فایل توسط schema manager ایجاد/verify می‌شوند. منبع authoritative برای هویت کاربر، WordPress User است؛ Person/Deal صرفاً شناسهٔ خارجی پایدار دارند. قفل sync و cacheهای Didar optionهای runtime‌اند.
+# Repeater storage
+File IDs are stored inside each companion row and file records use `companions.<index>.<field>` as the logical field key. No migration is required.

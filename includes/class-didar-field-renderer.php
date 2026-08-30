@@ -46,6 +46,7 @@ class Didar_Field_Renderer {
 				$field['form_type'] = $form_type;
 				$field['required']  = $this->settings->is_required( $form_type, $field['name'], ! empty( $field['required'] ) );
 				$value = array_key_exists( $field['name'], $values ) ? $values[ $field['name'] ] : ( isset( $field['default'] ) ? $field['default'] : '' );
+				if ( 'date' === $field['type'] && array_key_exists( $field['name'] . '_display', $values ) && is_scalar( $values[ $field['name'] . '_display' ] ) ) { $field['_display_value'] = (string) $values[ $field['name'] . '_display' ]; }
 				if ( ! array_key_exists( $field['name'], $values ) && 'frontend' === $context && is_user_logged_in() ) {
 					$source = $this->settings->profile_default_source( $form_type, $field['name'] );
 					if ( $source ) {
@@ -114,7 +115,7 @@ class Didar_Field_Renderer {
 					$this->render_select( $field, $value, $id, $input_name, $described, $error, $context );
 					break;
 				case 'repeater':
-					$this->render_repeater( $field, $value, $id );
+					$this->render_repeater( $field, $value, $id, $submission_id );
 					break;
 				case 'file':
 					$this->render_file( $field, $value, $id, $input_name, $submission_id );
@@ -147,7 +148,7 @@ class Didar_Field_Renderer {
 	}
 
 	private function render_date( $field, $value, $id, $name, $described, $error ) {
-		$service = new Didar_Date_Service(); $display = $service->format_for_display( $value );
+		$service = new Didar_Date_Service(); $display = isset( $field['_display_value'] ) ? $field['_display_value'] : $service->format_for_display( $value );
 		$visible = $this->attributes( $field, $id . '-jalali', $name . '_display', $described, $error ) . ' data-didar-datepicker="jalali" data-didar-date-target="' . esc_attr( $id . '-canonical' ) . '"';
 		echo '<input type="text" value="' . esc_attr( $display ) . '" ' . $visible . ' placeholder="۱۴۰۵/۰۱/۰۱" autocomplete="off">';
 		echo '<input type="hidden" id="' . esc_attr( $id . '-canonical' ) . '" name="' . esc_attr( $name ) . '" value="' . esc_attr( $value ) . '">';
@@ -158,8 +159,9 @@ class Didar_Field_Renderer {
 			'id'   => $id,
 			'name' => $name,
 		);
+		if ( ! empty( $field['semantic'] ) ) { $attributes['data-didar-semantic'] = sanitize_key( $field['semantic'] ); }
 
-		foreach ( array( 'placeholder', 'autocomplete', 'inputmode', 'accept', 'min', 'max', 'step' ) as $attribute ) {
+		foreach ( array( 'placeholder', 'autocomplete', 'autocapitalize', 'inputmode', 'accept', 'min', 'max', 'step', 'pattern', 'maxlength' ) as $attribute ) {
 			if ( isset( $field[ $attribute ] ) && '' !== $field[ $attribute ] ) {
 				$attributes[ $attribute ] = $field[ $attribute ];
 			}
@@ -228,11 +230,11 @@ class Didar_Field_Renderer {
 		echo '<button type="button" class="didar-add-row">' . esc_html__( 'افزودن زمان', 'didar' ) . '</button></div>';
 	}
 
-	private function render_repeater( $field, $value, $id ) {
+	private function render_repeater( $field, $value, $id, $submission_id = 0 ) {
 		$rows = is_array( $value ) && $value ? array_values( $value ) : array( array() );
 		echo '<div id="' . esc_attr( $id ) . '" class="didar-repeater" data-didar-repeater data-field="' . esc_attr( $field['name'] ) . '" data-max-items="' . esc_attr( isset( $field['max_items'] ) ? $field['max_items'] : 20 ) . '">';
 		foreach ( $rows as $row_index => $row ) {
-			echo '<div class="didar-repeater-row">';
+			echo '<div class="didar-repeater-row" data-row-index="' . esc_attr( absint( $row_index ) ) . '">';
 			foreach ( $field['columns'] as $column => $column_definition ) {
 				$is_structured = is_array( $column_definition );
 				$label         = $is_structured && isset( $column_definition['label'] ) ? $column_definition['label'] : $column_definition;
@@ -246,10 +248,15 @@ class Didar_Field_Renderer {
 						echo '<option value="' . esc_attr( $option_value ) . '" ' . selected( (string) $cell_value, (string) $option_value, false ) . '>' . esc_html( $option_label ) . '</option>';
 					}
 					echo '</select>';
+				} elseif ( 'file' === $column_type ) {
+					$file_field = $column_definition;
+					$file_field['name']      = 'companions.' . absint( $row_index ) . '.' . $column;
+					$file_field['form_type'] = $field['form_type'];
+					$this->render_file( $file_field, $cell_value, $cell_id, 'didar_fields[' . $field['name'] . '][' . absint( $row_index ) . '][' . $column . ']', $submission_id );
 				} else {
 					$html_type = in_array( $column_type, array( 'text', 'email', 'number' ), true ) ? $column_type : 'text';
-					echo '<input type="' . esc_attr( $html_type ) . '" id="' . esc_attr( $cell_id ) . '" name="didar_fields[' . esc_attr( $field['name'] ) . '][' . esc_attr( $row_index ) . '][' . esc_attr( $column ) . ']" value="' . esc_attr( $cell_value ) . '"';
-					foreach ( array( 'inputmode', 'autocomplete', 'min', 'max', 'step' ) as $attribute ) {
+					echo '<input type="' . esc_attr( $html_type ) . '" id="' . esc_attr( $cell_id ) . '" name="didar_fields[' . esc_attr( $field['name'] ) . '][' . esc_attr( $row_index ) . '][' . esc_attr( $column ) . ']" value="' . esc_attr( $cell_value ) . '"' . ( $is_structured && ! empty( $column_definition['semantic'] ) ? ' data-didar-semantic="' . esc_attr( sanitize_key( $column_definition['semantic'] ) ) . '"' : '' );
+					foreach ( array( 'placeholder', 'inputmode', 'autocomplete', 'autocapitalize', 'min', 'max', 'step', 'pattern', 'maxlength' ) as $attribute ) {
 						if ( $is_structured && isset( $column_definition[ $attribute ] ) && '' !== $column_definition[ $attribute ] ) {
 							echo ' ' . esc_attr( $attribute ) . '="' . esc_attr( $column_definition[ $attribute ] ) . '"';
 						}
@@ -269,7 +276,7 @@ class Didar_Field_Renderer {
 		$is_multiple    = ! empty( $field['multiple'] );
 		$hidden_name    = $is_multiple ? $name . '[]' : $name;
 
-		echo '<div class="didar-file-upload" data-didar-upload data-form-type="' . esc_attr( isset( $field['form_type'] ) ? $field['form_type'] : '' ) . '" data-submission-id="' . esc_attr( absint( $submission_id ) ) . '" data-field="' . esc_attr( $field['name'] ) . '" data-max-files="' . esc_attr( $max_files ) . '" data-required="' . esc_attr( ! empty( $field['required'] ) ? '1' : '0' ) . '">';
+		echo '<div class="didar-file-upload" data-didar-upload data-form-type="' . esc_attr( isset( $field['form_type'] ) ? $field['form_type'] : '' ) . '" data-submission-id="' . esc_attr( absint( $submission_id ) ) . '" data-field="' . esc_attr( $field['name'] ) . '" data-input-name="' . esc_attr( $hidden_name ) . '" data-max-files="' . esc_attr( $max_files ) . '" data-required="' . esc_attr( ! empty( $field['required'] ) ? '1' : '0' ) . '">';
 		echo '<div class="didar-file-picker"><input type="file" id="' . esc_attr( $id ) . '-file"' . ( $is_multiple ? ' multiple' : '' ) . ( ! empty( $field['accept'] ) ? ' accept="' . esc_attr( $field['accept'] ) . '"' : '' ) . ( ! empty( $field['required'] ) && ! $file_ids ? ' required aria-required="true"' : '' ) . '>';
 		echo '<button type="button" class="didar-upload-button">' . esc_html__( 'بارگذاری فایل', 'didar' ) . '</button></div>';
 		echo '<ul class="didar-uploaded-files" aria-live="polite">';
@@ -309,5 +316,28 @@ class Didar_Field_Renderer {
 			echo '</li>';
 		}
 		echo '</ul>';
+	}
+
+	public function render_repeater_details( $field, $value, $submission_id ) {
+		$rows = is_array( $value ) ? $value : array();
+		if ( ! $rows ) { echo '—'; return; }
+		echo '<div class="didar-repeater-details">';
+		foreach ( $rows as $row_index => $row ) {
+			echo '<section class="didar-repeater-detail-row"><h4>' . esc_html( sprintf( 'همراه %d', absint( $row_index ) + 1 ) ) . '</h4><dl>';
+			foreach ( $field['columns'] as $column => $definition ) {
+				$definition = is_array( $definition ) ? $definition : array( 'label' => $definition, 'type' => 'text' );
+				$child_value = is_array( $row ) && array_key_exists( $column, $row ) ? $row[ $column ] : '';
+				if ( '' === $child_value || array() === $child_value ) { continue; }
+				echo '<div><dt>' . esc_html( $definition['label'] ?? $column ) . '</dt><dd>';
+				if ( 'file' === ( $definition['type'] ?? '' ) ) {
+					$definition['name'] = 'companions.' . absint( $row_index ) . '.' . $column;
+					$definition['form_type'] = $field['form_type'] ?? 'visa_request';
+					$this->render_file_details( $definition, $child_value, $submission_id );
+				} else { echo nl2br( esc_html( is_array( $child_value ) ? implode( '، ', array_map( 'strval', $child_value ) ) : (string) $child_value ) ); }
+				echo '</dd></div>';
+			}
+			echo '</dl></section>';
+		}
+		echo '</div>';
 	}
 }

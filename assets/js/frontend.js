@@ -14,14 +14,38 @@
     });
   }
 
+  function clearClonedUploads(row) {
+    row.querySelectorAll('[data-didar-upload]').forEach(function (wrapper) {
+      wrapper.querySelectorAll('[data-didar-file]').forEach(function (item) { item.remove(); });
+      wrapper.querySelectorAll('input[type="hidden"]').forEach(function (input) { input.remove(); });
+      var input = wrapper.querySelector('input[type="file"]');
+      if (input) { input.value = ''; input.required = wrapper.getAttribute('data-required') === '1'; }
+    });
+  }
+
   function addRow(container) {
+    var field = container.getAttribute('data-field');
     var rows = container.querySelectorAll('.didar-repeater-row, .didar-repeatable-row');
     var max = parseInt(container.getAttribute('data-max-items') || '20', 10);
     if (!rows.length || rows.length >= max) return;
     var clone = rows[rows.length - 1].cloneNode(true);
-	clone.querySelectorAll('input, select, textarea').forEach(function (control) { control.value = ''; control.checked = false; });
+    var highestIndex = -1;
+    rows.forEach(function (row) { highestIndex = Math.max(highestIndex, parseInt(row.getAttribute('data-row-index') || '-1', 10)); });
+    var newIndex = highestIndex + 1;
+    var oldIndex = parseInt(clone.getAttribute('data-row-index') || String(rows.length - 1), 10);
+    clone.setAttribute('data-row-index', newIndex);
+	clone.querySelectorAll('input, select, textarea').forEach(function (control) {
+      control.value = ''; control.checked = false;
+      control.name = control.name.replace(new RegExp('didar_fields\\[' + field + '\\]\\[' + oldIndex + '\\]'), 'didar_fields[' + field + '][' + newIndex + ']');
+      control.id = control.id.replace(new RegExp('-' + oldIndex + '-'), '-' + newIndex + '-');
+    });
+    clone.querySelectorAll('label[for]').forEach(function (label) { label.setAttribute('for', label.getAttribute('for').replace(new RegExp('-' + oldIndex + '-'), '-' + newIndex + '-')); });
+    clone.querySelectorAll('[data-didar-upload]').forEach(function (wrapper) {
+      wrapper.setAttribute('data-field', wrapper.getAttribute('data-field').replace('companions.' + oldIndex + '.', 'companions.' + newIndex + '.'));
+      wrapper.setAttribute('data-input-name', wrapper.getAttribute('data-input-name').replace('[' + oldIndex + ']', '[' + newIndex + ']'));
+    });
+    clearClonedUploads(clone);
     rows[rows.length - 1].after(clone);
-    if (container.hasAttribute('data-didar-repeater')) reindexRepeater(container);
   }
 
   function removeRow(button) {
@@ -33,7 +57,6 @@
 	  row.querySelectorAll('input, select, textarea').forEach(function (control) { control.value = ''; control.checked = false; });
     } else {
       row.remove();
-      if (container.hasAttribute('data-didar-repeater')) reindexRepeater(container);
     }
   }
 
@@ -47,7 +70,7 @@
     item.setAttribute('data-didar-file', fileId);
     label.textContent = filename;
     hidden.type = 'hidden';
-    hidden.name = 'didar_fields[' + field + '][]';
+    hidden.name = wrapper.getAttribute('data-input-name') || ('didar_fields[' + field + '][]');
     hidden.value = fileId;
     remove.type = 'button';
     remove.className = 'didar-remove-upload';

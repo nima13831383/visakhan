@@ -170,7 +170,7 @@ class Didar_File_Service {
 		}
 
 		$form_type    = sanitize_key( (string) $form_type );
-		$field_key    = sanitize_key( (string) $field_key );
+		$field_key    = self::normalize_field_key( $field_key );
 		$submission_id = absint( $submission_id );
 		$field        = $this->get_file_field( $form_type, $field_key );
 		if ( ! $field ) {
@@ -340,13 +340,11 @@ class Didar_File_Service {
 	public function finalize_submission_files( $post_id, $form_type, $data, $old_data = array(), $log_changes = false ) {
 		global $wpdb;
 		$post_id = absint( $post_id );
-		foreach ( $this->registry->fields( $form_type ) as $field_key => $field ) {
-			if ( 'file' !== $field['type'] ) {
-				continue;
-			}
-
-			$new_ids = $this->normalize_ids( isset( $data[ $field_key ] ) ? $data[ $field_key ] : array() );
-			$old_ids = $this->normalize_ids( isset( $old_data[ $field_key ] ) ? $old_data[ $field_key ] : array() );
+		foreach ( $this->file_contexts( $form_type, $data, $old_data ) as $context ) {
+			$field_key = $context['key'];
+			$field     = $context['field'];
+			$new_ids = $this->normalize_ids( $this->value_at_path( $data, $field_key ) );
+			$old_ids = $this->normalize_ids( $this->value_at_path( $old_data, $field_key ) );
 			$added   = array_values( array_diff( $new_ids, $old_ids ) );
 			$removed = array_values( array_diff( $old_ids, $new_ids ) );
 
@@ -389,6 +387,7 @@ class Didar_File_Service {
 	public function remove( $file_id, $form_type, $field_key, $submission_id = 0 ) {
 		$file_id       = absint( $file_id );
 		$submission_id = absint( $submission_id );
+		$field_key     = self::normalize_field_key( $field_key );
 		$field         = $this->get_file_field( $form_type, $field_key );
 		$record        = $this->get( $file_id );
 		if ( ! $field || ! $record || $record['form_type'] !== $form_type || $record['field_key'] !== $field_key ) {
@@ -407,7 +406,7 @@ class Didar_File_Service {
 		}
 
 		$data        = $this->submission_service ? $this->submission_service->get_fields( $submission_id ) : array();
-		$current_ids = $this->normalize_ids( isset( $data[ $field_key ] ) ? $data[ $field_key ] : array() );
+		$current_ids = $this->normalize_ids( $this->value_at_path( $data, $field_key ) );
 		if ( ! in_array( $file_id, $current_ids, true ) ) {
 			return new WP_Error( 'forbidden_document', __( 'شما اجازه حذف این فایل را ندارید.', 'didar' ) );
 		}
@@ -416,7 +415,7 @@ class Didar_File_Service {
 		if ( is_wp_error( $deleted ) ) {
 			return $deleted;
 		}
-		$data[ $field_key ] = array_values( array_diff( $current_ids, array( $file_id ) ) );
+		$this->set_value_at_path( $data, $field_key, array_values( array_diff( $current_ids, array( $file_id ) ) ) );
 		update_post_meta( $submission_id, '_didar_fields', $data );
 		$this->events->add( $submission_id, 'file_removed', $file_id, null, array( 'field_name' => $field_key, 'field_label' => $field['label'], 'file_id' => $file_id ) );
 		wp_update_post( array( 'ID' => $submission_id ) );
@@ -516,7 +515,7 @@ class Didar_File_Service {
 			return false;
 		}
 		$data = $this->submission_service->get_fields( $post->ID );
-		$ids  = $this->normalize_ids( isset( $data[ $record['field_key'] ] ) ? $data[ $record['field_key'] ] : array() );
+		$ids  = $this->normalize_ids( $this->value_at_path( $data, $record['field_key'] ) );
 		return in_array( $record['file_id'], $ids, true );
 	}
 
@@ -613,7 +612,34 @@ class Didar_File_Service {
 
 	private function get_file_field( $form_type, $field_key ) {
 		$fields = $this->registry->fields( sanitize_key( $form_type ) );
-		return isset( $fields[ $field_key ] ) && 'file' === $fields[ $field_key ]['type'] ? $fields[ $field_key ] : null;
+		if ( isset( $fields[ $field_key ] ) && 'file' === $fields[ $field_key ]['type'] ) { return $fields[ $field_key ]; }
+		$parts = explode( '.', (string) $field_key );
+		$column = count( $parts ) === 3 && 'companions' === $parts[0] && ctype_digit( $parts[1] ) ? ( $fields['companions']['columns'][ $parts[2] ] ?? null ) : null;
+		if ( is_array( $column ) && 'file' === ( $column['type'] ?? '' ) ) { $column['name'] = (string) $field_key; $column['form_type'] = sanitize_key( $form_type ); return $column; }
+		return null;
+	}
+
+	private function file_contexts( $form_type, $data, $old_data ) {
+		$out = array();
+		foreach ( $this->registry->fields( $form_type ) as $key => $field ) { if ( 'file' === ( $field['type'] ?? '' ) ) { $out[] = array( 'key' => $key, 'field' => $field ); } }
+		$rows = array();
+		foreach ( array( (array) ( $data['companions'] ?? array() ), (array) ( $old_data['companions'] ?? array() ) ) as $source_rows ) {
+			foreach ( $source_rows as $index => $row ) { $rows[ absint( $index ) ] = true; }
+		}
+		foreach ( array_keys( $rows ) as $index ) { foreach ( array( 'personal_photo', 'passport_main_page', 'round_trip_ticket', 'other_documents' ) as $column ) { $key = 'companions.' . absint( $index ) . '.' . $column; $field = $this->get_file_field( $form_type, $key ); if ( $field ) { $out[] = array( 'key' => $key, 'field' => $field ); } } }
+		return $out;
+	}
+
+	private function value_at_path( $data, $path ) {
+		$value = $data;
+		foreach ( explode( '.', (string) $path ) as $part ) { if ( ! is_array( $value ) || ! array_key_exists( $part, $value ) ) { return array(); } $value = $value[ $part ]; }
+		return $value;
+	}
+
+	private function set_value_at_path( &$data, $path, $value ) {
+		$parts = explode( '.', (string) $path ); $last = array_pop( $parts ); $ref =& $data;
+		foreach ( $parts as $part ) { if ( ! isset( $ref[ $part ] ) || ! is_array( $ref[ $part ] ) ) { $ref[ $part ] = array(); } $ref =& $ref[ $part ]; }
+		$ref[ $last ] = $value;
 	}
 
 	private function can_edit_submission( $submission_id, $form_type ) {
@@ -804,5 +830,10 @@ class Didar_File_Service {
 
 	private function normalize_ids( $value ) {
 		return array_values( array_unique( array_filter( array_map( 'absint', (array) $value ) ) ) );
+	}
+
+	public static function normalize_field_key( $field_key ) {
+		$field_key = strtolower( trim( (string) $field_key ) );
+		return preg_match( '/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/', $field_key ) ? $field_key : '';
 	}
 }

@@ -1053,6 +1053,7 @@ class Didar_Admin {
 		wp_enqueue_style( 'didar-jalali-datepicker', DIDAR_URL . 'assets/css/jalali-datepicker.css', array( 'didar-admin' ), DIDAR_VERSION );
 		if ( $is_settings ) { wp_enqueue_script( 'didar-admin', DIDAR_URL . 'assets/js/admin.js', array(), DIDAR_VERSION, true ); wp_enqueue_script( 'didar-jalali-datepicker', DIDAR_URL . 'assets/js/jalali-datepicker.js', array(), DIDAR_VERSION, true ); return; }
 		wp_enqueue_script( 'didar-admin', DIDAR_URL . 'assets/js/admin.js', array(), DIDAR_VERSION, true );
+		wp_enqueue_script( 'didar-form-input-rules', DIDAR_URL . 'assets/js/form-input-rules.js', array(), DIDAR_VERSION, true );
 		wp_enqueue_script( 'didar-jalali-datepicker', DIDAR_URL . 'assets/js/jalali-datepicker.js', array(), DIDAR_VERSION, true );
 		wp_localize_script( 'didar-admin', 'didarAdmin', array( 'ajaxUrl' => admin_url( 'admin-ajax.php' ), 'nonce' => wp_create_nonce( 'didar_admin_fields' ), 'uploadNonce' => wp_create_nonce( 'didar_upload_file' ), 'removeNonce' => wp_create_nonce( 'didar_remove_file' ), 'loading' => __( 'در حال بارگذاری فیلدها…', 'didar' ), 'error' => __( 'بارگذاری فیلدها انجام نشد.', 'didar' ), 'messages' => array( 'uploading' => __( 'در حال بارگذاری…', 'didar' ), 'uploadInProgress' => __( 'تا پایان بارگذاری فایل صبر کنید.', 'didar' ), 'uploadError' => __( 'بارگذاری فایل انجام نشد.', 'didar' ), 'remove' => __( 'حذف', 'didar' ), 'removeError' => __( 'حذف فایل انجام نشد.', 'didar' ), 'fileLimit' => __( 'برای این فیلد حداکثر %d فایل مجاز است.', 'didar' ) ) ) );
 	}

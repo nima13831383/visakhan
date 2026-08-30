@@ -75,6 +75,20 @@ class Didar_Validator {
 		}
 
 		switch ( $type ) {
+			case 'text':
+				$value = sanitize_text_field( $raw );
+				if ( '' === $value || empty( $field['semantic'] ) ) {
+					return $value;
+				}
+				if ( 'national_id' === $field['semantic'] ) {
+					$value = $this->normalize_digits( $value );
+					return preg_match( '/^[0-9]+$/', $value ) ? (string) $value : new WP_Error( 'invalid_national_id', 'کد ملی فقط باید شامل عدد باشد.' );
+				}
+				if ( 'passport_number' === $field['semantic'] ) {
+					$value = strtoupper( $value );
+					return preg_match( '/^[A-Z][0-9]{8}$/', $value ) ? $value : new WP_Error( 'invalid_passport_number', 'شماره گذرنامه باید شامل یک حرف انگلیسی و هشت رقم باشد.' );
+				}
+				return $value;
 			case 'textarea':
 				return sanitize_textarea_field( $raw );
 			case 'email':
@@ -159,7 +173,7 @@ class Didar_Validator {
 				}
 				return array_values( array_unique( $values ) );
 			case 'repeater':
-				return $this->validate_repeater( $field, $raw );
+				return $this->validate_repeater( $field, $raw, $context, $submission_id );
 			case 'file':
 				return $this->validate_file( $field, $raw, $context, $submission_id );
 			case 'hidden':
@@ -178,26 +192,37 @@ class Didar_Validator {
 		return is_array( $stored ) && isset( $stored[ $key ] ) && is_scalar( $stored[ $key ] ) && '' !== trim( (string) $stored[ $key ] );
 	}
 
-	private function validate_repeater( $field, $raw ) {
+	private function validate_repeater( $field, $raw, $context = 'frontend', $submission_id = 0 ) {
 		$rows  = array();
 		$limit = isset( $field['max_items'] ) ? absint( $field['max_items'] ) : 20;
 		if ( count( $raw ) > $limit ) {
 			return new WP_Error( 'too_many_repeater_items', sprintf( __( 'تعداد ردیف‌های «%s» بیش از حد مجاز است.', 'didar' ), $field['label'] ) );
 		}
-		foreach ( $raw as $row ) {
+		foreach ( $raw as $row_index => $row ) {
 			if ( ! is_array( $row ) ) {
 				return new WP_Error( 'invalid_repeater', sprintf( __( 'ساختار فیلد «%s» معتبر نیست.', 'didar' ), $field['label'] ) );
 			}
 			$clean = array();
 			foreach ( $field['columns'] as $column => $column_definition ) {
-				if ( isset( $row[ $column ] ) && ( is_array( $row[ $column ] ) || is_object( $row[ $column ] ) ) ) {
+				$column_is_file = is_array( $column_definition ) && 'file' === ( $column_definition['type'] ?? '' );
+				if ( ! $column_is_file && isset( $row[ $column ] ) && ( is_array( $row[ $column ] ) || is_object( $row[ $column ] ) ) ) {
 					return new WP_Error( 'invalid_repeater_value', sprintf( __( 'ساختار مقدار «%s» معتبر نیست.', 'didar' ), is_array( $column_definition ) ? $column_definition['label'] : $column_definition ) );
 				}
-				$value          = isset( $row[ $column ] ) ? (string) $row[ $column ] : '';
+				$value          = isset( $row[ $column ] ) && ! is_array( $row[ $column ] ) ? (string) $row[ $column ] : '';
 				$is_structured  = is_array( $column_definition );
 				$column_type    = $is_structured && isset( $column_definition['type'] ) ? $column_definition['type'] : 'text';
 				$column_label   = $is_structured && isset( $column_definition['label'] ) ? $column_definition['label'] : $column_definition;
-				if ( 'select' === $column_type ) {
+				if ( 'file' === $column_type ) {
+					$file_field = is_array( $column_definition ) ? $column_definition : array();
+					$file_field['name']       = 'companions.' . absint( $row_index ) . '.' . $column;
+					$file_field['form_type']  = $field['form_type'];
+					$column_raw = isset( $row[ $column ] ) ? $row[ $column ] : array();
+					$file_result = $this->validate_file( $file_field, is_array( $column_raw ) ? $column_raw : array(), $context, $submission_id );
+					if ( is_wp_error( $file_result ) ) {
+						return $file_result;
+					}
+					$clean[ $column ] = $file_result;
+				} elseif ( 'select' === $column_type ) {
 					if ( '' === trim( (string) $value ) ) {
 						$clean[ $column ] = '';
 						continue;
@@ -219,6 +244,18 @@ class Didar_Validator {
 						return new WP_Error( 'invalid_repeater_number', sprintf( __( 'مقدار «%s» باید عددی باشد.', 'didar' ), $column_label ) );
 					}
 					$clean[ $column ] = '' === trim( $normalized ) ? '' : (string) ( 0 + $normalized );
+				} elseif ( is_array( $column_definition ) && 'national_id' === ( $column_definition['semantic'] ?? '' ) ) {
+					$normalized = $this->normalize_digits( $value );
+					if ( '' !== $normalized && ! preg_match( '/^[0-9]+$/', $normalized ) ) {
+						return new WP_Error( 'invalid_repeater_national_id', 'کد ملی فقط باید شامل عدد باشد.' );
+					}
+					$clean[ $column ] = (string) $normalized;
+				} elseif ( is_array( $column_definition ) && 'passport_number' === ( $column_definition['semantic'] ?? '' ) ) {
+					$value = strtoupper( sanitize_text_field( $value ) );
+					if ( '' !== $value && ! preg_match( '/^[A-Z][0-9]{8}$/', $value ) ) {
+						return new WP_Error( 'invalid_repeater_passport_number', 'شماره گذرنامه باید شامل یک حرف انگلیسی و هشت رقم باشد.' );
+					}
+					$clean[ $column ] = $value;
 				} else {
 					$clean[ $column ] = sanitize_text_field( $value );
 				}
@@ -274,7 +311,7 @@ class Didar_Validator {
 		return is_array( $value ) ? ! empty( array_filter( $value, array( $this, 'not_empty' ) ) ) : '' !== trim( (string) $value );
 	}
 
-	private function normalize_digits( $value ) {
+	public static function normalize_digits( $value ) {
 		return strtr( (string) $value, array( '۰' => '0', '۱' => '1', '۲' => '2', '۳' => '3', '۴' => '4', '۵' => '5', '۶' => '6', '۷' => '7', '۸' => '8', '۹' => '9', '٠' => '0', '١' => '1', '٢' => '2', '٣' => '3', '٤' => '4', '٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9' ) );
 	}
 }

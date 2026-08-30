@@ -20,3 +20,5 @@
 | نشت PII در log Person | ثبت ساختار payload به‌جای مقدار پروفایل |
 
 حالت دانلود `direct` سطح ریسک بیشتری دارد؛ برای درخواست‌های حساس `secure` را نگه دارید. استقرار کثیف می‌تواند فایل قدیمی و رفتار امنیتی ناسازگار باقی بگذارد؛ جایگزینی تمیز الزامی عملیاتی است.
+# Companion security
+Nonce, ownership, MIME/extension validation, sanitized filenames, private storage, and secure downloads are unchanged and apply to companion files.

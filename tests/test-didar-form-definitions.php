@@ -239,7 +239,7 @@ class Test_Didar_Form_Definitions extends WP_UnitTestCase {
 	public function test_visa_companions_preserve_identifiers_and_validate_nested_email() {
 		$fields  = $this->registry->fields( 'visa_request' );
 		$columns = $fields['companions']['columns'];
-		$this->assertSame( array( 'full_name', 'age', 'occupation', 'national_id', 'email', 'phone' ), array_keys( $columns ) );
+		$this->assertSame( array( 'full_name', 'age', 'occupation', 'national_id', 'passport_number', 'email', 'phone', 'personal_photo', 'passport_main_page', 'round_trip_ticket', 'other_documents' ), array_keys( $columns ) );
 
 		$result = $this->validator->validate(
 			'visa_request',
@@ -259,6 +259,62 @@ class Test_Didar_Form_Definitions extends WP_UnitTestCase {
 		$this->assertArrayHasKey( 'companions', $invalid['errors'] );
 		$malformed = $this->validator->validate( 'visa_request', array( 'companions' => array( array( 'phone' => array( 'forged' ) ) ) ), 'frontend' );
 		$this->assertFalse( $malformed['valid'] );
+	}
+
+	public function test_identity_semantics_are_global_and_canonical() {
+		foreach ( array( 'embassy_appointment', 'traveler_evaluation', 'visa_request' ) as $form_type ) {
+			$fields = $this->registry->fields( $form_type );
+			if ( isset( $fields['passport_number'] ) ) { $this->assertSame( 'passport_number', $fields['passport_number']['semantic'] ); }
+			if ( isset( $fields['national_id'] ) ) { $this->assertSame( 'national_id', $fields['national_id']['semantic'] ); }
+		}
+		$passport = $this->validator->validate( 'visa_request', array( 'passport_number' => 'b12345678' ), 'frontend' );
+		$this->assertTrue( $passport['valid'] );
+		$this->assertSame( 'B12345678', $passport['data']['passport_number'] );
+		foreach ( array( 'AB1234567', 'A1234567', 'A123456789', '123456789' ) as $value ) {
+			$this->assertFalse( $this->validator->validate( 'visa_request', array( 'passport_number' => $value ), 'frontend' )['valid'] );
+		}
+		$national_id = $this->validator->validate( 'visa_request', array( 'national_id' => '0012345678' ), 'frontend' );
+		$this->assertTrue( $national_id['valid'] );
+		$this->assertSame( '0012345678', $national_id['data']['national_id'] );
+		$this->assertFalse( $this->validator->validate( 'visa_request', array( 'national_id' => '12-34' ), 'frontend' )['valid'] );
+	}
+
+	public function test_visa_has_separate_names_and_companion_file_paths() {
+		$fields = $this->registry->fields( 'visa_request' );
+		$this->assertArrayHasKey( 'first_name', $fields );
+		$this->assertArrayHasKey( 'last_name', $fields );
+		$this->assertArrayNotHasKey( 'full_name', $fields );
+		foreach ( array( 'personal_photo', 'passport_main_page', 'round_trip_ticket', 'other_documents' ) as $key ) {
+			$this->assertSame( 'file', $fields['companions']['columns'][ $key ]['type'] );
+		}
+		$this->assertSame( 'A12345678', $fields['companions']['columns']['passport_number']['placeholder'] );
+		$this->assertArrayHasKey( 'full_name', $this->registry->legacy_fields( 'visa_request' ) );
+	}
+
+	public function test_renderer_preserves_submitted_values_and_jalali_display_values() {
+		$renderer = new Didar_Field_Renderer();
+		ob_start();
+		$renderer->render_sections(
+			$this->registry->get( 'visa_request' ),
+			array(
+				'first_name'           => 'نام واردشده',
+				'passport_number'      => 'B123',
+				'passport_number_display' => 'ignored',
+				'birth_date'           => 'not-a-date',
+				'birth_date_display'   => '۱۴۰۳/۰۱/۰۲',
+				'companions'           => array( array( 'full_name' => 'همراه اول', 'passport_number' => 'C123' ) ),
+			),
+			array( 'passport_number' => 'شماره گذرنامه باید شامل یک حرف انگلیسی و هشت رقم باشد.' ),
+			'frontend'
+		);
+		$html = ob_get_clean();
+		$this->assertStringContainsString( 'value="نام واردشده"', $html );
+		$this->assertStringContainsString( 'value="B123"', $html );
+		$this->assertStringContainsString( 'value="۱۴۰۳/۰۱/۰۲"', $html );
+		$this->assertStringContainsString( 'data-didar-semantic="passport_number"', $html );
+		$this->assertStringContainsString( 'placeholder="A12345678"', $html );
+		$this->assertStringContainsString( 'شماره گذرنامه باید شامل یک حرف انگلیسی و هشت رقم باشد.', $html );
+		$this->assertStringContainsString( 'همراه اول', $html );
 	}
 
 	public function test_visa_document_definitions_and_private_file_limits_are_server_enforced() {

@@ -80,6 +80,7 @@ class Didar_Shortcodes {
 					$raw    = isset( $_POST['didar_fields'] ) && is_array( $_POST['didar_fields'] ) ? wp_unslash( $_POST['didar_fields'] ) : array();
 					$result = $this->validator->validate( $type, $raw, 'frontend' );
 					$values = array_intersect_key( $raw, $this->registry->fields( $type ) );
+					foreach ( $this->registry->fields( $type ) as $field_key => $field_definition ) { if ( 'date' === ( $field_definition['type'] ?? '' ) && isset( $raw[ $field_key . '_display' ] ) && is_scalar( $raw[ $field_key . '_display' ] ) ) { $values[ $field_key . '_display' ] = (string) $raw[ $field_key . '_display' ]; } }
 					$errors = array_merge( $errors, $result['errors'] );
 					if ( $result['valid'] && empty( $errors['shared_note'] ) ) {
 						$created = $this->service->create( $type, $result['data'], get_current_user_id(), $shared_note );
@@ -401,6 +402,7 @@ class Didar_Shortcodes {
 
 			$result = $this->validator->validate( $form_type, $raw, 'frontend', $submission_id );
 			$values = array_intersect_key( $raw, $this->registry->fields( $form_type ) );
+			foreach ( $this->registry->fields( $form_type ) as $field_key => $field_definition ) { if ( 'date' === ( $field_definition['type'] ?? '' ) && isset( $raw[ $field_key . '_display' ] ) && is_scalar( $raw[ $field_key . '_display' ] ) ) { $values[ $field_key . '_display' ] = (string) $raw[ $field_key . '_display' ]; } }
 			$errors = array_merge( $errors, $result['errors'] );
 			if ( $result['valid'] && empty( $errors['shared_note'] ) ) {
 				$saved = $this->service->update_from_frontend( $submission_id, $result['data'], $shared_note, $user_id );
@@ -601,6 +603,9 @@ class Didar_Shortcodes {
 				echo '<div class="didar-detail-item"><dt>' . esc_html( $field['label'] ) . '</dt><dd>';
 				if ( 'file' === $field['type'] ) {
 					$this->renderer->render_file_details( $field, $value, $submission_id );
+				} elseif ( 'repeater' === $field['type'] ) {
+					$field['form_type'] = $form['type'] ?? '';
+					$this->renderer->render_repeater_details( $field, $value, $submission_id );
 				} else {
 					$formatted = $this->service->format_value( $field, $value );
 					echo nl2br( esc_html( $formatted ) );
@@ -688,6 +693,7 @@ class Didar_Shortcodes {
 		wp_enqueue_style( 'didar-frontend', DIDAR_URL . 'assets/css/frontend.css', array(), DIDAR_VERSION );
 		wp_enqueue_style( 'didar-jalali-datepicker', DIDAR_URL . 'assets/css/jalali-datepicker.css', array( 'didar-frontend' ), DIDAR_VERSION );
 		wp_enqueue_script( 'didar-frontend', DIDAR_URL . 'assets/js/frontend.js', array(), DIDAR_VERSION, true );
+		wp_enqueue_script( 'didar-form-input-rules', DIDAR_URL . 'assets/js/form-input-rules.js', array(), DIDAR_VERSION, true );
 		wp_enqueue_script( 'didar-jalali-datepicker', DIDAR_URL . 'assets/js/jalali-datepicker.js', array(), DIDAR_VERSION, true );
 		if ( ! $this->assets_loaded ) {
 			wp_localize_script( 'didar-frontend', 'didarConfig', array( 'ajaxUrl' => admin_url( 'admin-ajax.php' ), 'uploadNonce' => wp_create_nonce( 'didar_upload_file' ), 'removeNonce' => wp_create_nonce( 'didar_remove_file' ), 'messages' => array( 'uploading' => __( 'در حال بارگذاری…', 'didar' ), 'uploadInProgress' => __( 'تا پایان بارگذاری فایل صبر کنید.', 'didar' ), 'uploadError' => __( 'بارگذاری فایل انجام نشد.', 'didar' ), 'remove' => __( 'حذف', 'didar' ), 'removeError' => __( 'حذف فایل انجام نشد.', 'didar' ), 'fileLimit' => __( 'برای این فیلد حداکثر %d فایل مجاز است.', 'didar' ), 'working' => __( 'در حال ثبت…', 'didar' ) ) ) );

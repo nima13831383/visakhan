@@ -49,7 +49,7 @@ class Didar_Ajax {
 		}
 
 		$type          = isset( $_POST['form_type'] ) && ! is_array( $_POST['form_type'] ) ? sanitize_key( wp_unslash( $_POST['form_type'] ) ) : '';
-		$field_name    = isset( $_POST['field'] ) && ! is_array( $_POST['field'] ) ? sanitize_key( wp_unslash( $_POST['field'] ) ) : '';
+		$field_name    = isset( $_POST['field'] ) && ! is_array( $_POST['field'] ) ? Didar_File_Service::normalize_field_key( wp_unslash( $_POST['field'] ) ) : '';
 		$submission_id = isset( $_POST['submission_id'] ) && ! is_array( $_POST['submission_id'] ) ? absint( wp_unslash( $_POST['submission_id'] ) ) : 0;
 		$file          = isset( $_FILES['file'] ) ? $_FILES['file'] : array();
 		$result        = $this->files->upload( $file, $type, $field_name, $submission_id );
@@ -76,7 +76,7 @@ class Didar_Ajax {
 		}
 
 		$type          = isset( $_POST['form_type'] ) && ! is_array( $_POST['form_type'] ) ? sanitize_key( wp_unslash( $_POST['form_type'] ) ) : '';
-		$field_name    = isset( $_POST['field'] ) && ! is_array( $_POST['field'] ) ? sanitize_key( wp_unslash( $_POST['field'] ) ) : '';
+		$field_name    = isset( $_POST['field'] ) && ! is_array( $_POST['field'] ) ? Didar_File_Service::normalize_field_key( wp_unslash( $_POST['field'] ) ) : '';
 		$file_id       = isset( $_POST['file_id'] ) && ! is_array( $_POST['file_id'] ) ? absint( wp_unslash( $_POST['file_id'] ) ) : 0;
 		$submission_id = isset( $_POST['submission_id'] ) && ! is_array( $_POST['submission_id'] ) ? absint( wp_unslash( $_POST['submission_id'] ) ) : 0;
 		$result = $this->files->remove( $file_id, $type, $field_name, $submission_id );

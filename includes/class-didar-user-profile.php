@@ -29,6 +29,7 @@ class Didar_User_Profile {
 		}
 
 		wp_enqueue_script( 'didar-user-profile', DIDAR_URL . 'assets/js/user-profile.js', array(), DIDAR_VERSION, true );
+		wp_enqueue_script( 'didar-form-input-rules', DIDAR_URL . 'assets/js/form-input-rules.js', array(), DIDAR_VERSION, true );
 		wp_enqueue_script( 'didar-jalali-datepicker', DIDAR_URL . 'assets/js/jalali-datepicker.js', array(), DIDAR_VERSION, true );
 		$user    = wp_get_current_user();
 		$notice  = $this->profile_success_notice();
@@ -139,6 +140,7 @@ class Didar_User_Profile {
 			if ( ! array_key_exists( $field, $submitted ) || is_array( $submitted[ $field ] ) ) { continue; }
 			$state = $this->settings->profile_field_state( $field );
 			$value = 'email' === $field ? sanitize_email( $submitted[ $field ] ) : ( 'gender' === $field ? sanitize_text_field( $submitted[ $field ] ) : sanitize_text_field( $submitted[ $field ] ) );
+			if ( 'national_id' === $field ) { $value = Didar_Validator::normalize_digits( $value ); }
 			if ( 'disabled' === $state ) {
 				// Disabled fields are not part of the form contract; forged values
 				// are ignored and leave the existing WordPress value untouched.
@@ -265,7 +267,7 @@ class Didar_User_Profile {
 			echo '<input type="hidden" id="' . esc_attr( $id . '-canonical' ) . '"' . $canonical_name . ' value="' . esc_attr( $value ) . '">';
 			echo '</p>'; return;
 		}
-		$extra = 'national_id' === $field ? ' inputmode="numeric" pattern="[0-9]+" autocomplete="off"' : '';
+		$extra = 'national_id' === $field ? ' inputmode="numeric" pattern="[0-9]+" autocomplete="off" data-didar-semantic="national_id"' : '';
 		echo '<input id="' . esc_attr( $id ) . '" aria-label="' . esc_attr( $label ) . '" type="' . esc_attr( $type ) . '" value="' . esc_attr( $value ) . '"' . $extra . ( 'readonly' === $state ? ' readonly aria-readonly="true"' : ' name="didar_profile[' . esc_attr( $field ) . ']"' ) . '>';
 		if ( 'mobile' === $field && 'readonly' === $state ) { echo '<small class="didar-description">شماره همراه از طریق سیستم ورود سایت مدیریت می‌شود.</small>'; }
 		echo '</p>';
