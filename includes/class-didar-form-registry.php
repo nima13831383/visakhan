@@ -44,6 +44,32 @@ class Didar_Form_Registry {
 		return $fields;
 	}
 
+	/** Applicant Note is stored separately from the active form field schema. */
+	public function supports_applicant_note( $type ) {
+		return in_array( sanitize_key( (string) $type ), array( 'embassy_appointment', 'traveler_evaluation', 'visa_request' ), true );
+	}
+
+	/** Return whether a field control has a meaningful frontend placeholder. */
+	public static function supports_placeholder( $field ) {
+		$type = is_array( $field ) ? sanitize_key( (string) ( $field['type'] ?? '' ) ) : '';
+		return in_array( $type, array( 'text', 'email', 'tel', 'number', 'textarea', 'date', 'time', 'password' ), true );
+	}
+
+	/** Fields exposed to the Didar Deal mapping UI, including non-rendered business fields. */
+	public function didar_mapping_fields( $type ) {
+		$fields = $this->fields( $type );
+		if ( $this->supports_applicant_note( $type ) ) {
+			$fields['applicant_note'] = array(
+				'name'     => 'applicant_note',
+				'label'    => 'یادداشت متقاضی',
+				'type'     => 'textarea',
+				'required' => false,
+				'options'  => array(),
+			);
+		}
+		return $fields;
+	}
+
 	/**
 	 * Return definitions used only to label and format inactive historical data.
 	 *

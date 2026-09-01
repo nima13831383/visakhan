@@ -1,5 +1,9 @@
 # جریان‌های همگام‌سازی
 
+> جزئیات رفتار Case همراهان در [docs/21-companion-cases.md](21-companion-cases.md) آمده است.
+
+Submission وردپرس یک بار ذخیره می‌شود و companions پست جدا نمی‌سازند؛ پس از Deal، هر ردیف فعال به یک Case با همان `DealId` تبدیل می‌شود.
+
 ```mermaid
 sequenceDiagram
  participant U as WordPress User

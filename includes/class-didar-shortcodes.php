@@ -66,7 +66,9 @@ class Didar_Shortcodes {
 			if ( ! wp_verify_nonce( $nonce, 'didar_submit_form_' . $type ) ) {
 				$errors['_form'] = __( 'نشست شما منقضی شده است؛ صفحه را تازه‌سازی کنید.', 'didar' );
 			} else {
-				if ( isset( $_POST['didar_shared_note'] ) && is_array( $_POST['didar_shared_note'] ) ) {
+				if ( ! $this->registry->supports_applicant_note( $type ) ) {
+					$shared_note = '';
+				} elseif ( isset( $_POST['didar_shared_note'] ) && is_array( $_POST['didar_shared_note'] ) ) {
 					$errors['shared_note'] = __( 'ساختار یادداشت معتبر نیست.', 'didar' );
 				} else {
 					$shared_note = isset( $_POST['didar_shared_note'] ) ? sanitize_textarea_field( wp_unslash( $_POST['didar_shared_note'] ) ) : '';
@@ -123,7 +125,9 @@ class Didar_Shortcodes {
 		echo '<input type="hidden" name="didar_form_type" value="' . esc_attr( $type ) . '">';
 		echo '<input type="hidden" name="didar_request_token" value="' . esc_attr( wp_generate_uuid4() ) . '">';
 		$this->renderer->render_sections( $form, $values, $errors, 'frontend' );
-		$this->render_shared_note_field( $shared_note, isset( $errors['shared_note'] ) ? $errors['shared_note'] : '' );
+		if ( $this->registry->supports_applicant_note( $type ) ) {
+					$this->render_shared_note_field( $shared_note, isset( $errors['shared_note'] ) ? $errors['shared_note'] : '', $type );
+		}
 		echo '<div class="didar-actions"><button type="submit" class="didar-submit"><span>' . esc_html( $form['submit_label'] ) . '</span><span class="didar-spinner" aria-hidden="true"></span></button><p class="didar-required-note">' . esc_html__( 'فیلدهای ستاره‌دار الزامی هستند.', 'didar' ) . '</p></div>';
 		echo '</form></div>';
 
@@ -376,7 +380,7 @@ class Didar_Shortcodes {
 		$form_type   = $post ? get_post_meta( $submission_id, '_didar_form_type', true ) : '';
 		$form        = $this->registry->get( $form_type );
 		$values      = $post ? $this->service->get_fields( $submission_id ) : array();
-		$shared_note = $post ? $this->service->get_shared_note( $submission_id ) : '';
+		$shared_note = $post && $this->registry->supports_applicant_note( $form_type ) ? $this->service->get_shared_note( $submission_id ) : '';
 		$errors      = array();
 		$nonce       = isset( $_POST['didar_nonce'] ) && ! is_array( $_POST['didar_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['didar_nonce'] ) ) : '';
 		$return_url  = $this->requested_return_url();
@@ -394,7 +398,9 @@ class Didar_Shortcodes {
 			$errors['_form'] = __( 'صفحه مشاهده جزئیات هنوز توسط مدیر تنظیم نشده است.', 'didar' );
 		} else {
 			$raw = isset( $_POST['didar_fields'] ) && is_array( $_POST['didar_fields'] ) ? wp_unslash( $_POST['didar_fields'] ) : array();
-			if ( isset( $_POST['didar_shared_note'] ) && is_array( $_POST['didar_shared_note'] ) ) {
+			if ( ! $this->registry->supports_applicant_note( $form_type ) ) {
+				$shared_note = '';
+			} elseif ( isset( $_POST['didar_shared_note'] ) && is_array( $_POST['didar_shared_note'] ) ) {
 				$errors['shared_note'] = __( 'ساختار یادداشت معتبر نیست.', 'didar' );
 			} else {
 				$shared_note = isset( $_POST['didar_shared_note'] ) ? sanitize_textarea_field( wp_unslash( $_POST['didar_shared_note'] ) ) : '';
@@ -440,7 +446,7 @@ class Didar_Shortcodes {
 		}
 
 		$values      = $this->service->get_fields( $submission_id );
-		$shared_note = $this->service->get_shared_note( $submission_id );
+		$shared_note = $this->registry->supports_applicant_note( $form_type ) ? $this->service->get_shared_note( $submission_id ) : '';
 		$status      = $this->service->get_public_status( $submission_id );
 		$public_note = $this->service->get_public_note( $submission_id );
 		$editable    = $this->service->can_edit_from_frontend( $submission_id, $user_id );
@@ -460,7 +466,9 @@ class Didar_Shortcodes {
 		$this->render_detail_sections( $form, $values, $submission_id );
 		$this->render_historical_section( $form_type, $values );
 		echo '<section class="didar-detail-section"><h3>' . esc_html__( 'پیام و وضعیت عمومی', 'didar' ) . '</h3><dl class="didar-detail-grid"><div class="didar-detail-item"><dt>' . esc_html__( 'وضعیت عمومی', 'didar' ) . '</dt><dd>' . esc_html( $this->service->get_status_label( $status ) ) . '</dd></div><div class="didar-detail-item"><dt>' . esc_html__( 'یادداشت عمومی', 'didar' ) . '</dt><dd>' . ( '' !== $public_note ? nl2br( esc_html( $public_note ) ) : '—' ) . '</dd></div></dl></section>';
-		echo '<section class="didar-detail-section"><h3>' . esc_html__( 'یادداشت متقاضی', 'didar' ) . '</h3><div class="didar-detail-note">' . ( '' !== $shared_note ? nl2br( esc_html( $shared_note ) ) : '—' ) . '</div></section>';
+		if ( $this->registry->supports_applicant_note( $form_type ) ) {
+			echo '<section class="didar-detail-section"><h3>' . esc_html__( 'یادداشت متقاضی', 'didar' ) . '</h3><div class="didar-detail-note">' . ( '' !== $shared_note ? nl2br( esc_html( $shared_note ) ) : '—' ) . '</div></section>';
+		}
 		if ( $this->service->can_view_internal( $submission_id ) ) {
 			$internal_status = $this->service->get_internal_status( $submission_id );
 			$internal_note   = $this->service->get_internal_note( $submission_id );
@@ -507,7 +515,7 @@ class Didar_Shortcodes {
 		$state         = isset( $this->edit_state[ $submission_id ] ) ? $this->edit_state[ $submission_id ] : array();
 		$stored_values = $this->service->get_fields( $submission_id );
 		$values        = isset( $state['values'] ) ? array_merge( $stored_values, $state['values'] ) : $stored_values;
-		$shared_note   = isset( $state['shared_note'] ) ? $state['shared_note'] : $this->service->get_shared_note( $submission_id );
+		$shared_note   = $this->registry->supports_applicant_note( $form_type ) ? ( isset( $state['shared_note'] ) ? $state['shared_note'] : $this->service->get_shared_note( $submission_id ) ) : '';
 		$errors        = isset( $state['errors'] ) ? $state['errors'] : array();
 
 		ob_start();
@@ -520,7 +528,9 @@ class Didar_Shortcodes {
 		echo '<input type="hidden" name="didar_action" value="update_submission"><input type="hidden" name="didar_submission_id" value="' . esc_attr( $submission_id ) . '"><input type="hidden" name="didar_return" value="' . esc_attr( $return_url ) . '">';
 		$this->renderer->render_sections( $form, $values, $errors, 'frontend', $submission_id );
 		$this->render_historical_section( $form_type, $this->service->get_fields( $submission_id ) );
-		$this->render_shared_note_field( $shared_note, isset( $errors['shared_note'] ) ? $errors['shared_note'] : '' );
+		if ( $this->registry->supports_applicant_note( $form_type ) ) {
+			$this->render_shared_note_field( $shared_note, isset( $errors['shared_note'] ) ? $errors['shared_note'] : '', $form_type );
+		}
 		echo '<div class="didar-actions"><button type="submit" class="didar-submit"><span>' . esc_html__( 'ذخیره تغییرات', 'didar' ) . '</span><span class="didar-spinner" aria-hidden="true"></span></button><a class="didar-button didar-button--secondary" href="' . esc_url( $details_url ) . '">' . esc_html__( 'انصراف', 'didar' ) . '</a></div></form></div>';
 
 		return ob_get_clean();
@@ -640,12 +650,13 @@ class Didar_Shortcodes {
 		echo '</dl></section>';
 	}
 
-	private function render_shared_note_field( $value = '', $error = '' ) {
+	private function render_shared_note_field( $value = '', $error = '', $form_type = '' ) {
+		$settings = new Didar_Settings();
+		$placeholder = $settings->field_placeholder( $form_type, 'applicant_note', '' );
 		$described = $error ? ' aria-describedby="didar-shared-note-error" aria-invalid="true"' : '';
 		echo '<fieldset class="didar-section didar-note-section"><legend>' . esc_html__( 'یادداشت متقاضی', 'didar' ) . '</legend><div class="didar-grid"><div class="didar-field didar-field--textarea didar-field--wide' . ( $error ? ' didar-field--error' : '' ) . '">';
 		echo '<label class="didar-label" for="didar-shared-note">' . esc_html__( 'یادداشت شما', 'didar' ) . '</label>';
-		echo '<textarea id="didar-shared-note" name="didar_shared_note" rows="5"' . $described . '>' . esc_textarea( $value ) . '</textarea>';
-		echo '<p class="didar-description">' . esc_html__( 'این متن یادداشت متقاضی است و با پیام عمومی یا یادداشت داخلی یکی نیست.', 'didar' ) . '</p>';
+		echo '<textarea id="didar-shared-note" name="didar_shared_note" rows="5"' . $described . ( '' !== $placeholder ? ' placeholder="' . esc_attr( $placeholder ) . '"' : '' ) . '>' . esc_textarea( $value ) . '</textarea>';
 		if ( $error ) {
 			echo '<p class="didar-error" id="didar-shared-note-error" role="alert">' . esc_html( $error ) . '</p>';
 		}

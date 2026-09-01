@@ -213,7 +213,28 @@ class Didar_Field_Mapper {
 				$custom[ $map['field'] ] = $this->serializer->serialize( $form_type, $key, $definition, $value, $post_id );
 			}
 		}
+		if ( $post_id && $this->registry->supports_applicant_note( $form_type ) ) {
+			$map = $this->mapping( $form_type, 'applicant_note' );
+			if ( 'deal_custom' === $map['target'] && '' !== $map['field'] ) {
+				$definition = $this->registry->didar_mapping_fields( $form_type )['applicant_note'];
+				$custom[ $map['field'] ] = $this->serializer->serialize( $form_type, 'applicant_note', $definition, get_post_meta( $post_id, '_didar_shared_note', true ), $post_id );
+			}
+		}
 		return $custom;
+	}
+
+	/** Serialize one Visa companion row using the same safe file/value rules as Deal fields. */
+	public function companion_case_fields( $form_type, $row, $row_index, $post_id = 0, $mappings = array() ) {
+		$out = array();
+		$definitions = $this->registry->fields( $form_type );
+		$columns = isset( $definitions['companions']['columns'] ) ? $definitions['companions']['columns'] : array();
+		foreach ( (array) $mappings as $source_key => $target_key ) {
+			$source_key = sanitize_key( $source_key ); $target_key = sanitize_text_field( (string) $target_key );
+			if ( ! $source_key || ! $target_key || ! array_key_exists( $source_key, $row ) || ! isset( $columns[ $source_key ] ) ) continue;
+			$value = $row[ $source_key ];
+			$out[ $target_key ] = $this->serializer->serialize( $form_type, 'companions.' . absint( $row_index ) . '.' . $source_key, $columns[ $source_key ], $value, $post_id );
+		}
+		return $out;
 	}
 
 	public function is_structured_field( $definition ) { return $this->serializer->is_structured( $definition ); }

@@ -18,6 +18,15 @@ class Test_Didar_Settings_Transfer extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( 'secret', $json ); $this->assertStringNotContainsString( 'token', $json ); $this->assertStringNotContainsString( 'didar_pipeline_cache', $json );
 	}
 
+	public function test_case_configuration_is_portable_but_runtime_case_ids_are_not() {
+		update_option( Didar_Settings::OPTION_NAME, array( 'visa_companion_case_settings' => array( 'pipeline_id' => 'pipeline-1', 'initial_stage_id' => 'stage-1', 'category_id' => 'category-1', 'field_mappings' => array( 'full_name' => 'Case_Name' ), 'system_fields' => array( 'companion_uid' => 'Case_UID' ) ), 'didar_companion_runtime' => array( 'cmp_123' => array( 'case_id' => 'remote-case-1' ) ) ) );
+		$json = $this->transfer->export_json();
+		$this->assertStringContainsString( 'pipeline-1', $json );
+		$this->assertStringContainsString( 'category-1', $json );
+		$this->assertStringNotContainsString( 'remote-case-1', $json );
+		$this->assertStringNotContainsString( 'didar_companion_runtime', $json );
+	}
+
 	public function test_persian_labels_survive_json_round_trip() {
 		update_option( Didar_Settings::OPTION_NAME, array( 'didar_form_workflows' => array( 'consultation' => array( 'pipeline_id' => 'p', 'statuses' => array( 'pending' => array( 'label' => 'در انتظار بررسی', 'stage_id' => 's', 'is_default' => true, 'order' => 10 ) ) ) ) ) );
 		$parsed = $this->transfer->parse_json( $this->transfer->export_json() ); $this->assertIsArray( $parsed ); $this->assertSame( 'در انتظار بررسی', $parsed['settings']['didar_form_workflows']['consultation']['statuses']['pending']['label'] );

@@ -16,6 +16,7 @@ class Didar_Sync_Manager {
 	const META_DEAL_ID = '_didar_deal_id';
 	const META_PERSON_ID = '_didar_person_id';
 	const META_STATE = '_didar_sync_state';
+	const META_COMPANION_CASES = '_didar_companion_cases';
 	const USER_PERSON_META = '_didar_person_id';
 
 	private static $suppress = false;
@@ -27,8 +28,10 @@ class Didar_Sync_Manager {
 	private $mapper;
 	private $logger;
 	private $workflow;
+	private $case_service;
+	private $dates;
 
-	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings, Didar_Event_Log $events, Didar_Submission_Service $service, Didar_File_Service $files, Didar_Logger $logger = null ) {
+	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings, Didar_Event_Log $events, Didar_Submission_Service $service, Didar_File_Service $files, Didar_Logger $logger = null, Didar_Case_Service $case_service = null ) {
 		$this->registry = $registry;
 		$this->settings = $settings;
 		$this->events   = $events;
@@ -37,6 +40,8 @@ class Didar_Sync_Manager {
 		$this->workflow = new Didar_Workflow_Manager( $registry, $settings, $this->logger );
 		$this->api      = new Didar_Api_Client( $settings, $this->logger );
 		$this->mapper   = new Didar_Field_Mapper( $registry, $settings, $files, $this->logger );
+		$this->case_service = $case_service ? $case_service : new Didar_Case_Service( $settings, $this->logger );
+		$this->dates = new Didar_Date_Service();
 
 		add_action( 'user_register', array( $this, 'queue_user' ), 20, 1 );
 		// Digits writes its phone metadata after wp_create_user(), then fires this
@@ -311,7 +316,7 @@ class Didar_Sync_Manager {
 		$deal = array(
 			'Id' => $local_deal_id,
 			'Title' => sanitize_text_field( $form['label'] . ' #' . $post->ID ),
-			'Description' => $this->service->get_shared_note( $post->ID ),
+			'Description' => $this->registry->supports_applicant_note( $form_type ) ? $this->service->get_shared_note( $post->ID ) : '',
 			'PersonId' => $person_id,
 			'PipelineId' => $workflow_mapping['pipeline_id'],
 			'PipelineStageId' => $workflow_mapping['stage_id'],
@@ -388,6 +393,7 @@ class Didar_Sync_Manager {
 		update_post_meta( $post->ID, self::META_DEAL_ID, $deal_id );
 		$this->logger->log( 'INFO', 'deal_persist', 'Deal ID stored in WordPress; sync marked successful.', array( 'entity_type' => 'submission', 'local_id' => $post->ID, 'external_id' => $deal_id, 'form_type' => $form_type, 'trace_id' => $trace ) );
 		$this->success( $post->ID, $deal_id, $internal_status );
+		$this->sync_companion_cases( $post->ID, $form_type, $fields, $deal_id, $person_id, $trace );
 		return true;
 		} finally {
 			$this->release_submission_lock( $post->ID, $lock );
@@ -407,6 +413,55 @@ class Didar_Sync_Manager {
 			'permission_callback' => '__return_true',
 		) );
 	}
+
+	/** Companion rows are synchronized only after the parent Deal has a durable ID. */
+	private function sync_companion_cases( $post_id, $form_type, &$fields, $deal_id, $person_id, $trace ) {
+		if ( 'visa_request' !== $form_type ) return true;
+		$settings = $this->settings->all();
+		$config = isset( $settings['visa_companion_case_settings'] ) && is_array( $settings['visa_companion_case_settings'] ) ? $settings['visa_companion_case_settings'] : array();
+		$pipeline_id = sanitize_text_field( (string) ( $config['pipeline_id'] ?? '' ) );
+		$stage_id = sanitize_text_field( (string) ( $config['initial_stage_id'] ?? '' ) );
+		$mappings = isset( $config['field_mappings'] ) && is_array( $config['field_mappings'] ) ? $config['field_mappings'] : array();
+		$validation = $this->case_service->validate_companion_case_configuration( $config );
+		if ( ! $validation['ready'] ) {
+			$this->logger->log( 'WARNING', 'case_sync_skipped', 'Visa companion Case sync skipped because Case settings are incomplete or stale.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'form_type' => $form_type, 'trace_id' => $trace, 'skip_reason' => 'case_configuration_' . $validation['status'], 'configuration_issues' => $validation['issues'] ) );
+			return true;
+		}
+		$rows = isset( $fields['companions'] ) && is_array( $fields['companions'] ) ? $fields['companions'] : array();
+		$links = get_post_meta( $post_id, self::META_COMPANION_CASES, true ); $links = is_array( $links ) ? $links : array();
+		$system = isset( $config['system_fields'] ) && is_array( $config['system_fields'] ) ? $config['system_fields'] : array(); $active_uids = array();
+		foreach ( $rows as $index => &$row ) {
+			if ( ! is_array( $row ) ) $row = array();
+			$uid = isset( $row['companion_uid'] ) && is_scalar( $row['companion_uid'] ) ? sanitize_text_field( (string) $row['companion_uid'] ) : '';
+			if ( ! preg_match( '/^cmp_[a-f0-9-]{16,}$/', $uid ) || isset( $active_uids[ $uid ] ) ) { $uid = 'cmp_' . wp_generate_uuid4(); $row['companion_uid'] = $uid; }
+			$active_uids[ $uid ] = true;
+			$case_id = sanitize_text_field( (string) ( $links[ $uid ]['case_id'] ?? '' ) );
+			if ( ! $case_id && ! empty( $system['submission_id'] ) && ! empty( $system['companion_uid'] ) ) {
+				$submission_field = $this->case_service->case_field( $system['submission_id'] ); $uid_field = $this->case_service->case_field( $system['companion_uid'] );
+				if ( $submission_field && $uid_field ) { $lookup = $this->case_service->search( array( 'IsDeleted' => false, 'DealId' => $deal_id, 'CustomFields' => array( array( 'CustomFieldId' => $submission_field['id'], 'OR' => array( array( 'Type' => 'EqualToAny', 'Value' => array( (string) $post_id ) ) ) ), array( 'CustomFieldId' => $uid_field['id'], 'OR' => array( array( 'Type' => 'EqualToAny', 'Value' => array( $uid ) ) ) ) ) ), 0, 10 ); if ( is_wp_error( $lookup ) ) { $links[ $uid ] = array( 'case_id' => '', 'status' => 'pending', 'last_error' => sanitize_key( $lookup->get_error_code() ), 'updated_at' => time() ); $this->logger->log( 'WARNING', 'case_resolution_failed', 'Exact companion Case lookup failed; creation was withheld until the lookup can be retried.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'companion_uid' => $uid, 'deal_id' => $deal_id, 'trace_id' => $trace, 'error_code' => $lookup->get_error_code() ) ); continue; } $matches = array(); foreach ( $this->response_items( $lookup ) as $item ) { if ( is_array( $item ) && ! empty( $item['Id'] ) && (string) ( $item['DealId'] ?? $deal_id ) === (string) $deal_id ) $matches[ sanitize_text_field( $item['Id'] ) ] = true; } if ( 1 === count( $matches ) ) $case_id = (string) array_key_first( $matches ); elseif ( count( $matches ) > 1 ) { $this->logger->log( 'ERROR', 'case_identity_conflict', 'Multiple exact Case matches were found; Case creation stopped.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'companion_uid' => $uid, 'deal_id' => $deal_id, 'trace_id' => $trace, 'match_count' => count( $matches ) ) ); continue; } }
+			}
+			$case = array( 'Id' => $case_id, 'Title' => $this->companion_case_title( $row, $post_id ), 'PipelineStageId' => $stage_id, 'DealId' => $deal_id, 'Status' => 'InProgress', 'Fields' => $this->mapper->companion_case_fields( $form_type, $row, $index, $post_id, $mappings ) );
+			$case_category_id = sanitize_text_field( (string) ( $config['category_id'] ?? '' ) );
+			if ( $case_category_id ) $case['CaseCategoryId'] = $case_category_id;
+			if ( ! $case_id ) unset( $case['Id'] );
+			foreach ( array( 'submission_id' => 'Submission ID', 'companion_uid' => 'Companion UID', 'form_type' => 'Form Type' ) as $system_key => $label ) { $target = sanitize_text_field( (string) ( $system[ $system_key ] ?? '' ) ); if ( $target ) $case['Fields'][ $target ] = 'submission_id' === $system_key ? (string) $post_id : ( 'companion_uid' === $system_key ? $uid : $form_type ); }
+			$this->logger->log( 'INFO', $case_id ? 'case_update_started' : 'case_create_started', 'Visa companion Case synchronization started.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'external_id' => $case_id, 'companion_uid' => $uid, 'deal_id' => $deal_id, 'trace_id' => $trace ) );
+			$result = $this->case_service->save( $case );
+			if ( is_wp_error( $result ) ) { $links[ $uid ] = array( 'case_id' => $case_id, 'status' => 'pending', 'last_error' => sanitize_key( $result->get_error_code() ), 'updated_at' => time() ); $this->logger->log( 'WARNING', 'case_sync_failed', 'Visa companion Case synchronization failed; the parent submission remains Deal-synced and this companion remains retryable.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'external_id' => $case_id, 'companion_uid' => $uid, 'deal_id' => $deal_id, 'trace_id' => $trace, 'error_code' => $result->get_error_code() ) ); continue; }
+			$response = $this->response_object( $result ); if ( empty( $response['Id'] ) && isset( $response['List'][0]['Id'] ) ) $response = $response['List'][0]; $resolved_id = $case_id ?: sanitize_text_field( (string) ( $response['Id'] ?? '' ) );
+			if ( ! $resolved_id ) { $links[ $uid ] = array( 'case_id' => '', 'status' => 'pending', 'last_error' => 'case_id_missing', 'updated_at' => time() ); continue; }
+			$links[ $uid ] = array( 'case_id' => $resolved_id, 'status' => 'synced', 'last_error' => '', 'updated_at' => time() ); $this->logger->log( 'INFO', $case_id ? 'case_updated' : 'case_created', 'Visa companion Case synchronized and linked locally.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'external_id' => $resolved_id, 'companion_uid' => $uid, 'deal_id' => $deal_id, 'trace_id' => $trace ) );
+		}
+		unset( $row );
+		// The working rows array is a copy; persist generated stable UIDs back into the submission fields.
+		$fields['companions'] = $rows;
+		foreach ( $links as $known_uid => &$known_link ) { if ( ! isset( $active_uids[ $known_uid ] ) && is_array( $known_link ) && 'removed' !== ( $known_link['status'] ?? '' ) ) { $known_link['status'] = 'removed'; $known_link['removed_at'] = time(); $this->logger->log( 'WARNING', 'case_removed_remote_untouched', 'A companion was removed locally; the remote Case was left untouched because no official delete/archive endpoint is confirmed.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'external_id' => $known_link['case_id'] ?? '', 'companion_uid' => sanitize_text_field( $known_uid ), 'trace_id' => $trace, 'official_support' => 'not_confirmed' ) ); } } unset( $known_link );
+		update_post_meta( $post_id, '_didar_fields', $fields ); update_post_meta( $post_id, self::META_COMPANION_CASES, $links );
+		$pending_cases = false; foreach ( $links as $uid => $link ) { if ( is_array( $link ) && 'removed' === ( $link['status'] ?? '' ) ) continue; if ( ! isset( $link['status'] ) || 'synced' !== $link['status'] ) { $pending_cases = true; $this->logger->log( 'WARNING', 'case_retry_scheduled', 'A companion Case remains pending for the next canonical submission sync.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'companion_uid' => sanitize_text_field( $uid ), 'trace_id' => $trace ) ); } } if ( $pending_cases ) $this->schedule_submission( $post_id, time() + 60, 'case_retry' );
+		return true;
+	}
+
+	private function companion_case_title( $row, $post_id ) { $name = isset( $row['full_name'] ) && is_scalar( $row['full_name'] ) ? trim( sanitize_text_field( (string) $row['full_name'] ) ) : ''; return $name ? 'همراه - ' . $name : 'همراه درخواست #' . absint( $post_id ); }
 
 	public function receive_webhook( WP_REST_Request $request ) {
 		$settings = $this->settings->all();
@@ -506,7 +561,24 @@ class Didar_Sync_Manager {
 				$this->logger->log( 'INFO', 'didar_structured_field_inbound_ignored', 'Readable structured field text was not parsed back into local structured data.', array( 'entity_type' => 'deal', 'local_id' => $post_id, 'form_type' => $form_type, 'field_key' => $key, 'deal_field_key' => $map['field'], 'source' => 'didar_webhook' ) );
 				continue;
 			}
-			if ( 'deal_custom' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $fields ) ) { $new[ $key ] = $fields[ $map['field'] ]; $changed_field_keys[] = $key; }
+			if ( 'deal_custom' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $fields ) ) {
+				$value = $fields[ $map['field'] ];
+				if ( 'date' === (string) ( $definition['type'] ?? '' ) || 'date' === (string) ( $definition['semantic'] ?? '' ) ) {
+					$raw_value = is_scalar( $value ) ? trim( (string) $value ) : '';
+					if ( ! is_scalar( $value ) ) {
+						$this->logger->log( 'ERROR', 'didar_date_deserialization_invalid', 'An inbound DATE custom field was not scalar; the existing local value was preserved.', array( 'entity_type' => 'deal', 'local_id' => $post_id, 'form_type' => $form_type, 'field_key' => $key, 'deal_field_key' => $map['field'], 'source' => 'didar_webhook' ) );
+						continue;
+					}
+					if ( '' !== $raw_value ) {
+						$value = $this->dates->normalize_input( $raw_value );
+						if ( '' === $value ) {
+							$this->logger->log( 'ERROR', 'didar_date_deserialization_invalid', 'An inbound DATE custom field was invalid; the existing local value was preserved.', array( 'entity_type' => 'deal', 'local_id' => $post_id, 'form_type' => $form_type, 'field_key' => $key, 'deal_field_key' => $map['field'], 'source' => 'didar_webhook' ) );
+							continue;
+						}
+					}
+				}
+				$new[ $key ] = $value; $changed_field_keys[] = $key;
+			}
 			if ( 'deal_native' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $data ) ) { $new[ $key ] = $data[ $map['field'] ]; $changed_field_keys[] = $key; }
 		}
 		$meaningful_change = $new !== $old;
@@ -529,7 +601,22 @@ class Didar_Sync_Manager {
 
 	private function mapped_submission_fields( $form_type, $data ) {
 		$out = array(); $fields = isset( $data['Fields'] ) && is_array( $data['Fields'] ) ? $data['Fields'] : array();
-		foreach ( $this->registry->fields( $form_type ) as $key => $definition ) { $map = $this->mapper->mapping( $form_type, $key ); if ( 'deal_custom' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $fields ) ) { $out[ $key ] = $this->sanitize_external_value( $fields[ $map['field'] ], $definition ); } }
+		foreach ( $this->registry->fields( $form_type ) as $key => $definition ) {
+			$map = $this->mapper->mapping( $form_type, $key );
+			if ( 'deal_custom' === $map['target'] && $map['field'] && array_key_exists( $map['field'], $fields ) ) {
+				$value = $this->sanitize_external_value( $fields[ $map['field'] ], $definition );
+				if ( 'date' === (string) ( $definition['type'] ?? '' ) || 'date' === (string) ( $definition['semantic'] ?? '' ) ) {
+					if ( '' !== (string) $value ) {
+						$value = $this->dates->normalize_input( $value );
+						if ( '' === $value ) {
+							$this->logger->log( 'ERROR', 'didar_date_deserialization_invalid', 'An inbound DATE custom field was invalid; the local submission value was omitted.', array( 'entity_type' => 'deal', 'form_type' => $form_type, 'field_key' => $key, 'deal_field_key' => $map['field'], 'source' => 'didar_webhook' ) );
+							continue;
+						}
+					}
+				}
+				$out[ $key ] = $value;
+			}
+		}
 		return $out;
 	}
 	private function sanitize_external_value( $value, $definition ) { if ( is_array( $value ) ) { $out = array(); foreach ( $value as $key => $item ) { $clean_key = is_int( $key ) ? $key : sanitize_key( $key ); $out[ $clean_key ] = is_array( $item ) ? $this->sanitize_external_value( $item, $definition ) : sanitize_text_field( (string) $item ); } return $out; } return 'textarea' === ( $definition['type'] ?? '' ) ? sanitize_textarea_field( (string) $value ) : sanitize_text_field( (string) $value ); }

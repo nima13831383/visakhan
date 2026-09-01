@@ -17,6 +17,7 @@ final class Didar_Plugin {
 	public $file_service;
 	public $request_search;
 	public $sync_manager;
+	public $case_service;
 
 	public static function instance() {
 		if ( null === self::$instance ) {
@@ -40,6 +41,7 @@ final class Didar_Plugin {
 		$this->settings  = new Didar_Settings();
 		$this->event_log = new Didar_Event_Log();
 		$this->logger    = new Didar_Logger();
+		$this->case_service = new Didar_Case_Service( $this->settings, $this->logger );
 		Didar_Logger::maybe_upgrade();
 		$this->event_log->maybe_schedule_backfill();
 		$this->request_search = new Didar_Request_Search();
@@ -50,7 +52,7 @@ final class Didar_Plugin {
 		$this->validator = new Didar_Validator( $this->registry, $this->settings, $this->file_service );
 		$this->service   = new Didar_Submission_Service( $this->registry, $this->event_log, $this->settings, $this->file_service );
 		$this->file_service->set_submission_service( $this->service );
-		$this->sync_manager = new Didar_Sync_Manager( $this->registry, $this->settings, $this->event_log, $this->service, $this->file_service, $this->logger );
+		$this->sync_manager = new Didar_Sync_Manager( $this->registry, $this->settings, $this->event_log, $this->service, $this->file_service, $this->logger, $this->case_service );
 		// File replacement does not run activation hooks. Keep background workers
 		// healthy on every normal bootstrap so pending durable work cannot strand.
 		$this->ensure_runtime_workers();

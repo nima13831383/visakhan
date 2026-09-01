@@ -183,6 +183,19 @@
 .didar-field input[type="file"] { padding: 8px 10px; }
 .didar-field textarea { min-height: 138px; resize: vertical; }
 
+.didar-app .didar-field input::placeholder,
+.didar-app .didar-field textarea::placeholder {
+  color: #8c8c8c;
+  opacity: 1;
+}
+
+.didar-app .didar-field input::-webkit-input-placeholder,
+.didar-app .didar-field textarea::-webkit-input-placeholder { color: #8c8c8c; opacity: 1; }
+.didar-app .didar-field input::-moz-placeholder,
+.didar-app .didar-field textarea::-moz-placeholder { color: #8c8c8c; opacity: 1; }
+.didar-app .didar-field input:-ms-input-placeholder,
+.didar-app .didar-field textarea:-ms-input-placeholder { color: #8c8c8c; opacity: 1; }
+
 .didar-field select {
   background-image: linear-gradient(45deg, transparent 50%, #5b5b5b 50%), linear-gradient(135deg, #5b5b5b 50%, transparent 50%);
   background-position: 17px 22px, 12px 22px;

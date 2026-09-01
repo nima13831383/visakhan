@@ -58,12 +58,25 @@ class Didar_Api_Client {
 		return $this->request( '/api/pipeline/list/0', null );
 	}
 
+	/** Documented Case pipeline/stage catalogue. */
+	public function case_pipelines() {
+		return $this->request( '/api/pipeline/list/1', null );
+	}
+
 	public function users() {
 		return $this->request( '/api/User/List', null );
 	}
 
 	public function custom_fields() {
 		return $this->request( '/api/customfield/GetCustomfieldList', null );
+	}
+
+	public function search_cases( $criteria, $from = 0, $limit = 10 ) {
+		return $this->request( '/api/Case/search', array( 'Criteria' => (array) $criteria, 'From' => absint( $from ), 'Limit' => absint( $limit ) ) );
+	}
+
+	public function save_case( $case ) {
+		return $this->request( '/api/Case/Save_v2', array( 'Case' => (array) $case ) );
 	}
 
 	public function save_note( $note ) {
@@ -124,6 +137,10 @@ class Didar_Api_Client {
 				'contact_fields' => $contact ? array_keys( $contact ) : array_keys( $body ),
 				'has_person_id' => ! empty( $contact['Id'] ) || ! empty( $body['Id'] ),
 			);
+		}
+		if ( 0 === strpos( (string) $path, '/api/Case/' ) && is_array( $body ) ) {
+			$case = isset( $body['Case'] ) && is_array( $body['Case'] ) ? $body['Case'] : array();
+			return array( 'payload_type' => 'case', 'case_id' => sanitize_text_field( (string) ( $case['Id'] ?? '' ) ), 'deal_id' => sanitize_text_field( (string) ( $case['DealId'] ?? '' ) ), 'field_keys' => array_keys( isset( $case['Fields'] ) && is_array( $case['Fields'] ) ? $case['Fields'] : array() ) );
 		}
 		return $body;
 	}

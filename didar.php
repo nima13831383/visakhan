@@ -34,6 +34,7 @@ require_once DIDAR_PATH . 'includes/class-didar-field-renderer.php';
 require_once DIDAR_PATH . 'includes/class-didar-validator.php';
 require_once DIDAR_PATH . 'includes/class-didar-submission-service.php';
 require_once DIDAR_PATH . 'includes/class-didar-api-client.php';
+require_once DIDAR_PATH . 'includes/class-didar-case-service.php';
 require_once DIDAR_PATH . 'includes/class-didar-custom-field-catalog.php';
 require_once DIDAR_PATH . 'includes/class-didar-user-catalog.php';
 require_once DIDAR_PATH . 'includes/class-didar-user-profile-value-catalog.php';

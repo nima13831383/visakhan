@@ -1,5 +1,7 @@
 # رویدادها و diagnostics
 
+> جزئیات رفتار Case همراهان در [docs/21-companion-cases.md](21-companion-cases.md) آمده است.
+
 `Didar_Event_Log` تاریخچهٔ افزایشی کسب‌وکاری هر درخواست را در جدول اختصاصی نگه می‌دارد؛ نمونه‌ها `didar_sync_failed`، `request_trashed` و `request_deleted` هستند. `_didar_last_updated_at` برای مرتب‌سازی/نمایش به‌روز می‌شود.
 
 `Didar_Logger` diagnostic عملیاتی و correlation/`trace_id` ثبت می‌کند. رویدادهای sync شامل `sync_queue_persisted`، `sync_immediate_started`، `sync_worker_started`، `sync_execute`، `api_request`، `api_response`، `sync_retry_scheduled`، `sync_retry_exhausted` و `sync_permanent_failure` هستند. endpointهای Person payload شخصی را ساختاریافته و بدون مقادیر پروفایل log می‌کنند.

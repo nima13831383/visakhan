@@ -12,6 +12,16 @@ class Test_Didar_Readable_Value_Serializer extends WP_UnitTestCase {
 		$this->assertSame( 'Germany', $this->serializer->serialize( 'x', 'country', array( 'type' => 'text' ), 'Germany' ) );
 	}
 
+	public function test_date_custom_fields_are_serialized_as_jalali_text() {
+		$this->assertSame( '1405/06/10', $this->serializer->serialize( 'visa_request', 'passport_expiry', array( 'type' => 'date' ), '2026-09-01' ) );
+		$this->assertSame( '1405/06/10', $this->serializer->serialize( 'future', 'date_value', array( 'type' => 'text', 'semantic' => 'date' ), '2026-09-01' ) );
+	}
+
+	public function test_non_date_text_and_invalid_date_are_not_guessed_or_emitted_as_dates() {
+		$this->assertSame( '2026-09-01', $this->serializer->serialize( 'x', 'message', array( 'type' => 'text' ), '2026-09-01' ) );
+		$this->assertSame( '', $this->serializer->serialize( 'x', 'date_value', array( 'type' => 'date' ), 'not-a-date' ) );
+	}
+
 	public function test_multiselect_is_one_item_per_line() {
 		$value = $this->serializer->serialize( 'x', 'countries', array( 'type' => 'checkbox', 'multiple' => true, 'options' => array( 'de' => 'آلمان', 'fr' => 'فرانسه' ) ), array( 'de', 'fr' ) );
 		$this->assertSame( "- آلمان\n- فرانسه", $value );

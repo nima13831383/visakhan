@@ -1,5 +1,7 @@
 # معماری
 
+> جزئیات رفتار Case همراهان در [docs/21-companion-cases.md](21-companion-cases.md) آمده است.
+
 ```mermaid
 flowchart TD
  B[didar.php]-->P[Didar_Plugin]

@@ -67,6 +67,9 @@ class Didar_Field_Renderer {
 	}
 
 	public function render_field( $field, $value = '', $error = '', $context = 'frontend', $submission_id = 0 ) {
+		if ( ! empty( $field['form_type'] ) && ! empty( $field['name'] ) && Didar_Form_Registry::supports_placeholder( $field ) ) {
+			$field['placeholder'] = $this->settings->field_placeholder( $field['form_type'], $field['name'], $field['placeholder'] ?? '' );
+		}
 		if ( ! empty( $field['form_type'] ) && ! empty( $field['name'] ) ) {
 			$field['required'] = $this->settings->is_required( $field['form_type'], $field['name'], ! empty( $field['required'] ) );
 		}
@@ -149,8 +152,11 @@ class Didar_Field_Renderer {
 
 	private function render_date( $field, $value, $id, $name, $described, $error ) {
 		$service = new Didar_Date_Service(); $display = isset( $field['_display_value'] ) ? $field['_display_value'] : $service->format_for_display( $value );
+		$field['placeholder'] = $field['placeholder'] ?? '';
+		if ( '' === $field['placeholder'] ) { $field['placeholder'] = '۱۴۰۵/۰۱/۰۱'; }
+		$field['autocomplete'] = 'off';
 		$visible = $this->attributes( $field, $id . '-jalali', $name . '_display', $described, $error ) . ' data-didar-datepicker="jalali" data-didar-date-target="' . esc_attr( $id . '-canonical' ) . '"';
-		echo '<input type="text" value="' . esc_attr( $display ) . '" ' . $visible . ' placeholder="۱۴۰۵/۰۱/۰۱" autocomplete="off">';
+		echo '<input type="text" value="' . esc_attr( $display ) . '" ' . $visible . '>';
 		echo '<input type="hidden" id="' . esc_attr( $id . '-canonical' ) . '" name="' . esc_attr( $name ) . '" value="' . esc_attr( $value ) . '">';
 	}
 

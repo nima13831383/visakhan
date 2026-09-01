@@ -77,7 +77,7 @@ class Didar_Logger {
 	public function clear() { global $wpdb; return false !== $wpdb->query( 'TRUNCATE TABLE ' . self::table_name() ); }
 
 	private function redact( $value, $key = '' ) {
-		$secret = preg_match( '/api[_-]?key|token|secret|authorization|cookie|password|credential|file[_-]?content/i', (string) $key );
+		$secret = preg_match( '/api[_-]?key|token|secret|authorization|cookie|password|credential|file[_-]?content|applicant[_ -]?note|shared[_ -]?note|description/i', (string) $key );
 		if ( $secret ) { return '[REDACTED]'; }
 		if ( is_string( $value ) ) { if ( 'scheduled_at' === $key ) { try { return ( new DateTimeImmutable( $value, new DateTimeZone( 'UTC' ) ) )->setTimezone( new DateTimeZone( self::DISPLAY_TIMEZONE ) )->format( DATE_ATOM ); } catch ( Exception $e ) {} } return preg_replace( '/([?&]apikey=)[^&]+/i', '$1[REDACTED]', $value ); }
 		if ( is_array( $value ) ) { $out = array(); foreach ( $value as $k => $v ) { $out[ $k ] = $this->redact( $v, (string) $k ); } return $out; }

@@ -124,6 +124,16 @@
 	  var catalogNode = document.getElementById('didar-custom-field-catalog');
 	  var catalog = { fields: [], pipelines: [] };
 	  try { if (catalogNode) catalog = JSON.parse(catalogNode.textContent || '{}'); } catch (error) {}
+	  var casePipelineNode = document.getElementById('didar-case-pipeline-data');
+	  if (casePipelineNode) {
+		var casePipelines = []; try { casePipelines = JSON.parse(casePipelineNode.textContent || '[]'); } catch (error) { casePipelines = []; }
+		var casePipelineSelect = document.querySelector('select[name="didar_settings[visa_companion_case_settings][pipeline_id]"]');
+		var caseStageSelect = document.querySelector('select[name="didar_settings[visa_companion_case_settings][initial_stage_id]"]');
+		if (casePipelineSelect && caseStageSelect) {
+			function rebuildCaseStages(preserve) { var pipeline = casePipelines.filter(function (item) { return item.id === casePipelineSelect.value; })[0]; var old = preserve ? caseStageSelect.value : ''; caseStageSelect.innerHTML = ''; caseStageSelect.appendChild(new Option(pipeline ? '— انتخاب مرحله —' : '— ابتدا کاریز را انتخاب کنید —', '')); caseStageSelect.disabled = !pipeline; if (pipeline) (pipeline.stages || []).forEach(function (stage) { caseStageSelect.appendChild(new Option(stage.title, stage.id, false, stage.id === old)); }); }
+			casePipelineSelect.addEventListener('change', function () { rebuildCaseStages(false); }); rebuildCaseStages(true);
+		}
+	  }
 	  function fieldLabel(field) {
 		var available = (catalog.pipelines || []).filter(function (pipeline) { return (field.excluded_pipeline_ids || []).indexOf(pipeline.id) === -1; });
 		var scope = available.length === (catalog.pipelines || []).length && available.length ? 'همه کاریزها' : (available.length <= 2 ? available.map(function (pipeline) { return pipeline.title; }).join('، ') : available.length + ' کاریز');

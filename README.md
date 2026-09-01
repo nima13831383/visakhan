@@ -6,6 +6,12 @@
 
 قابلیت پروفایل کاربر شامل «تاریخ تولد» و «کد ملی» است. «مقدار پیش‌فرض» فرم فقط مقدار اولیه فیلد است و مقدار ویرایش‌شده کاربر را جایگزین نمی‌کند.
 
+## کارت‌های همراهان درخواست ویزا
+
+Category Case اختیاری است؛ readiness فقط Pipeline و Stage معتبر و mappingهای لازم را بررسی می‌کند. companions همچنان بخشی از همان یک Submission وردپرس است و فقط در Didar به Caseهای جدا تبدیل می‌شود.
+
+فیلد `companions` همچنان repeater وردپرس است. پس از همگام‌سازی موفق Deal اصلی، هر ردیف همراه دقیقاً یک Case دیدار می‌شود و `Case.DealId` به همان Deal متصل است. هویت ردیف با `companion_uid` پایدار و شناسه Case در متای `_didar_companion_cases` نگهداری می‌شود. تنظیمات Case از کاریز/مرحله پویا و فیلدهای دارای `FieldType: Case` استفاده می‌کند؛ حذف Case راه دور تا زمان تأیید endpoint رسمی انجام نمی‌شود.
+
 تنظیمات فیلدهای فرم‌ها در پنل مدیریت اکنون در یک جدول یکپارچه برای هر فرم ارائه می‌شود؛ وضعیت ضروری/اختیاری، نگاشت Didar و مقدار پیش‌فرض هر فیلد در همان ردیف مدیریت می‌شوند.
 
 در همه فیلدهای تاریخ، نمایش و ورود با تقویم جلالی انجام می‌شود اما ذخیره‌سازی و انتقال ماشینی همیشه Gregorian ISO با قالب `YYYY-MM-DD` است. تبدیل تقویم ابتدا با قابلیت بومی PHP `IntlCalendar` و در نبود آن با fallback داخلی انجام می‌شود؛ بنابراین نصب extension یا تغییر تنظیمات hosting لازم نیست و وابستگی شخص‌ثالث یا CDN افزوده نشده است.
@@ -123,3 +129,5 @@ ns-didar/
 ## License
 
 مجوز انتشار هنوز در مخزن تعریف نشده است.
+Placeholder is configurable per form field in the existing Form Field Settings table. It is frontend-only metadata: it never becomes a default or stored submission value and is never sent to Didar. A non-empty admin override takes precedence over a Registry placeholder; empty overrides preserve the Registry fallback.
+Text, email, telephone, number, textarea, time, password, and Jalali date inputs support the setting; select, radio, checkbox, file, honeypot, hidden, and repeater containers do not.

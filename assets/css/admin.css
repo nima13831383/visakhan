@@ -385,9 +385,35 @@ body.post-type-didar_submission #poststuff .postbox .hndle::before {
 .didar-settings-page .didar-unified-field-settings td code { direction: ltr; display: inline-block; }
 .didar-settings-page .didar-unified-field-settings select { max-width: 100%; }
 
-.didar-settings-page .didar-field-mapping-form td:last-child {
+.didar-settings-page .didar-unified-field-settings th:nth-child(1),
+.didar-settings-page .didar-unified-field-settings td:nth-child(1) { width: 19%; }
+.didar-settings-page .didar-unified-field-settings th:nth-child(2),
+.didar-settings-page .didar-unified-field-settings td:nth-child(2) { width: 11%; }
+.didar-settings-page .didar-unified-field-settings th:nth-child(3),
+.didar-settings-page .didar-unified-field-settings td:nth-child(3) { width: 34%; }
+.didar-settings-page .didar-unified-field-settings th:nth-child(4),
+.didar-settings-page .didar-unified-field-settings td:nth-child(4) { width: 18%; }
+.didar-settings-page .didar-unified-field-settings th:nth-child(5),
+.didar-settings-page .didar-unified-field-settings td:nth-child(5) { width: 18%; }
+
+.didar-settings-page .didar-unified-field-settings td:nth-child(4) {
   min-width: 0;
-  width: 65%;
+}
+
+.didar-settings-page .didar-unified-field-settings td:nth-child(4) select,
+.didar-settings-page .didar-unified-field-settings td:nth-child(5) input {
+  box-sizing: border-box;
+  max-width: 180px;
+  min-width: 0;
+  width: 100%;
+}
+
+.didar-settings-page .didar-unified-field-settings table.widefat.striped > tbody > tr:nth-child(odd) > td {
+  background-color: #f6f7f7;
+}
+
+.didar-settings-page .didar-unified-field-settings table.widefat.striped > tbody > tr:nth-child(even) > td {
+  background-color: #fff;
 }
 
 .didar-settings-page .didar-custom-field-details {
@@ -412,4 +438,98 @@ body.post-type-didar_submission #poststuff .postbox .hndle::before {
   .didar-settings-page .form-table > tbody > tr > th,
   .didar-settings-page .form-table > tbody > tr > td { display: block; width: auto; }
   .didar-settings-page .didar-field-mapping-form td:last-child { width: auto; }
+}
+
+@media (max-width: 782px) {
+  .didar-settings-page .didar-unified-field-settings__table-wrap {
+    overflow-x: visible;
+  }
+
+  .didar-settings-page .didar-unified-field-settings table,
+  .didar-settings-page .didar-unified-field-settings thead,
+  .didar-settings-page .didar-unified-field-settings tbody,
+  .didar-settings-page .didar-unified-field-settings tr,
+  .didar-settings-page .didar-unified-field-settings td {
+    display: block;
+    min-width: 0;
+    width: auto;
+  }
+
+  .didar-settings-page .didar-unified-field-settings table {
+    border: 0;
+  }
+
+  .didar-settings-page .didar-unified-field-settings thead {
+    display: none;
+  }
+
+  .didar-settings-page .didar-unified-field-settings tr {
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    margin: 0 0 12px;
+    padding: 8px 12px;
+  }
+
+  .didar-settings-page .didar-unified-field-settings td {
+    align-items: center;
+    border: 0;
+    border-bottom: 1px solid #f0f0f1;
+    display: grid;
+    gap: 10px;
+    grid-template-columns: minmax(6.5rem, 30%) minmax(0, 1fr);
+    padding: 9px 0;
+  }
+
+  .didar-settings-page .didar-unified-field-settings td:last-child {
+    border-bottom: 0;
+  }
+
+  .didar-settings-page .didar-unified-field-settings td::before {
+    color: #50575e;
+    content: attr(data-label);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .didar-settings-page .didar-unified-field-settings td:first-child {
+    align-items: start;
+    display: block;
+  }
+
+  .didar-settings-page .didar-unified-field-settings td:first-child::before {
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .didar-settings-page .didar-unified-field-settings td:nth-child(2) {
+    grid-template-columns: minmax(6.5rem, 30%) minmax(0, 10rem);
+  }
+
+  .didar-settings-page .didar-unified-field-settings td select,
+  .didar-settings-page .didar-unified-field-settings td:nth-child(5) input {
+    box-sizing: border-box;
+    max-width: 100%;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .didar-settings-page .didar-unified-field-settings table.widefat.striped > tbody > tr > td {
+    background-color: transparent;
+  }
+}
+
+@media (max-width: 480px) {
+  .didar-settings-page .didar-unified-field-settings tr {
+    padding-inline: 10px;
+  }
+
+  .didar-settings-page .didar-unified-field-settings td {
+    gap: 7px;
+    grid-template-columns: minmax(5.5rem, 34%) minmax(0, 1fr);
+  }
+
+  .didar-settings-page .didar-unified-field-settings td:nth-child(2) {
+    grid-template-columns: minmax(5.5rem, 34%) minmax(0, 1fr);
+  }
 }

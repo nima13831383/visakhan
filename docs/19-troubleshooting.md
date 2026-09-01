@@ -1,5 +1,7 @@
 # رفع اشکال
 
+> جزئیات رفتار Case همراهان در [docs/21-companion-cases.md](21-companion-cases.md) آمده است.
+
 ## درخواست ثبت شد اما Deal ساخته نشد
 
 `_didar_sync_state` و سپس `sync_queue_persisted`، `sync_worker_started`/`sync_execute`، `settings_check`/mapping، `person_conflict` و `api_request`/`api_response` را با trace بررسی کنید. API key، owner پیش‌فرض و pipeline/stage فرم را تأیید کنید؛ DB را مستقیم ویرایش نکنید.

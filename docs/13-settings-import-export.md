@@ -1,5 +1,7 @@
 # انتقال تنظیمات
 
+> جزئیات رفتار Case همراهان در [docs/21-companion-cases.md](21-companion-cases.md) آمده است.
+
 نگاشت‌های `didar_form_field_defaults` و نگاشت Custom Field پروفایل قابل انتقال‌اند. خروجی فقط پیکربندی را شامل می‌شود و هیچ مقدار واقعی از `usermeta`، به‌خصوص تاریخ تولد یا کد ملی، صادر نمی‌کند.
 
 `Didar_Settings_Transfer` export/import پیکربندی portable را با allowlist انجام می‌دهد و preview پیش از apply دارد. حالت‌های `merge` و `replace` پشتیبانی می‌شوند و پیش از اعمال نسخهٔ پشتیبان تنظیمات می‌سازند.

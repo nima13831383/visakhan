@@ -52,7 +52,7 @@ class Didar_Submission_Service {
 					'_didar_internal_note'      => '',
 					'_didar_assigned_user_id'   => '',
 					'_didar_fields'             => $data,
-					'_didar_shared_note'        => sanitize_textarea_field( $shared_note ),
+					'_didar_shared_note'        => $this->registry->supports_applicant_note( $form_type ) ? sanitize_textarea_field( $shared_note ) : '',
 				),
 			),
 			true
@@ -84,7 +84,7 @@ class Didar_Submission_Service {
 		}
 		$default_status = $this->workflow->default_status( $form_type, $form['default_status'] );
 		if ( ! $default_status ) { return new WP_Error( 'workflow_default_missing', __( 'وضعیت پیش‌فرض گردش کار این فرم مشخص نیست.', 'didar' ) ); }
-		$post_id = wp_insert_post( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'publish', 'post_author' => $author_id, 'post_title' => sprintf( '%s — %s', $form['label'], current_time( 'Y-m-d H:i' ) ), 'meta_input' => array( '_didar_form_type' => $form_type, '_didar_created_by_user_id' => 0, '_didar_status' => $default_status, '_didar_public_status' => $default_status, '_didar_public_note' => '', '_didar_internal_status' => $default_status, '_didar_internal_note' => '', '_didar_assigned_user_id' => '', '_didar_fields' => (array) $data, '_didar_shared_note' => sanitize_textarea_field( $shared_note ) ) ), true );
+		$post_id = wp_insert_post( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'publish', 'post_author' => $author_id, 'post_title' => sprintf( '%s — %s', $form['label'], current_time( 'Y-m-d H:i' ) ), 'meta_input' => array( '_didar_form_type' => $form_type, '_didar_created_by_user_id' => 0, '_didar_status' => $default_status, '_didar_public_status' => $default_status, '_didar_public_note' => '', '_didar_internal_status' => $default_status, '_didar_internal_note' => '', '_didar_assigned_user_id' => '', '_didar_fields' => (array) $data, '_didar_shared_note' => $this->registry->supports_applicant_note( $form_type ) ? sanitize_textarea_field( $shared_note ) : '' ) ), true );
 		if ( is_wp_error( $post_id ) ) { return $post_id; }
 		$this->events->add( $post_id, 'request_created', null, array( 'form_type' => $form_type, 'owner_user_id' => $author_id, 'source' => 'Didar' ) );
 		$this->apply_default_assignee( $post_id, $form_type );
@@ -265,7 +265,7 @@ class Didar_Submission_Service {
 
 		$old_fields = $this->get_fields( $post_id );
 		$old_note   = $this->get_shared_note( $post_id );
-		$new_note   = sanitize_textarea_field( $shared_note );
+		$new_note   = $this->registry->supports_applicant_note( $form_type ) ? sanitize_textarea_field( $shared_note ) : $old_note;
 		$data       = $this->preserve_inactive_fields( $form_type, $old_fields, $data );
 		update_post_meta( $post_id, '_didar_fields', $data );
 		update_post_meta( $post_id, '_didar_shared_note', $new_note );
@@ -378,6 +378,10 @@ class Didar_Submission_Service {
 	}
 
 	public function update_notes( $post_id, $shared_note, $admin_note = null ) {
+		$form_type = (string) get_post_meta( $post_id, '_didar_form_type', true );
+		if ( ! $this->registry->supports_applicant_note( $form_type ) ) {
+			$shared_note = $this->get_shared_note( $post_id );
+		}
 		$post = get_post( $post_id );
 		if ( ! $post || ! Didar_Access_Control::can_edit_request( $post_id ) ) {
 			return false;

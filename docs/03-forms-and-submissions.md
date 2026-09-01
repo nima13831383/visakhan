@@ -1,10 +1,14 @@
 # فرم‌ها و درخواست‌ها
 
+> جزئیات رفتار Case همراهان در [docs/21-companion-cases.md](21-companion-cases.md) آمده است.
+
 تمام فیلدهای معنایی نوع `date` به‌صورت خودکار تاریخ‌نگار جلالی می‌گیرند. مقدار انتخاب‌شده قبل از اعتبارسنجی به `YYYY-MM-DD` میلادی تبدیل می‌شود و نگاشت Deal همین مقدار canonical را دریافت می‌کند.
 
 هر فیلد فرم می‌تواند به‌صورت مستقل از گزینه «مقدار پیش‌فرض» استفاده کند. مقدار پروفایل فقط هنگام نمایش اولیه فرم وارد می‌شود؛ مقدار ارسال‌شده کاربر پس از خطا یا ویرایش جایگزین آن است.
 
 فرم‌ها در `Didar_Form_Registry` تعریف شده‌اند؛ renderer و validator ورودی مرورگر را مرجع نمی‌دانند. نوع‌های فعلی `consultation`، `embassy_appointment`، `traveler_evaluation`، `complaint_suggestion` و `visa_request` هستند.
+
+«یادداشت متقاضی» یک متای مستقل (`_didar_shared_note`) است، نه فیلد فعال رجیستری. این قابلیت فقط برای `embassy_appointment`، `traveler_evaluation` و `visa_request` فعال است؛ برای `consultation` و `complaint_suggestion` در UI، ویرایش و همگام‌سازی جدید پشتیبانی نمی‌شود.
 
 ثبت در `Didar_Submission_Service` یک پست `didar_submission` با `post_author` کاربر جاری می‌سازد. `_didar_form_type` نوع و `_didar_fields` مقادیر اعتبارسنجی‌شده را نگه می‌دارد. ویرایش فرانت‌اند فقط برای درخواست قابل‌دسترسی و قابل‌ویرایش انجام می‌شود؛ درخواست تکمیل‌شده قابل‌ویرایش نیست.
 

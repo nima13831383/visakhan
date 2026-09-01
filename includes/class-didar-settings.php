@@ -113,4 +113,14 @@ class Didar_Settings {
 		$value = $settings['didar_form_field_defaults'][ sanitize_key( $form_type ) ][ sanitize_key( $field_key ) ] ?? '';
 		return in_array( $value, ( new Didar_User_Profile_Value_Catalog() )->keys(), true ) ? $value : '';
 	}
+
+	/** Resolve the UI-only placeholder without changing the submitted/default value. */
+	public function field_placeholder( $form_type, $field_key, $registry_default = '' ) {
+		$form_type = sanitize_key( (string) $form_type );
+		$field_key = sanitize_key( (string) $field_key );
+		$settings  = $this->all();
+		$override  = $settings['didar_form_field_placeholders'][ $form_type ][ $field_key ] ?? '';
+		$override  = is_scalar( $override ) ? sanitize_text_field( (string) $override ) : '';
+		return '' !== $override ? $override : sanitize_text_field( (string) $registry_default );
+	}
 }

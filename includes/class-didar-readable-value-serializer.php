@@ -9,10 +9,12 @@ class Didar_Readable_Value_Serializer {
 
 	private $files;
 	private $logger;
+	private $dates;
 
 	public function __construct( Didar_File_Service $files = null, Didar_Logger $logger = null ) {
 		$this->files  = $files;
 		$this->logger = $logger;
+		$this->dates  = new Didar_Date_Service();
 	}
 
 	public function is_structured( $definition ) {
@@ -22,6 +24,20 @@ class Didar_Readable_Value_Serializer {
 
 	public function serialize( $form_type, $field_key, $definition, $value, $post_id = 0 ) {
 		$definition = is_array( $definition ) ? $definition : array();
+		if ( 'date' === (string) ( $definition['type'] ?? '' ) || 'date' === (string) ( $definition['semantic'] ?? '' ) ) {
+			$canonical = is_scalar( $value ) ? trim( (string) $value ) : '';
+			if ( '' === $canonical ) {
+				return '';
+			}
+			$jalali = $this->dates->to_jalali( $canonical );
+			if ( '' === $jalali ) {
+				if ( $this->logger ) {
+					$this->logger->log( 'ERROR', 'didar_date_serialization_invalid', 'A DATE field had an invalid canonical value and was not serialized.', array( 'form_type' => sanitize_key( $form_type ), 'field_key' => sanitize_key( $field_key ) ) );
+				}
+				return '';
+			}
+			return $jalali;
+		}
 		$type = (string) ( $definition['type'] ?? '' );
 		if ( 'file' === $type ) { return $this->files( $value, $post_id, $field_key ); }
 		if ( 'repeater' === $type || ! empty( $definition['columns'] ) ) { return $this->repeater( $value, $definition, 0 ); }
