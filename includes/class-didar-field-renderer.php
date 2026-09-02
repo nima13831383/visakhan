@@ -46,7 +46,7 @@ class Didar_Field_Renderer {
 				$field['form_type'] = $form_type;
 				$field['required']  = $this->settings->is_required( $form_type, $field['name'], ! empty( $field['required'] ) );
 				$value = array_key_exists( $field['name'], $values ) ? $values[ $field['name'] ] : ( isset( $field['default'] ) ? $field['default'] : '' );
-				if ( 'date' === $field['type'] && array_key_exists( $field['name'] . '_display', $values ) && is_scalar( $values[ $field['name'] . '_display' ] ) ) { $field['_display_value'] = (string) $values[ $field['name'] . '_display' ]; }
+				if ( ( 'date' === ( $field['type'] ?? '' ) || 'date' === ( $field['semantic'] ?? '' ) ) && array_key_exists( $field['name'] . '_display', $values ) && is_scalar( $values[ $field['name'] . '_display' ] ) ) { $field['_display_value'] = (string) $values[ $field['name'] . '_display' ]; }
 				if ( ! array_key_exists( $field['name'], $values ) && 'frontend' === $context && is_user_logged_in() ) {
 					$source = $this->settings->profile_default_source( $form_type, $field['name'] );
 					if ( $source ) {
@@ -107,7 +107,9 @@ class Didar_Field_Renderer {
 			}
 			echo '</label>';
 
-			 switch ( $type ) {
+			 if ( 'date' === $type || 'date' === ( $field['semantic'] ?? '' ) ) {
+				$this->render_date( $field, $value, $id, $input_name, $described, $error );
+			} else switch ( $type ) {
 				case 'date':
 					$this->render_date( $field, $value, $id, $input_name, $described, $error );
 					break;

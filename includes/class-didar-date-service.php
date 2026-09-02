@@ -27,6 +27,11 @@ class Didar_Date_Service {
 		return $value ?: ( self::fallback_available() ? $this->gregorian_to_jalali_fallback( $gregorian_date ) : '' );
 	}
 
+	/** Convert canonical WordPress storage to the Jalali business-date wire/display format. */
+	public function canonical_to_jalali( $canonical_date ) {
+		return $this->to_jalali( $canonical_date );
+	}
+
 	public function to_gregorian( $jalali_date ) {
 		if ( self::ENGINE_FALLBACK === self::engine() ) { return $this->jalali_to_gregorian_fallback( $jalali_date ); }
 		if ( self::ENGINE_UNAVAILABLE === self::engine() ) { return ''; }
@@ -34,10 +39,15 @@ class Didar_Date_Service {
 		return $value ?: ( self::fallback_available() ? $this->jalali_to_gregorian_fallback( $jalali_date ) : '' );
 	}
 
+	/** Convert a Jalali business date (or legacy Gregorian date) to canonical WordPress storage. */
+	public function jalali_to_canonical( $value ) {
+		$value = $this->ascii_digits( trim( (string) $value ) );
+		return $this->validate_gregorian( $value ) ? $value : $this->to_gregorian( $value );
+	}
+
 	public function normalize_input( $value ) {
 		$value = $this->ascii_digits( trim( (string) $value ) );
-		if ( $this->validate_gregorian( $value ) ) { return $value; }
-		return $this->to_gregorian( $value );
+		return $this->jalali_to_canonical( $value );
 	}
 
 	public function format_for_display( $canonical_date ) { return $this->to_jalali( $canonical_date ); }

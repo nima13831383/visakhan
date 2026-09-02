@@ -622,7 +622,7 @@ class Didar_Submission_Service {
 		if ( '' === $value || null === $value || array() === $value ) {
 			return '—';
 		}
-		if ( 'date' === ( $field['type'] ?? '' ) ) {
+		if ( 'date' === ( $field['type'] ?? '' ) || 'date' === ( $field['semantic'] ?? '' ) ) {
 			$display = ( new Didar_Date_Service() )->format_for_display( $value );
 			return $display ? $display : (string) $value;
 		}

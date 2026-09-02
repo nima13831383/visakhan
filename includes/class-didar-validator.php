@@ -55,6 +55,14 @@ class Didar_Validator {
 		$type     = $field['type'];
 		$required = ! empty( $field['required'] );
 		$label    = $field['label'];
+		if ( 'date' === ( $field['semantic'] ?? '' ) && 'date' !== $type ) {
+			if ( is_array( $raw ) || is_object( $raw ) ) { return new WP_Error( 'invalid_structure', sprintf( __( 'ساختار فیلد «%s» معتبر نیست.', 'didar' ), $label ) ); }
+			$raw = null === $raw ? '' : (string) $raw;
+			if ( $required && '' === trim( $raw ) && ! $this->has_legacy_required_fallback( $field, $submission_id ) ) { return $this->required_error( $label ); }
+			if ( '' === trim( $raw ) ) { return ''; }
+			$value = ( new Didar_Date_Service() )->normalize_input( sanitize_text_field( (string) $raw ) );
+			return $value ? $value : new WP_Error( 'invalid_date', sprintf( __( 'تاریخ «%s» معتبر نیست.', 'didar' ), $label ) );
+		}
 
 		if ( in_array( $type, array( 'checkbox', 'repeater' ), true ) || ( in_array( $type, array( 'time', 'file' ), true ) && ! empty( $field['multiple'] ) ) ) {
 			if ( null !== $raw && ! is_array( $raw ) ) {

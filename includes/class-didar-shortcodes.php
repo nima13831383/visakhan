@@ -82,7 +82,7 @@ class Didar_Shortcodes {
 					$raw    = isset( $_POST['didar_fields'] ) && is_array( $_POST['didar_fields'] ) ? wp_unslash( $_POST['didar_fields'] ) : array();
 					$result = $this->validator->validate( $type, $raw, 'frontend' );
 					$values = array_intersect_key( $raw, $this->registry->fields( $type ) );
-					foreach ( $this->registry->fields( $type ) as $field_key => $field_definition ) { if ( 'date' === ( $field_definition['type'] ?? '' ) && isset( $raw[ $field_key . '_display' ] ) && is_scalar( $raw[ $field_key . '_display' ] ) ) { $values[ $field_key . '_display' ] = (string) $raw[ $field_key . '_display' ]; } }
+					foreach ( $this->registry->fields( $type ) as $field_key => $field_definition ) { if ( ( 'date' === ( $field_definition['type'] ?? '' ) || 'date' === ( $field_definition['semantic'] ?? '' ) ) && isset( $raw[ $field_key . '_display' ] ) && is_scalar( $raw[ $field_key . '_display' ] ) ) { $values[ $field_key . '_display' ] = (string) $raw[ $field_key . '_display' ]; } }
 					$errors = array_merge( $errors, $result['errors'] );
 					if ( $result['valid'] && empty( $errors['shared_note'] ) ) {
 						$created = $this->service->create( $type, $result['data'], get_current_user_id(), $shared_note );
@@ -408,7 +408,7 @@ class Didar_Shortcodes {
 
 			$result = $this->validator->validate( $form_type, $raw, 'frontend', $submission_id );
 			$values = array_intersect_key( $raw, $this->registry->fields( $form_type ) );
-			foreach ( $this->registry->fields( $form_type ) as $field_key => $field_definition ) { if ( 'date' === ( $field_definition['type'] ?? '' ) && isset( $raw[ $field_key . '_display' ] ) && is_scalar( $raw[ $field_key . '_display' ] ) ) { $values[ $field_key . '_display' ] = (string) $raw[ $field_key . '_display' ]; } }
+			foreach ( $this->registry->fields( $form_type ) as $field_key => $field_definition ) { if ( ( 'date' === ( $field_definition['type'] ?? '' ) || 'date' === ( $field_definition['semantic'] ?? '' ) ) && isset( $raw[ $field_key . '_display' ] ) && is_scalar( $raw[ $field_key . '_display' ] ) ) { $values[ $field_key . '_display' ] = (string) $raw[ $field_key . '_display' ]; } }
 			$errors = array_merge( $errors, $result['errors'] );
 			if ( $result['valid'] && empty( $errors['shared_note'] ) ) {
 				$saved = $this->service->update_from_frontend( $submission_id, $result['data'], $shared_note, $user_id );

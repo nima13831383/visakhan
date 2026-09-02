@@ -25,18 +25,7 @@ class Didar_Readable_Value_Serializer {
 	public function serialize( $form_type, $field_key, $definition, $value, $post_id = 0 ) {
 		$definition = is_array( $definition ) ? $definition : array();
 		if ( 'date' === (string) ( $definition['type'] ?? '' ) || 'date' === (string) ( $definition['semantic'] ?? '' ) ) {
-			$canonical = is_scalar( $value ) ? trim( (string) $value ) : '';
-			if ( '' === $canonical ) {
-				return '';
-			}
-			$jalali = $this->dates->to_jalali( $canonical );
-			if ( '' === $jalali ) {
-				if ( $this->logger ) {
-					$this->logger->log( 'ERROR', 'didar_date_serialization_invalid', 'A DATE field had an invalid canonical value and was not serialized.', array( 'form_type' => sanitize_key( $form_type ), 'field_key' => sanitize_key( $field_key ) ) );
-				}
-				return '';
-			}
-			return $jalali;
+			return $this->serialize_date( $form_type, $field_key, $value );
 		}
 		$type = (string) ( $definition['type'] ?? '' );
 		if ( 'file' === $type ) { return $this->files( $value, $post_id, $field_key ); }
@@ -87,7 +76,10 @@ class Didar_Readable_Value_Serializer {
 
 	private function nested( $value, $definition, $depth, $prefix ) {
 		if ( $depth > self::MAX_DEPTH ) { $this->truncated(); return ''; }
-		if ( is_scalar( $value ) || is_bool( $value ) ) { return ( is_scalar( $value ) && ! empty( $definition['options'] ) ) ? $this->label( $value, $definition ) : $this->scalar( $value, $definition ); }
+		if ( is_scalar( $value ) || is_bool( $value ) ) {
+			if ( 'date' === (string) ( $definition['type'] ?? '' ) || 'date' === (string) ( $definition['semantic'] ?? '' ) ) { return $this->serialize_date( '', '', $value ); }
+			return ( is_scalar( $value ) && ! empty( $definition['options'] ) ) ? $this->label( $value, $definition ) : $this->scalar( $value, $definition );
+		}
 		if ( ! is_array( $value ) ) { return ''; }
 		if ( ! empty( $definition['columns'] ) ) { return $this->repeater( $value, $definition, $depth ); }
 		if ( $this->is_structured( $definition ) ) { return $this->list_value( $value, $definition ); }
@@ -118,6 +110,16 @@ class Didar_Readable_Value_Serializer {
 			$url = $this->files->get_sync_url( absint( $file_id ), $post_id, $field_key ); $number++; $lines[] = $number . ') ' . $name; if ( $url ) { $lines[] = '   لینک: ' . esc_url_raw( $url ); } $lines[] = '';
 		}
 		return trim( implode( "\n", $lines ) );
+	}
+
+	private function serialize_date( $form_type, $field_key, $value ) {
+		$canonical = is_scalar( $value ) ? trim( (string) $value ) : '';
+		if ( '' === $canonical ) { return ''; }
+		$jalali = $this->dates->canonical_to_jalali( $canonical );
+		if ( '' === $jalali && $this->logger ) {
+			$this->logger->log( 'ERROR', 'didar_date_serialization_invalid', 'A DATE field had an invalid canonical value and was not serialized.', array( 'form_type' => sanitize_key( $form_type ), 'field_key' => sanitize_key( $field_key ) ) );
+		}
+		return $jalali;
 	}
 
 	private function truncated() { if ( $this->logger ) { $this->logger->log( 'WARNING', 'didar_readable_value_truncated', 'Structured field value exceeded the readable serializer safety limit.', array( 'source' => 'readable_value_serializer' ) ); } }

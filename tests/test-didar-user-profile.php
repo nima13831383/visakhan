@@ -56,6 +56,16 @@ class Didar_User_Profile_Test extends WP_UnitTestCase {
 		$this->assertSame( 'Test Display', $payload['Fields']['Field_contact_display'] );
 	}
 
+	public function test_person_birth_date_custom_mapping_is_serialized_as_jalali() {
+		$user_id = self::factory()->user->create( array( 'user_email' => 'date-profile@example.test' ) );
+		$this->user_ids[] = $user_id;
+		update_user_meta( $user_id, Didar_User_Profile_Value_Catalog::BIRTH_DATE_META, '2024-03-20' );
+		update_option( Didar_Settings::OPTION_NAME, array( 'didar_user_person_mappings' => array( 'birth_date' => 'Field_birth_date' ) ) );
+		$mapper = new Didar_Field_Mapper( new Didar_Form_Registry(), new Didar_Settings() );
+		$payload = $mapper->person_payload( get_user_by( 'id', $user_id ) );
+		$this->assertSame( '1403/01/01', $payload['Fields']['Field_birth_date'] );
+	}
+
 	public function test_legacy_gender_is_migrated_only_when_canonical_value_is_empty() {
 		$user_id = self::factory()->user->create();
 		$this->user_ids[] = $user_id;

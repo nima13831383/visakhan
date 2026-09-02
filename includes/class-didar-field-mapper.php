@@ -198,7 +198,14 @@ class Didar_Field_Mapper {
 		foreach ( $values as $property => $value ) {
 			$key = isset( $mapping[ $property ] ) && is_scalar( $mapping[ $property ] ) ? sanitize_text_field( (string) $mapping[ $property ] ) : '';
 			if ( $key && '' !== $value ) {
-				$out[ $key ] = $value;
+				// Profile mappings are textual/custom Person fields. Keep the local
+				// canonical value untouched, but serialize business dates to the
+				// single Jalali wire format used by all Didar custom fields.
+				$definition = 'birth_date' === $property ? array( 'type' => 'date' ) : array( 'type' => 'text' );
+				$serialized = $this->serializer->serialize( 'profile', $property, $definition, $value );
+				if ( '' !== $serialized ) {
+					$out[ $key ] = $serialized;
+				}
 			}
 		}
 		return $out;

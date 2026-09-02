@@ -514,7 +514,32 @@ class Didar_Sync_Manager {
 		$data      = is_array( $payload['data'] ) ? $payload['data'] : array();
 		$person_id = sanitize_text_field( $payload['meta']['entityId'] ?? ( $data['Id'] ?? '' ) );
 		$user_id   = $this->wp_user_for_person( $person_id );
-		$this->logger->log( 'INFO', 'person_webhook_separate', 'Didar Person webhook received; WordPress profile synchronization is disabled for this integration.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'person', 'external_id' => $person_id, 'wp_user_id' => $user_id, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook', 'profile_sync' => 'disabled' ) );
+		if ( ! $user_id ) {
+			$this->logger->log( 'INFO', 'person_webhook_unmapped', 'Didar Person webhook had no linked WordPress user; no profile data was stored.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'person', 'external_id' => $person_id, 'wp_user_id' => 0, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook' ) );
+			return;
+		}
+
+		$settings = $this->settings->all();
+		$mapping  = isset( $settings['didar_user_person_mappings'] ) && is_array( $settings['didar_user_person_mappings'] ) ? $settings['didar_user_person_mappings'] : array();
+		$fields   = isset( $data['Fields'] ) && is_array( $data['Fields'] ) ? $data['Fields'] : array();
+		$birth_key = isset( $mapping['birth_date'] ) && is_scalar( $mapping['birth_date'] ) ? sanitize_text_field( (string) $mapping['birth_date'] ) : '';
+		if ( ! $birth_key || ! array_key_exists( $birth_key, $fields ) ) {
+			$this->logger->log( 'INFO', 'person_webhook_applied', 'Didar Person webhook received; no mapped profile date was present.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'person', 'external_id' => $person_id, 'wp_user_id' => $user_id, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook', 'changed_profile_fields' => array() ) );
+			return;
+		}
+
+		$raw = $fields[ $birth_key ];
+		if ( ! is_scalar( $raw ) || '' === trim( (string) $raw ) ) {
+			$this->logger->log( 'ERROR', 'didar_date_deserialization_invalid', 'Inbound Person birth date was invalid; the existing local value was preserved.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'person', 'external_id' => $person_id, 'wp_user_id' => $user_id, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook', 'field_key' => 'birth_date' ) );
+			return;
+		}
+		$value = $this->dates->jalali_to_canonical( sanitize_text_field( (string) $raw ) );
+		if ( ! $value ) {
+			$this->logger->log( 'ERROR', 'didar_date_deserialization_invalid', 'Inbound Person birth date was invalid; the existing local value was preserved.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'person', 'external_id' => $person_id, 'wp_user_id' => $user_id, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook', 'field_key' => 'birth_date' ) );
+			return;
+		}
+		update_user_meta( $user_id, Didar_User_Profile_Value_Catalog::BIRTH_DATE_META, $value );
+		$this->logger->log( 'INFO', 'person_webhook_applied', 'Didar Person mapped birth date was normalized and stored canonically in WordPress.', array( 'direction' => 'didar_to_wordpress', 'entity_type' => 'person', 'external_id' => $person_id, 'wp_user_id' => $user_id, 'webhook_event_id' => $event_id, 'source' => 'didar_webhook', 'changed_profile_fields' => array( 'birth_date' ) ) );
 	}
 
 	private function apply_deal_webhook( $payload, $event_id ) {
