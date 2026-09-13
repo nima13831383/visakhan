@@ -2,15 +2,32 @@
 
 class Test_Didar_Settings_Transfer extends WP_UnitTestCase {
 	private $transfer;
+	private $settings_exists;
+	private $settings_snapshot;
+	private $settings_missing_marker;
 
 	public function set_up() {
 		parent::set_up();
+		$this->settings_missing_marker = '__didar_settings_missing_' . uniqid( '', true );
+		$this->settings_snapshot = get_option( Didar_Settings::OPTION_NAME, $this->settings_missing_marker );
+		$this->settings_exists = $this->settings_snapshot !== $this->settings_missing_marker;
 		delete_option( Didar_Settings::OPTION_NAME );
 		delete_option( Didar_Settings_Transfer::BACKUPS_OPTION );
 		$this->transfer = new Didar_Settings_Transfer( new Didar_Form_Registry(), new Didar_Settings(), new Didar_Logger() );
 	}
 
-	public function tear_down() { delete_option( Didar_Settings::OPTION_NAME ); delete_option( Didar_Settings_Transfer::BACKUPS_OPTION ); parent::tear_down(); }
+	public function tear_down() {
+		try {
+			if ( $this->settings_exists ) {
+				update_option( Didar_Settings::OPTION_NAME, $this->settings_snapshot, false );
+			} else {
+				delete_option( Didar_Settings::OPTION_NAME );
+			}
+			delete_option( Didar_Settings_Transfer::BACKUPS_OPTION );
+		} finally {
+			parent::tear_down();
+		}
+	}
 
 	public function test_export_excludes_secrets_and_runtime_caches() {
 		update_option( Didar_Settings::OPTION_NAME, array( 'didar_api_key' => 'secret', 'didar_webhook_secret' => 'token', 'didar_form_workflows' => array( 'consultation' => array( 'pipeline_id' => 'p' ) ), 'didar_pipeline_cache' => array( 'runtime' => true ) ) );
@@ -25,6 +42,75 @@ class Test_Didar_Settings_Transfer extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'category-1', $json );
 		$this->assertStringNotContainsString( 'remote-case-1', $json );
 		$this->assertStringNotContainsString( 'didar_companion_runtime', $json );
+	}
+
+	public function test_all_form_applicant_note_mappings_survive_export_import_round_trip() {
+		$maps = array(
+			'consultation'         => array( 'applicant_note' => array( 'target' => 'deal_custom', 'field' => 'Field_Consultation_Note' ) ),
+			'embassy_appointment'  => array( 'applicant_note' => array( 'target' => 'deal_custom', 'field' => 'Field_Embassy_Note' ) ),
+			'traveler_evaluation'  => array( 'applicant_note' => array( 'target' => 'deal_custom', 'field' => 'Field_Traveler_Note' ) ),
+			'complaint_suggestion' => array( 'applicant_note' => array( 'target' => 'deal_custom', 'field' => 'Field_Complaint_Note' ) ),
+			'visa_request'         => array( 'applicant_note' => array( 'target' => 'deal_custom', 'field' => 'Field_Visa_Note' ) ),
+		);
+		$case_settings = array(
+			'pipeline_id'        => 'pipeline-1',
+			'initial_stage_id'   => 'stage-1',
+			'field_mappings'     => array( 'full_name' => 'Case_Name' ),
+			'main_field_mappings' => array( 'case_role' => 'Case_Role' ),
+			'system_fields'      => array( 'submission_id' => 'Case_Submission', 'companion_uid' => 'Case_UID', 'form_type' => 'Case_Form' ),
+		);
+		$source = array(
+			'didar_field_mappings'       => $maps,
+			'visa_companion_case_settings' => $case_settings,
+			'case_form_settings'         => array( 'visa_request' => $case_settings, 'embassy_appointment' => $case_settings ),
+			'didar_companion_runtime'    => array( 'cmp_123' => array( 'case_id' => 'remote-case-1' ) ),
+			'didar_case_pipeline_cache'  => array( 'pipelines' => array( 'runtime-pipeline' ) ),
+		);
+		update_option( Didar_Settings::OPTION_NAME, $source, false );
+		$export = $this->transfer->export_payload();
+		$this->assertSame( $maps, $export['settings']['didar_field_mappings'] );
+		$this->assertSame( $case_settings, $export['settings']['visa_companion_case_settings'] );
+		$this->assertArrayNotHasKey( 'didar_companion_runtime', $export['settings'] );
+		$this->assertArrayNotHasKey( 'didar_case_pipeline_cache', $export['settings'] );
+		delete_option( Didar_Settings::OPTION_NAME );
+
+		$portable = $this->transfer->portable_settings( $source );
+		$this->assertSame( $maps, $portable['didar_field_mappings'] );
+		$this->assertSame( $case_settings, $portable['visa_companion_case_settings'] );
+		$this->assertSame( $case_settings, $portable['case_form_settings']['embassy_appointment'] );
+		$this->assertArrayNotHasKey( 'didar_companion_runtime', $portable );
+		$this->assertArrayNotHasKey( 'didar_case_pipeline_cache', $portable );
+
+		$data = array( 'format' => Didar_Settings_Transfer::FORMAT, 'schema_version' => Didar_Settings_Transfer::SCHEMA_VERSION, 'settings' => $portable );
+		$preview = $this->transfer->preview( $data, 'replace' );
+		$this->assertEmpty( $preview['errors'] );
+		$this->assertSame( $maps, $preview['incoming']['didar_field_mappings'] );
+		$result = $this->transfer->apply( $preview );
+		$this->assertNotWPError( $result );
+
+		$saved = get_option( Didar_Settings::OPTION_NAME, array() );
+		$this->assertSame( $maps, $saved['didar_field_mappings'] );
+		$this->assertSame( $case_settings, $saved['visa_companion_case_settings'] );
+		$this->assertSame( $case_settings, $saved['case_form_settings']['embassy_appointment'] );
+		$this->assertArrayNotHasKey( 'didar_companion_runtime', $saved );
+		$this->assertArrayNotHasKey( 'didar_case_pipeline_cache', $saved );
+	}
+
+	public function test_system_user_id_field_is_exported_and_round_trips_in_merge_and_replace_modes() {
+		$value = 'Field_System_User_42';
+		update_option( Didar_Settings::OPTION_NAME, array( 'didar_system_user_id_field_id' => $value ), false );
+		$payload = $this->transfer->export_payload();
+		$this->assertSame( $value, $payload['settings']['didar_system_user_id_field_id'] );
+
+		foreach ( array( 'merge', 'replace' ) as $mode ) {
+			delete_option( Didar_Settings::OPTION_NAME );
+			$preview = $this->transfer->preview( $payload, $mode );
+			$this->assertEmpty( $preview['errors'] );
+			$this->assertSame( $value, $preview['incoming']['didar_system_user_id_field_id'] );
+			$result = $this->transfer->apply( $preview );
+			$this->assertNotWPError( $result );
+			$this->assertSame( $value, get_option( Didar_Settings::OPTION_NAME, array() )['didar_system_user_id_field_id'] );
+		}
 	}
 
 	public function test_persian_labels_survive_json_round_trip() {

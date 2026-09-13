@@ -12,6 +12,13 @@ class Test_Didar_Readable_Value_Serializer extends WP_UnitTestCase {
 		$this->assertSame( 'Germany', $this->serializer->serialize( 'x', 'country', array( 'type' => 'text' ), 'Germany' ) );
 	}
 
+	public function test_choice_values_are_serialized_as_readable_labels_with_legacy_fallback() {
+		$definition = array( 'type' => 'select', 'options' => array( 'self' => 'برای خودم' ), 'legacy_options' => array( 'old' => 'مقدار قدیمی' ) );
+		$this->assertSame( 'برای خودم', $this->serializer->serialize( 'visa_request', 'request_for', $definition, 'self' ) );
+		$this->assertSame( 'مقدار قدیمی', $this->serializer->serialize( 'visa_request', 'request_for', $definition, 'old' ) );
+		$this->assertSame( 'unknown', $this->serializer->serialize( 'visa_request', 'request_for', $definition, 'unknown' ) );
+	}
+
 	public function test_date_custom_fields_are_serialized_as_jalali_text() {
 		$this->assertSame( '1405/06/10', $this->serializer->serialize( 'visa_request', 'passport_expiry', array( 'type' => 'date' ), '2026-09-01' ) );
 		$this->assertSame( '1405/06/10', $this->serializer->serialize( 'future', 'date_value', array( 'type' => 'text', 'semantic' => 'date' ), '2026-09-01' ) );

@@ -2,7 +2,7 @@
 /*
 Plugin Name: Didar
 Description: مدیریت امن درخواست‌ها و فرم‌های فارسی دیدار.
-Version: 1.7.2
+Version: 1.7.3
 Requires at least: 6.4
 Requires PHP: 7.4
 Author: Didar
@@ -14,16 +14,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'DIDAR_VERSION', '1.7.2' );
+define( 'DIDAR_VERSION', '1.7.4' );
 define( 'DIDAR_FILE', __FILE__ );
 define( 'DIDAR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'DIDAR_URL', plugin_dir_url( __FILE__ ) );
 
 require_once DIDAR_PATH . 'includes/class-didar-post-type.php';
 require_once DIDAR_PATH . 'includes/class-didar-access-control.php';
+require_once DIDAR_PATH . 'includes/class-didar-user-identity.php';
 require_once DIDAR_PATH . 'includes/class-didar-event-log.php';
 require_once DIDAR_PATH . 'includes/class-didar-logger.php';
 require_once DIDAR_PATH . 'includes/class-didar-reference-data.php';
+require_once DIDAR_PATH . 'includes/class-didar-form-access.php';
+require_once DIDAR_PATH . 'includes/class-didar-companion-model.php';
+require_once DIDAR_PATH . 'includes/class-didar-profile-document-catalog.php';
 require_once DIDAR_PATH . 'includes/class-didar-form-registry.php';
 require_once DIDAR_PATH . 'includes/class-didar-settings.php';
 require_once DIDAR_PATH . 'includes/class-didar-request-search.php';
@@ -39,6 +43,10 @@ require_once DIDAR_PATH . 'includes/class-didar-custom-field-catalog.php';
 require_once DIDAR_PATH . 'includes/class-didar-user-catalog.php';
 require_once DIDAR_PATH . 'includes/class-didar-user-profile-value-catalog.php';
 require_once DIDAR_PATH . 'includes/class-didar-date-service.php';
+if ( file_exists( DIDAR_PATH . 'vendor/autoload.php' ) ) {
+	require_once DIDAR_PATH . 'vendor/autoload.php';
+}
+require_once DIDAR_PATH . 'includes/class-didar-pdf-service.php';
 require_once DIDAR_PATH . 'includes/class-didar-workflow-manager.php';
 require_once DIDAR_PATH . 'includes/class-didar-settings-transfer.php';
 require_once DIDAR_PATH . 'includes/class-didar-field-mapper.php';

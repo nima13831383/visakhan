@@ -1,4 +1,30 @@
-# Didar WordPress Plugin — AGENTS.md
+# ns-didar operating guide
+
+**Read [docs/PROJECT-HANDOFF.md](docs/PROJECT-HANDOFF.md) before making a change.** It is the canonical current-state handoff. The long legacy guidance below predates uncommitted Phase 2–8 work and is historical reference only where it conflicts with the handoff or current source.
+
+## Current operating rules
+
+- The plugin is `ns-didar`; it owns fixed request forms, not a generic form builder.
+- `Didar_Form_Registry` and `Didar_Reference_Data` are the source of truth for form keys, fields, canonical values, options, and defaults. Do not duplicate them in templates, JavaScript, or settings.
+- Preserve compatibility: do not rename keys, change canonical select values, bulk-migrate submissions, or overwrite saved/failed-validation/profile-prefilled values when adding defaults.
+- Work from the existing dirty tree. Never reset, checkout, or revert unrelated Phase/Iran/geography/upload/UI work.
+- Before changing sync, Case, settings, upload, PDF, or form behavior, read the class named in the handoff and its focused tests.
+- Never call live Didar, submit a form, create/delete submissions, or modify settings/mappings unless the user explicitly directs it.
+- Do not invent CRM IDs, remove remote records, expose credentials/private paths, or move application documents into the Media Library.
+- For a new Didar business custom field, use only `متن کوتاه` or `متن بلند` unless reusing a verified existing field/type.
+
+## Documentation hierarchy
+
+1. Repository `C:\xampp\htdocs\visa\AGENTS.md`
+2. This file
+3. `docs/PROJECT-HANDOFF.md`
+4. Current source and focused tests
+
+The numbered documents under `docs/` are retained historical/reference documents; [docs/README.md](docs/README.md) inventories their limitations.
+
+---
+
+# Legacy implementation guidance (historical/reference)
 
 ## 1. Project Identity
 

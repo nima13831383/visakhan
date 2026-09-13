@@ -18,6 +18,7 @@ final class Didar_Plugin {
 	public $request_search;
 	public $sync_manager;
 	public $case_service;
+	public $pdf_service;
 
 	public static function instance() {
 		if ( null === self::$instance ) {
@@ -53,12 +54,13 @@ final class Didar_Plugin {
 		$this->service   = new Didar_Submission_Service( $this->registry, $this->event_log, $this->settings, $this->file_service );
 		$this->file_service->set_submission_service( $this->service );
 		$this->sync_manager = new Didar_Sync_Manager( $this->registry, $this->settings, $this->event_log, $this->service, $this->file_service, $this->logger, $this->case_service );
+		$this->pdf_service = new Didar_Pdf_Service( $this->registry, $this->settings, $this->service, $this->file_service, $this->logger );
 		// File replacement does not run activation hooks. Keep background workers
 		// healthy on every normal bootstrap so pending durable work cannot strand.
 		$this->ensure_runtime_workers();
 
 		new Didar_Shortcodes( $this->registry, $this->renderer, $this->validator, $this->service, $this->settings, $this->file_service, $this->request_search );
-		new Didar_User_Profile( $this->registry, $this->settings, $this->sync_manager, $this->logger );
+		new Didar_User_Profile( $this->registry, $this->settings, $this->sync_manager, $this->logger, $this->file_service );
 		new Didar_Ajax( $this->registry, $this->renderer, $this->service, $this->file_service );
 
 		if ( is_admin() ) {

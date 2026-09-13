@@ -23,6 +23,19 @@ class Didar_Case_Service {
 	public function pipeline( $id ) { foreach ( $this->pipelines() as $pipeline ) { if ( (string) $pipeline['id'] === (string) $id ) return $pipeline; } return array(); }
 	public function case_field( $key ) { foreach ( $this->custom_fields() as $field ) { if ( (string) $field['key'] === (string) $key ) return $field; } return array(); }
 
+	/** Return the per-form Case settings while preserving the original Visa option namespace. */
+	public function configuration( $form_type ) {
+		$form_type = sanitize_key( (string) $form_type );
+		$settings = $this->settings->all();
+		if ( isset( $settings['case_form_settings'][ $form_type ] ) && is_array( $settings['case_form_settings'][ $form_type ] ) ) {
+			return $settings['case_form_settings'][ $form_type ];
+		}
+		if ( 'visa_request' === $form_type && isset( $settings['visa_companion_case_settings'] ) && is_array( $settings['visa_companion_case_settings'] ) ) {
+			return $settings['visa_companion_case_settings'];
+		}
+		return array();
+	}
+
 	public function refresh() {
 		$api = new Didar_Api_Client( $this->settings, $this->logger );
 		$pipeline_response = $api->case_pipelines();
@@ -49,14 +62,14 @@ class Didar_Case_Service {
 	public static function is_case_field( $field ) { return is_array( $field ) && ! empty( $field['key'] ) && empty( $field['is_deleted'] ) && 'case' === strtolower( (string) ( $field['field_type'] ?? '' ) ); }
 
 	/** Canonical Case configuration check shared by diagnostics and synchronization. */
-	public function validate_companion_case_configuration( $config = null ) {
-		if ( null === $config ) { $settings = $this->settings->all(); $config = $settings['visa_companion_case_settings'] ?? array(); }
+	public function validate_companion_case_configuration( $config = null, $form_type = 'visa_request' ) {
+		if ( null === $config ) { $config = $this->configuration( $form_type ); }
 		$config = is_array( $config ) ? $config : array(); $issues = array();
 		$pipeline_id = sanitize_text_field( (string) ( $config['pipeline_id'] ?? '' ) ); $stage_id = sanitize_text_field( (string) ( $config['initial_stage_id'] ?? '' ) );
 		$pipeline = $pipeline_id ? $this->pipeline( $pipeline_id ) : array();
 		if ( ! $pipeline_id ) $issues[] = 'pipeline_missing'; elseif ( ! $pipeline ) $issues[] = 'pipeline_stale';
 		if ( ! $stage_id ) $issues[] = 'stage_missing'; elseif ( $pipeline && ! $this->valid_stage( $pipeline_id, $stage_id ) ) $issues[] = 'stage_not_in_pipeline';
-		$mapped_keys = array(); foreach ( (array) ( $config['field_mappings'] ?? array() ) as $source => $target ) { $target = sanitize_text_field( (string) $target ); if ( ! $target ) continue; if ( in_array( $target, $mapped_keys, true ) ) $issues[] = 'duplicate_field_mapping'; $mapped_keys[] = $target; if ( ! self::is_case_field( $this->case_field( $target ) ) ) $issues[] = 'case_field_stale'; }
+		$mapped_keys = array(); foreach ( array( 'field_mappings', 'main_field_mappings' ) as $mapping_group ) { foreach ( (array) ( $config[ $mapping_group ] ?? array() ) as $source => $target ) { $target = sanitize_text_field( (string) $target ); if ( ! $target ) continue; if ( in_array( $target, $mapped_keys, true ) ) $issues[] = 'duplicate_field_mapping'; $mapped_keys[] = $target; if ( ! self::is_case_field( $this->case_field( $target ) ) ) $issues[] = 'case_field_stale'; } }
 		$system_keys = array(); foreach ( (array) ( $config['system_fields'] ?? array() ) as $purpose => $target ) { $target = sanitize_text_field( (string) $target ); if ( ! $target ) continue; if ( in_array( $target, $system_keys, true ) ) $issues[] = 'duplicate_system_mapping'; $system_keys[] = $target; if ( ! self::is_case_field( $this->case_field( $target ) ) ) $issues[] = 'system_field_stale'; }
 		$issues = array_values( array_unique( $issues ) ); $stale_codes = array( 'pipeline_stale', 'stage_not_in_pipeline', 'case_field_stale', 'system_field_stale' ); $status = array_intersect( $stale_codes, $issues ) ? 'stale' : ( $issues ? 'incomplete' : 'ready' ); return array( 'status' => $status, 'ready' => 'ready' === $status, 'issues' => $issues );
 	}

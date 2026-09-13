@@ -36,6 +36,7 @@ class Didar_Submission_Service {
 		if ( ! $default_status ) {
 			return new WP_Error( 'workflow_default_missing', __( 'وضعیت پیش‌فرض گردش کار این فرم مشخص نیست.', 'didar' ) );
 		}
+		$data = $this->normalize_companion_data( $form_type, $data );
 		$post_id        = wp_insert_post(
 			array(
 				'post_type'   => Didar_Post_Type::POST_TYPE,
@@ -84,6 +85,7 @@ class Didar_Submission_Service {
 		}
 		$default_status = $this->workflow->default_status( $form_type, $form['default_status'] );
 		if ( ! $default_status ) { return new WP_Error( 'workflow_default_missing', __( 'وضعیت پیش‌فرض گردش کار این فرم مشخص نیست.', 'didar' ) ); }
+		$data = $this->normalize_companion_data( $form_type, $data );
 		$post_id = wp_insert_post( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'publish', 'post_author' => $author_id, 'post_title' => sprintf( '%s — %s', $form['label'], current_time( 'Y-m-d H:i' ) ), 'meta_input' => array( '_didar_form_type' => $form_type, '_didar_created_by_user_id' => 0, '_didar_status' => $default_status, '_didar_public_status' => $default_status, '_didar_public_note' => '', '_didar_internal_status' => $default_status, '_didar_internal_note' => '', '_didar_assigned_user_id' => '', '_didar_fields' => (array) $data, '_didar_shared_note' => $this->registry->supports_applicant_note( $form_type ) ? sanitize_textarea_field( $shared_note ) : '' ) ), true );
 		if ( is_wp_error( $post_id ) ) { return $post_id; }
 		$this->events->add( $post_id, 'request_created', null, array( 'form_type' => $form_type, 'owner_user_id' => $author_id, 'source' => 'Didar' ) );
@@ -114,6 +116,7 @@ class Didar_Submission_Service {
 		$old_fields  = $this->get_fields( $post_id );
 		$old_owner   = (int) $post->post_author;
 		$data        = $this->preserve_inactive_fields( $form_type, $old_fields, $data );
+		$data        = $this->normalize_companion_data( $form_type, $data );
 
 		update_post_meta( $post_id, '_didar_form_type', $form_type );
 		update_post_meta( $post_id, '_didar_fields', $data );
@@ -267,6 +270,7 @@ class Didar_Submission_Service {
 		$old_note   = $this->get_shared_note( $post_id );
 		$new_note   = $this->registry->supports_applicant_note( $form_type ) ? sanitize_textarea_field( $shared_note ) : $old_note;
 		$data       = $this->preserve_inactive_fields( $form_type, $old_fields, $data );
+		$data       = $this->normalize_companion_data( $form_type, $data );
 		update_post_meta( $post_id, '_didar_fields', $data );
 		update_post_meta( $post_id, '_didar_shared_note', $new_note );
 		$this->record_data_changes( $post_id, $form_type, $old_fields, $data );
@@ -554,6 +558,10 @@ class Didar_Submission_Service {
 			'file_replaced'            => __( 'فایل جایگزین شد', 'didar' ),
 			'file_removed'             => __( 'فایل حذف شد', 'didar' ),
 			'request_owner_changed'    => __( 'مالک درخواست تغییر کرد', 'didar' ),
+			'request_trashed'          => __( 'درخواست به زباله‌دان منتقل شد', 'didar' ),
+			'request_deleted'          => __( 'درخواست حذف شد', 'didar' ),
+			'didar_webhook_received'   => __( 'به‌روزرسانی از دیدار دریافت شد', 'didar' ),
+			'didar_sync_failed'        => __( 'همگام‌سازی دیدار ناموفق بود', 'didar' ),
 		);
 		return isset( $labels[ $event_type ] ) ? $labels[ $event_type ] : __( 'فعالیت درخواست', 'didar' );
 	}
@@ -576,14 +584,32 @@ class Didar_Submission_Service {
 		if ( ! empty( $event['event_meta']['field_label'] ) ) {
 			return (string) $event['event_meta']['field_label'];
 		}
-		return ! empty( $event['event_meta']['field_name'] ) ? (string) $event['event_meta']['field_name'] : '';
+		$field_name = ! empty( $event['event_meta']['field_name'] ) ? sanitize_key( (string) $event['event_meta']['field_name'] ) : '';
+		$form_type  = ! empty( $event['event_meta']['form_type'] ) ? sanitize_key( (string) $event['event_meta']['form_type'] ) : '';
+		$fields     = $form_type ? $this->registry->fields( $form_type ) : array();
+		if ( $field_name && isset( $fields[ $field_name ]['label'] ) ) {
+			return (string) $fields[ $field_name ]['label'];
+		}
+		if ( $field_name ) {
+			return sprintf( __( 'فیلد: %s', 'didar' ), $field_name );
+		}
+		if ( ! empty( $event['event_meta']['error'] ) ) {
+			return sprintf( __( 'کد خطا: %s', 'didar' ), sanitize_text_field( (string) $event['event_meta']['error'] ) );
+		}
+		return '';
 	}
 
-	public function format_event_value( $event_type, $value ) {
+	public function format_event_value( $event_type, $value, $event_meta = array() ) {
 		if ( null === $value || '' === $value || array() === $value || 0 === $value ) {
 			return '—';
 		}
 		if ( in_array( $event_type, array( 'public_status_changed', 'internal_status_changed' ), true ) ) {
+			if ( is_array( $event_meta ) && isset( $event_meta['old_status_key'], $event_meta['old_status_label'] ) && (string) $value === (string) $event_meta['old_status_key'] ) {
+				return (string) $event_meta['old_status_label'];
+			}
+			if ( is_array( $event_meta ) && isset( $event_meta['new_status_key'], $event_meta['new_status_label'] ) && (string) $value === (string) $event_meta['new_status_key'] ) {
+				return (string) $event_meta['new_status_label'];
+			}
 			return $this->get_status_label( $value );
 		}
 		if ( in_array( $event_type, array( 'request_assigned', 'request_reassigned', 'assignment_removed', 'request_owner_changed' ), true ) ) {
@@ -595,16 +621,26 @@ class Didar_Submission_Service {
 			return $record ? $record['original_name'] : sprintf( __( 'فایل دیدار #%d', 'didar' ), absint( $value ) );
 		}
 		if ( is_array( $value ) ) {
-			return $this->format_event_array( $value );
+			return $this->format_event_array( $value, $event_meta );
 		}
 		return (string) $value;
 	}
 
-	private function format_event_array( $value ) {
+	private function format_event_array( $value, $event_meta = array() ) {
+		$form_type = is_array( $event_meta ) && ! empty( $event_meta['form_type'] ) ? sanitize_key( (string) $event_meta['form_type'] ) : '';
+		$fields    = $form_type ? $this->registry->fields( $form_type ) : array();
+		$labels    = array( 'form_type' => __( 'نوع فرم', 'didar' ), 'owner_user_id' => __( 'کاربر مسئول', 'didar' ), 'public_status' => __( 'وضعیت عمومی', 'didar' ), 'internal_status' => __( 'وضعیت داخلی', 'didar' ), 'source' => __( 'منبع', 'didar' ), 'error' => __( 'خطا', 'didar' ), 'entity_id' => __( 'شناسه دیدار', 'didar' ) );
 		$parts = array();
 		foreach ( $value as $key => $item ) {
-			$rendered = is_array( $item ) ? $this->format_event_array( $item ) : (string) $item;
-			$parts[]  = is_string( $key ) ? $key . ': ' . $rendered : $rendered;
+			$definition = isset( $fields[ $key ] ) ? $fields[ $key ] : null;
+			if ( ! $definition && is_string( $key ) ) {
+				foreach ( $fields as $field ) {
+					if ( (string) ( $field['label'] ?? '' ) === $key ) { $definition = $field; break; }
+				}
+			}
+			$rendered = $definition ? ( new Didar_Readable_Value_Serializer( $this->files, $this->logger ) )->serialize( $form_type, (string) $key, $definition, $item ) : ( is_array( $item ) ? $this->format_event_array( $item, $event_meta ) : (string) $item );
+			$label    = is_string( $key ) ? ( $labels[ $key ] ?? $key ) : '';
+			$parts[]  = $label ? $label . ': ' . $rendered : $rendered;
 		}
 		return implode( ' | ', $parts );
 	}
@@ -625,6 +661,20 @@ class Didar_Submission_Service {
 		if ( 'date' === ( $field['type'] ?? '' ) || 'date' === ( $field['semantic'] ?? '' ) ) {
 			$display = ( new Didar_Date_Service() )->format_for_display( $value );
 			return $display ? $display : (string) $value;
+		}
+		if ( 'select' === $field['type'] && ! empty( $field['multiple'] ) && is_array( $value ) ) {
+			$options = $field['options'];
+			if ( ! empty( $field['legacy_options'] ) ) {
+				$options = $options + $field['legacy_options'];
+			}
+			$labels = array();
+			foreach ( $value as $item ) {
+				if ( ! is_scalar( $item ) || '' === (string) $item ) {
+					continue;
+				}
+				$labels[] = isset( $options[ $item ] ) ? $options[ $item ] : (string) $item;
+			}
+			return $labels ? implode( '، ', array_values( array_unique( $labels ) ) ) : '—';
 		}
 		if ( in_array( $field['type'], array( 'select', 'radio' ), true ) ) {
 			$options = $field['options'];
@@ -681,6 +731,14 @@ class Didar_Submission_Service {
 		$active_definitions = $this->registry->fields( $form_type );
 		$inactive_data      = array_diff_key( (array) $stored_fields, $active_definitions );
 		return array_merge( $inactive_data, (array) $active_data );
+	}
+
+	private function normalize_companion_data( $form_type, $data ) {
+		if ( ! Didar_Companion_Model::supports_form( $form_type ) ) { return (array) $data; }
+		$data = (array) $data;
+		$data['companions'] = Didar_Companion_Model::normalize_rows( $data['companions'] ?? array() );
+		$data['companions_count'] = (string) Didar_Companion_Model::active_count( $data['companions'] );
+		return $data;
 	}
 
 	private function ensure_workflow_defaults( $post_id, $default_status ) {

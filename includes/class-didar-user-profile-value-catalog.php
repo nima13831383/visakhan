@@ -8,7 +8,7 @@ class Didar_User_Profile_Value_Catalog {
 	const NATIONAL_ID_META = '_didar_national_id';
 
 	public function sources() {
-		return array(
+		$sources = array(
 			'first_name'  => array( 'label' => 'نام', 'type' => 'text' ),
 			'last_name'   => array( 'label' => 'نام خانوادگی', 'type' => 'text' ),
 			'gender'      => array( 'label' => 'جنسیت', 'type' => 'choice' ),
@@ -17,6 +17,10 @@ class Didar_User_Profile_Value_Catalog {
 			'email'       => array( 'label' => 'ایمیل', 'type' => 'email' ),
 			'mobile'      => array( 'label' => 'شماره تلفن', 'type' => 'tel' ),
 		);
+		foreach ( Didar_Profile_Document_Catalog::definitions() as $key => $definition ) {
+			$sources[ $key ] = array( 'label' => $definition['label'], 'type' => 'document' );
+		}
+		return $sources;
 	}
 
 	public function keys() { return array_keys( $this->sources() ); }
@@ -32,7 +36,11 @@ class Didar_User_Profile_Value_Catalog {
 		$key = sanitize_key( (string) $key );
 		if ( ! isset( $this->sources()[ $key ] ) || ! is_array( $profile ) ) { return ''; }
 		$property = $key;
+		if ( ! array_key_exists( $property, $profile ) ) { return ''; }
 		$value = $profile[ $property ] ?? '';
+		if ( 'document' === ( $this->sources()[ $key ]['type'] ?? '' ) ) {
+			return is_array( $value ) ? array_values( array_filter( array_map( 'absint', $value ) ) ) : ( absint( $value ) ? array( absint( $value ) ) : array() );
+		}
 		return is_scalar( $value ) ? (string) $value : '';
 	}
 

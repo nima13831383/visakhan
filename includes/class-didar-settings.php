@@ -13,6 +13,8 @@ class Didar_Settings {
 	const MIN_REQUESTS_PER_PAGE     = 1;
 	const MAX_REQUESTS_PER_PAGE     = 100;
 	const DEFAULT_FILE_DOWNLOAD_MODE = 'secure';
+	const DEFAULT_PDF_PRINT_WITH_FILES_TEXT = 'چاپ همراه فایل‌ها';
+	const DEFAULT_PDF_PRINT_WITHOUT_FILES_TEXT = 'چاپ بدون فایل‌ها';
 	const PROFILE_FIELD_STATES = array(
 		'first_name'   => 'editable',
 		'last_name'    => 'editable',
@@ -82,6 +84,35 @@ class Didar_Settings {
 		return in_array( $mode, array( 'secure', 'direct' ), true ) ? $mode : self::DEFAULT_FILE_DOWNLOAD_MODE;
 	}
 
+	public static function normalize_pdf_settings( $settings ) {
+		$settings = is_array( $settings ) ? $settings : array();
+		$with_files = isset( $settings['print_with_files_text'] ) && is_scalar( $settings['print_with_files_text'] ) ? sanitize_text_field( (string) $settings['print_with_files_text'] ) : '';
+		$without_files = isset( $settings['print_without_files_text'] ) && is_scalar( $settings['print_without_files_text'] ) ? sanitize_text_field( (string) $settings['print_without_files_text'] ) : '';
+		return array(
+			'print_with_files_text'    => '' !== trim( $with_files ) ? $with_files : self::DEFAULT_PDF_PRINT_WITH_FILES_TEXT,
+			'print_without_files_text' => '' !== trim( $without_files ) ? $without_files : self::DEFAULT_PDF_PRINT_WITHOUT_FILES_TEXT,
+		);
+	}
+
+	public function pdf_settings() {
+		$settings = $this->all();
+		return self::normalize_pdf_settings( $settings['pdf_settings'] ?? array() );
+	}
+
+	public function pdf_print_with_files_text() {
+		$pdf = $this->pdf_settings();
+		return $pdf['print_with_files_text'];
+	}
+
+	public function pdf_print_without_files_text() {
+		$pdf = $this->pdf_settings();
+		return $pdf['print_without_files_text'];
+	}
+
+	public function form_access( $form_type ) {
+		return Didar_Form_Access::get( $this->all(), $form_type );
+	}
+
 	/** Frontend profile-field policy. Mobile is always effectively readonly until a verified Digits change-number flow is integrated. */
 	public function profile_field_state( $field ) {
 		$field    = sanitize_key( (string) $field );
@@ -112,6 +143,14 @@ class Didar_Settings {
 		$settings = $this->all();
 		$value = $settings['didar_form_field_defaults'][ sanitize_key( $form_type ) ][ sanitize_key( $field_key ) ] ?? '';
 		return in_array( $value, ( new Didar_User_Profile_Value_Catalog() )->keys(), true ) ? $value : '';
+	}
+
+	/** Resolve a literal choice default when a field explicitly exposes its own options as defaults. */
+	public function field_default_value( $form_type, $field_key, $registry_default = '', $options = array() ) {
+		$settings = $this->all();
+		$value    = $settings['didar_form_field_defaults'][ sanitize_key( $form_type ) ][ sanitize_key( $field_key ) ] ?? '';
+		$value    = is_scalar( $value ) ? sanitize_key( (string) $value ) : '';
+		return $value && is_array( $options ) && array_key_exists( $value, $options ) ? $value : $registry_default;
 	}
 
 	/** Resolve the UI-only placeholder without changing the submitted/default value. */

@@ -46,6 +46,7 @@ class Test_Didar_Profile_Prefill extends WP_UnitTestCase {
 	public function test_catalog_resolves_all_profile_sources() {
 		$catalog = new Didar_User_Profile_Value_Catalog();
 		$profile = array( 'first_name' => 'علی', 'last_name' => 'رضایی', 'gender' => 'male', 'birth_date' => '1990-01-02', 'national_id' => '0012345678', 'email' => 'a@example.test', 'mobile' => '09120000000' );
+		$profile = array_merge( $profile, array_fill_keys( Didar_Profile_Document_Catalog::keys(), array() ) );
 		foreach ( $catalog->keys() as $key ) { $this->assertSame( $profile[ $key ], $catalog->resolve( $key, $profile ), $key ); }
 	}
 
@@ -60,6 +61,47 @@ class Test_Didar_Profile_Prefill extends WP_UnitTestCase {
 
 	public function test_defaults_are_per_form_and_anonymous_users_do_not_prefill() {
 		$user_id = $this->user(); wp_set_current_user( $user_id ); update_option( Didar_Settings::OPTION_NAME, array( 'didar_form_field_defaults' => array( 'consultation' => array( 'first_name' => 'first_name' ), 'visa_request' => array(), 'complaint_suggestion' => array( 'first_name' => 'invalid' ) ) ) ); $settings = new Didar_Settings(); $this->assertSame( 'first_name', $settings->profile_default_source( 'consultation', 'first_name' ) ); $this->assertSame( '', $settings->profile_default_source( 'visa_request', 'first_name' ) ); $this->assertSame( '', $settings->profile_default_source( 'complaint_suggestion', 'first_name' ) ); wp_set_current_user( 0 ); $this->assertFalse( is_user_logged_in() );
+	}
+
+	public function test_embassy_and_visa_new_forms_use_profile_metadata_for_self_only() {
+		$user_id = $this->user();
+		update_user_meta( $user_id, 'gender', 'male' );
+		update_user_meta( $user_id, '_didar_birth_date', '1990-01-02' );
+		update_user_meta( $user_id, '_didar_national_id', '0012345678' );
+		update_user_meta( $user_id, 'digits_phone', '09120000000' );
+		wp_set_current_user( $user_id );
+		$registry = new Didar_Form_Registry();
+		$settings = new Didar_Settings();
+		$mapper   = new Didar_Field_Mapper( $registry, $settings );
+		$renderer = new Didar_Field_Renderer( $settings );
+		$renderer->set_profile_resolver( array( $mapper, 'wordpress_user_profile' ) );
+
+		foreach ( array( 'embassy_appointment', 'visa_request' ) as $form_type ) {
+			ob_start();
+			$renderer->render_sections( $registry->get( $form_type ), array(), array(), 'frontend' );
+			$self_html = ob_get_clean();
+			$this->assertStringContainsString( 'value="علی"', $self_html, $form_type . ' first name' );
+			$this->assertStringContainsString( 'value="رضایی"', $self_html, $form_type . ' last name' );
+			$this->assertStringContainsString( 'data-didar-profile-origin="1"', $self_html, $form_type . ' profile origin' );
+			if ( 'embassy_appointment' === $form_type ) {
+				$this->assertMatchesRegularExpression( '/value="boy"[^>]+checked/', $self_html );
+			}
+
+			ob_start();
+			$renderer->render_sections( $registry->get( $form_type ), array( 'request_for' => 'other' ), array(), 'frontend' );
+			$other_html = ob_get_clean();
+			$this->assertDoesNotMatchRegularExpression( '/<input[^>]+value="علی"[^>]+name="didar_fields\[first_name\]"/', $other_html, $form_type . ' other must start empty' );
+
+			ob_start();
+			$renderer->render_sections( $registry->get( $form_type ), array( 'request_for' => 'self', 'first_name' => 'Submitted' ), array(), 'frontend' );
+			$submitted_html = ob_get_clean();
+			$this->assertStringContainsString( 'value="Submitted"', $submitted_html, $form_type . ' submitted value must win' );
+
+			ob_start();
+			$renderer->render_sections( $registry->get( $form_type ), array( 'request_for' => 'self', 'first_name' => 'Stored' ), array(), 'frontend', 99 );
+			$edit_html = ob_get_clean();
+			$this->assertStringContainsString( 'value="Stored"', $edit_html, $form_type . ' saved value must win on edit' );
+		}
 	}
 
 	public function test_settings_transfer_round_trip_contains_mapping_but_not_profile_values() {

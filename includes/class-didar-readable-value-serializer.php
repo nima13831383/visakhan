@@ -30,20 +30,39 @@ class Didar_Readable_Value_Serializer {
 		$type = (string) ( $definition['type'] ?? '' );
 		if ( 'file' === $type ) { return $this->files( $value, $post_id, $field_key ); }
 		if ( 'repeater' === $type || ! empty( $definition['columns'] ) ) { return $this->repeater( $value, $definition, 0 ); }
+		if ( 'select' === $type && ! empty( $definition['multiple'] ) && is_array( $value ) ) { return $this->multi_select_value( $value, $definition ); }
 		if ( $this->is_structured( $definition ) && is_array( $value ) ) { return $this->list_value( $value, $definition ); }
 		return $this->scalar( $value, $definition );
 	}
 
 	private function scalar( $value, $definition = array() ) {
 		if ( is_bool( $value ) ) { return $value ? 'بله' : 'خیر'; }
-		if ( is_scalar( $value ) ) { return 'textarea' === ( $definition['type'] ?? '' ) ? sanitize_textarea_field( (string) $value ) : sanitize_text_field( (string) $value ); }
+		if ( is_scalar( $value ) ) {
+			$value = 'textarea' === ( $definition['type'] ?? '' ) ? sanitize_textarea_field( (string) $value ) : sanitize_text_field( (string) $value );
+			if ( in_array( (string) ( $definition['type'] ?? '' ), array( 'select', 'radio' ), true ) ) {
+				return $this->label( $value, $definition );
+			}
+			return $value;
+		}
 		return '';
 	}
 
 	private function label( $key, $definition ) {
 		$options = isset( $definition['options'] ) && is_array( $definition['options'] ) ? $definition['options'] : array();
+		if ( ! empty( $definition['legacy_options'] ) && is_array( $definition['legacy_options'] ) ) { $options = $options + $definition['legacy_options']; }
 		if ( array_key_exists( $key, $options ) && is_scalar( $options[ $key ] ) ) { return (string) $options[ $key ]; }
 		return is_scalar( $key ) ? (string) $key : '';
+	}
+
+	private function multi_select_value( $value, $definition ) {
+		$labels = array();
+		foreach ( $value as $item ) {
+			if ( ! is_scalar( $item ) || '' === trim( (string) $item ) ) {
+				continue;
+			}
+			$labels[] = $this->label( (string) $item, $definition );
+		}
+		return implode( '، ', array_values( array_unique( array_filter( $labels, 'strlen' ) ) ) );
 	}
 
 	private function list_value( $value, $definition ) {
@@ -102,8 +121,8 @@ class Didar_Readable_Value_Serializer {
 		$ids = is_array( $value ) ? array_values( $value ) : ( '' !== (string) $value ? array( $value ) : array() ); $lines = array(); $number = 0;
 		foreach ( $ids as $file_id ) {
 			if ( ! $this->files || ! absint( $file_id ) ) { continue; }
-			$record = $this->files->get( absint( $file_id ) );
-			if ( ! is_array( $record ) || (int) ( $record['submission_id'] ?? 0 ) !== absint( $post_id ) || (string) ( $record['field_key'] ?? '' ) !== (string) $field_key ) { continue; }
+			$record = $this->files->get_for_submission( absint( $file_id ), $post_id, $field_key );
+			if ( ! is_array( $record ) ) { continue; }
 			$name = sanitize_text_field( (string) ( $record['original_name'] ?? '' ) ); if ( '' === $name ) { continue; }
 			// Didar receives only the existing direct sync URL; secure admin download URLs
 			// are intentionally not used for outbound CRM field snapshots.

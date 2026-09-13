@@ -1,0 +1,14 @@
+{
+    "name": "didar/ns-didar",
+    "description": "Didar WordPress plugin dependencies",
+    "type": "wordpress-plugin",
+    "require": {
+        "mpdf/mpdf": "^8.2"
+    },
+    "config": {
+        "platform": {
+            "php": "7.4"
+        },
+        "sort-packages": true
+    }
+}

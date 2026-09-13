@@ -32,46 +32,23 @@
     });
   }
 
-  function appendUploadedFile(wrapper, fileId, filename) {
-    var item = document.createElement('li');
-    var label = document.createElement('span');
-    var hidden = document.createElement('input');
-    var remove = document.createElement('button');
-    item.setAttribute('data-didar-file', fileId);
-    label.textContent = filename;
-    hidden.type = 'hidden';
-    hidden.name = 'didar_fields[' + wrapper.getAttribute('data-field') + '][]';
-    hidden.value = fileId;
-    remove.type = 'button';
-    remove.className = 'button-link-delete didar-remove-upload';
-    remove.setAttribute('data-file-id', fileId);
-    remove.textContent = window.didarAdmin.messages.remove;
-    item.appendChild(label);
-    item.appendChild(hidden);
-    item.appendChild(remove);
-    wrapper.querySelector('.didar-uploaded-files').appendChild(item);
-    var fileInput = wrapper.querySelector('input[type="file"]');
-    if (fileInput) fileInput.required = false;
-  }
-
-  function uploadFiles(button) {
-    var wrapper = button.closest('[data-didar-upload]');
+  function uploadFiles(wrapper) {
     var input = wrapper && wrapper.querySelector('input[type="file"]');
-    var status = wrapper && wrapper.querySelector('.didar-upload-status');
-    if (!wrapper || !input || !input.files.length || !window.didarAdmin) return;
-    var max = parseInt(wrapper.getAttribute('data-max-files') || '1', 10);
-    var current = wrapper.querySelectorAll('[data-didar-file]').length;
+    if (!wrapper || !input || !input.files.length || !window.didarAdmin || wrapper._didarUploadInFlight) return;
     var files = Array.prototype.slice.call(input.files);
-    if (current + files.length > max) {
-      status.textContent = window.didarAdmin.messages.fileLimit.replace('%d', max);
-      return;
-    }
-    button.disabled = true;
-    wrapper.classList.add('is-uploading');
-    status.textContent = window.didarAdmin.messages.uploading;
-    files.reduce(function (chain, file) {
+    var rules = window.DidarFormInputRules;
+    var items = rules && rules.getPendingFileItems ? rules.getPendingFileItems(wrapper) : [];
+    if (rules && wrapper.getAttribute('data-client-valid') !== '1') { input.value = ''; return; }
+    items = rules && rules.getPendingFileItems ? rules.getPendingFileItems(wrapper) : [];
+    if (items.length !== files.length) return;
+    wrapper._didarUploadInFlight = true;
+    input.value = '';
+    input.disabled = true;
+    files.reduce(function (chain, file, index) {
       return chain.then(function () {
         var data = new FormData();
+        var item = items[index];
+        if (rules && rules.setUploadItemState) rules.setUploadItemState(item, 'uploading', window.didarAdmin.messages.uploading);
         data.append('action', 'didar_upload_file');
         data.append('nonce', window.didarAdmin.uploadNonce);
         data.append('form_type', wrapper.getAttribute('data-form-type'));
@@ -82,23 +59,35 @@
           .then(function (response) { return response.json(); })
           .then(function (response) {
             if (!response.success) throw new Error(response.data && response.data.message ? response.data.message : window.didarAdmin.messages.uploadError);
-            appendUploadedFile(wrapper, response.data.file_id, response.data.display_name);
-            status.textContent = response.data.message;
+            if (rules && rules.promoteUploadedFile) rules.promoteUploadedFile(wrapper, item, response.data, { removeLabel: window.didarAdmin.messages.remove });
+          })
+          .catch(function (error) {
+            if (rules && rules.setUploadItemState) rules.setUploadItemState(item, 'failed', '✕ بارگذاری نشد: ' + error.message);
+            return false;
           });
       });
-    }, Promise.resolve()).catch(function (error) {
-      status.textContent = error.message;
-    }).finally(function () {
-      button.disabled = false;
-      wrapper.classList.remove('is-uploading');
-      input.value = '';
+    }, Promise.resolve()).finally(function () {
+      wrapper._didarUploadInFlight = false;
+      input.disabled = false;
     });
+  }
+
+  function retryUpload(button) {
+    var wrapper = button.closest('[data-didar-upload]'), rules = window.DidarFormInputRules, item = button.closest('.didar-upload-item'), file = rules && rules.getFileForUploadItem ? rules.getFileForUploadItem(item) : null;
+    if (!wrapper || !item || !file || !window.didarAdmin) return;
+    var data = new FormData();
+    data.append('action', 'didar_upload_file'); data.append('nonce', window.didarAdmin.uploadNonce); data.append('form_type', wrapper.getAttribute('data-form-type')); data.append('submission_id', wrapper.getAttribute('data-submission-id') || '0'); data.append('field', wrapper.getAttribute('data-field')); data.append('file', file);
+    button.disabled = true;
+    if (rules && rules.setUploadItemState) rules.setUploadItemState(item, 'uploading', window.didarAdmin.messages.uploading);
+    fetch(window.didarAdmin.ajaxUrl, { method: 'POST', body: data, credentials: 'same-origin' }).then(function (response) { return response.json(); }).then(function (response) {
+      if (!response.success) throw new Error(response.data && response.data.message ? response.data.message : window.didarAdmin.messages.uploadError);
+      if (rules && rules.promoteUploadedFile) rules.promoteUploadedFile(wrapper, item, response.data, { removeLabel: window.didarAdmin.messages.remove });
+    }).catch(function (error) { if (rules && rules.setUploadItemState) rules.setUploadItemState(item, 'failed', '✕ بارگذاری نشد: ' + error.message); }).finally(function () { button.disabled = false; });
   }
 
   function removeFile(button) {
     var wrapper = button.closest('[data-didar-upload]');
     var item = button.closest('[data-didar-file]');
-    var status = wrapper && wrapper.querySelector('.didar-upload-status');
     if (!wrapper || !item || !window.didarAdmin) return;
     var data = new URLSearchParams();
     data.append('action', 'didar_remove_file');
@@ -112,27 +101,57 @@
       .then(function (response) { return response.json(); })
       .then(function (response) {
         if (!response.success) throw new Error(response.data && response.data.message ? response.data.message : window.didarAdmin.messages.removeError);
+        if (window.DidarFormInputRules && window.DidarFormInputRules.releaseUploadItem) window.DidarFormInputRules.releaseUploadItem(item);
         item.remove();
         var fileInput = wrapper.querySelector('input[type="file"]');
         if (fileInput && wrapper.getAttribute('data-required') === '1' && !wrapper.querySelector('[data-didar-file]')) fileInput.required = true;
-        status.textContent = response.data.message;
       })
-      .catch(function (error) { status.textContent = error.message; button.disabled = false; });
+      .catch(function () { button.disabled = false; });
   }
 
   document.addEventListener('DOMContentLoaded', function () {
+	  document.querySelectorAll('.didar-form-access-row').forEach(function (row) {
+		var selectButton = row.querySelector('.didar-form-access-select');
+		var removeButton = row.querySelector('.didar-form-access-remove');
+		var urlInput = row.querySelector('[data-didar-form-access-barcode]');
+		var attachmentInput = row.querySelector('[data-didar-form-access-attachment]');
+		var preview = row.querySelector('[data-didar-form-access-preview]');
+		if (selectButton) selectButton.addEventListener('click', function () {
+			if (!window.wp || !wp.media) return;
+			var frame = wp.media({ title: 'انتخاب تصویر QR / بارکد', button: { text: 'استفاده از این تصویر' }, multiple: false, library: { type: 'image' } });
+			frame.on('select', function () {
+				var attachment = frame.state().get('selection').first().toJSON();
+				var allowed = ['image/jpeg', 'image/png', 'image/webp'];
+				if (attachment.mime && allowed.indexOf(attachment.mime) === -1) return;
+				if (attachment.filesizeInBytes && attachment.filesizeInBytes > 5242880) return;
+				if (!attachment.url) return;
+				urlInput.value = attachment.url;
+				attachmentInput.value = attachment.id || '';
+				preview.src = attachment.url;
+				preview.hidden = false;
+			});
+			frame.open();
+		});
+		if (removeButton) removeButton.addEventListener('click', function () {
+			urlInput.value = '';
+			attachmentInput.value = '';
+			preview.removeAttribute('src');
+			preview.hidden = true;
+		});
+	  });
 	  var catalogNode = document.getElementById('didar-custom-field-catalog');
 	  var catalog = { fields: [], pipelines: [] };
 	  try { if (catalogNode) catalog = JSON.parse(catalogNode.textContent || '{}'); } catch (error) {}
 	  var casePipelineNode = document.getElementById('didar-case-pipeline-data');
 	  if (casePipelineNode) {
 		var casePipelines = []; try { casePipelines = JSON.parse(casePipelineNode.textContent || '[]'); } catch (error) { casePipelines = []; }
-		var casePipelineSelect = document.querySelector('select[name="didar_settings[visa_companion_case_settings][pipeline_id]"]');
-		var caseStageSelect = document.querySelector('select[name="didar_settings[visa_companion_case_settings][initial_stage_id]"]');
-		if (casePipelineSelect && caseStageSelect) {
+		document.querySelectorAll('select[data-didar-case-pipeline]').forEach(function (casePipelineSelect) {
+			var caseForm = casePipelineSelect.getAttribute('data-didar-case-form');
+			var caseStageSelect = document.querySelector('select[data-didar-case-stage="' + caseForm + '"]');
+			if (!caseStageSelect) return;
 			function rebuildCaseStages(preserve) { var pipeline = casePipelines.filter(function (item) { return item.id === casePipelineSelect.value; })[0]; var old = preserve ? caseStageSelect.value : ''; caseStageSelect.innerHTML = ''; caseStageSelect.appendChild(new Option(pipeline ? '— انتخاب مرحله —' : '— ابتدا کاریز را انتخاب کنید —', '')); caseStageSelect.disabled = !pipeline; if (pipeline) (pipeline.stages || []).forEach(function (stage) { caseStageSelect.appendChild(new Option(stage.title, stage.id, false, stage.id === old)); }); }
 			casePipelineSelect.addEventListener('change', function () { rebuildCaseStages(false); }); rebuildCaseStages(true);
-		}
+		});
 	  }
 	  function fieldLabel(field) {
 		var available = (catalog.pipelines || []).filter(function (pipeline) { return (field.excluded_pipeline_ids || []).indexOf(pipeline.id) === -1; });
@@ -194,19 +213,27 @@
 		var postForm = document.getElementById('post');
 		if (postForm) {
 			postForm.addEventListener('submit', function (event) {
-				if (postForm.querySelector('.didar-file-upload.is-uploading')) {
+			if (postForm.querySelector('[data-didar-upload-state="uploading"]')) {
 					event.preventDefault();
-					var status = postForm.querySelector('.didar-file-upload.is-uploading .didar-upload-status');
+					var status = postForm.querySelector('[data-didar-upload-state="uploading"] .didar-upload-item-status');
 					if (status) status.textContent = window.didarAdmin.messages.uploadInProgress;
 				}
 			});
 		}
 		document.addEventListener('click', function (event) {
-			var upload = event.target.closest('.didar-upload-button');
-			var remove = event.target.closest('.didar-remove-upload');
-			if (upload) { event.preventDefault(); uploadFiles(upload); }
-			if (remove) { event.preventDefault(); removeFile(remove); }
-		});
+    var remove = event.target.closest('.didar-remove-upload');
+    var retry = event.target.closest('[data-didar-upload] .didar-retry-upload');
+      if (retry) { event.preventDefault(); retryUpload(retry); }
+    if (remove) { event.preventDefault(); removeFile(remove); }
+  });
+  document.addEventListener('change', function (event) {
+    var input = event.target.matches && event.target.matches('input[type="file"]') ? event.target : null;
+    var wrapper = input && input.closest('[data-didar-upload]');
+    if (wrapper && !wrapper.hasAttribute('data-didar-profile-upload') && !wrapper._didarUploadChangeQueued) {
+      wrapper._didarUploadChangeQueued = true;
+      window.setTimeout(function () { wrapper._didarUploadChangeQueued = false; uploadFiles(wrapper); }, 0);
+    }
+  });
     if (!select || !fields || !window.didarAdmin) return;
     select.addEventListener('change', function () {
       if (!select.value) {

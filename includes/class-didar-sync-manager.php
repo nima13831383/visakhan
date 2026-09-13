@@ -17,6 +17,8 @@ class Didar_Sync_Manager {
 	const META_PERSON_ID = '_didar_person_id';
 	const META_STATE = '_didar_sync_state';
 	const META_COMPANION_CASES = '_didar_companion_cases';
+	const META_MAIN_APPLICANT_CASE = '_didar_main_applicant_case';
+	const META_CASE_STATE = '_didar_case_sync_state';
 	const USER_PERSON_META = '_didar_person_id';
 
 	private static $suppress = false;
@@ -416,26 +418,28 @@ class Didar_Sync_Manager {
 
 	/** Companion rows are synchronized only after the parent Deal has a durable ID. */
 	private function sync_companion_cases( $post_id, $form_type, &$fields, $deal_id, $person_id, $trace ) {
-		if ( 'visa_request' !== $form_type ) return true;
-		$settings = $this->settings->all();
-		$config = isset( $settings['visa_companion_case_settings'] ) && is_array( $settings['visa_companion_case_settings'] ) ? $settings['visa_companion_case_settings'] : array();
+		if ( ! Didar_Companion_Model::supports_form( $form_type ) ) return true;
+		$config = $this->case_service->configuration( $form_type );
 		$pipeline_id = sanitize_text_field( (string) ( $config['pipeline_id'] ?? '' ) );
 		$stage_id = sanitize_text_field( (string) ( $config['initial_stage_id'] ?? '' ) );
 		$mappings = isset( $config['field_mappings'] ) && is_array( $config['field_mappings'] ) ? $config['field_mappings'] : array();
-		$validation = $this->case_service->validate_companion_case_configuration( $config );
+		$validation = $this->case_service->validate_companion_case_configuration( $config, $form_type );
 		if ( ! $validation['ready'] ) {
-			$this->logger->log( 'WARNING', 'case_sync_skipped', 'Visa companion Case sync skipped because Case settings are incomplete or stale.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'form_type' => $form_type, 'trace_id' => $trace, 'skip_reason' => 'case_configuration_' . $validation['status'], 'configuration_issues' => $validation['issues'] ) );
+			$this->persist_pending_case_state( $post_id, $form_type, $fields, $validation['issues'] );
+			$this->logger->log( 'WARNING', 'case_sync_skipped', 'Companion and main applicant Case sync skipped because this form has no valid Case configuration; the parent Deal remains synchronized.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'form_type' => $form_type, 'trace_id' => $trace, 'skip_reason' => 'case_configuration_' . $validation['status'], 'configuration_issues' => $validation['issues'] ) );
 			return true;
 		}
-		$rows = isset( $fields['companions'] ) && is_array( $fields['companions'] ) ? $fields['companions'] : array();
+		$rows = isset( $fields['companions'] ) && is_array( $fields['companions'] ) ? Didar_Companion_Model::normalize_rows( $fields['companions'] ) : array();
 		$links = get_post_meta( $post_id, self::META_COMPANION_CASES, true ); $links = is_array( $links ) ? $links : array();
 		$system = isset( $config['system_fields'] ) && is_array( $config['system_fields'] ) ? $config['system_fields'] : array(); $active_uids = array();
+		$this->sync_main_applicant_case( $post_id, $form_type, $fields, $deal_id, $trace, $config, $system );
 		foreach ( $rows as $index => &$row ) {
 			if ( ! is_array( $row ) ) $row = array();
 			$uid = isset( $row['companion_uid'] ) && is_scalar( $row['companion_uid'] ) ? sanitize_text_field( (string) $row['companion_uid'] ) : '';
 			if ( ! preg_match( '/^cmp_[a-f0-9-]{16,}$/', $uid ) || isset( $active_uids[ $uid ] ) ) { $uid = 'cmp_' . wp_generate_uuid4(); $row['companion_uid'] = $uid; }
 			$active_uids[ $uid ] = true;
 			$case_id = sanitize_text_field( (string) ( $links[ $uid ]['case_id'] ?? '' ) );
+			if ( ! $case_id && 'case_id_missing' === ( $links[ $uid ]['last_error'] ?? '' ) && ( empty( $system['submission_id'] ) || empty( $system['companion_uid'] ) ) ) { $links[ $uid ]['status'] = 'pending'; continue; }
 			if ( ! $case_id && ! empty( $system['submission_id'] ) && ! empty( $system['companion_uid'] ) ) {
 				$submission_field = $this->case_service->case_field( $system['submission_id'] ); $uid_field = $this->case_service->case_field( $system['companion_uid'] );
 				if ( $submission_field && $uid_field ) { $lookup = $this->case_service->search( array( 'IsDeleted' => false, 'DealId' => $deal_id, 'CustomFields' => array( array( 'CustomFieldId' => $submission_field['id'], 'OR' => array( array( 'Type' => 'EqualToAny', 'Value' => array( (string) $post_id ) ) ) ), array( 'CustomFieldId' => $uid_field['id'], 'OR' => array( array( 'Type' => 'EqualToAny', 'Value' => array( $uid ) ) ) ) ) ), 0, 10 ); if ( is_wp_error( $lookup ) ) { $links[ $uid ] = array( 'case_id' => '', 'status' => 'pending', 'last_error' => sanitize_key( $lookup->get_error_code() ), 'updated_at' => time() ); $this->logger->log( 'WARNING', 'case_resolution_failed', 'Exact companion Case lookup failed; creation was withheld until the lookup can be retried.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'companion_uid' => $uid, 'deal_id' => $deal_id, 'trace_id' => $trace, 'error_code' => $lookup->get_error_code() ) ); continue; } $matches = array(); foreach ( $this->response_items( $lookup ) as $item ) { if ( is_array( $item ) && ! empty( $item['Id'] ) && (string) ( $item['DealId'] ?? $deal_id ) === (string) $deal_id ) $matches[ sanitize_text_field( $item['Id'] ) ] = true; } if ( 1 === count( $matches ) ) $case_id = (string) array_key_first( $matches ); elseif ( count( $matches ) > 1 ) { $this->logger->log( 'ERROR', 'case_identity_conflict', 'Multiple exact Case matches were found; Case creation stopped.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'companion_uid' => $uid, 'deal_id' => $deal_id, 'trace_id' => $trace, 'match_count' => count( $matches ) ) ); continue; } }
@@ -455,13 +459,97 @@ class Didar_Sync_Manager {
 		unset( $row );
 		// The working rows array is a copy; persist generated stable UIDs back into the submission fields.
 		$fields['companions'] = $rows;
+		$fields['companions_count'] = (string) Didar_Companion_Model::active_count( $rows );
 		foreach ( $links as $known_uid => &$known_link ) { if ( ! isset( $active_uids[ $known_uid ] ) && is_array( $known_link ) && 'removed' !== ( $known_link['status'] ?? '' ) ) { $known_link['status'] = 'removed'; $known_link['removed_at'] = time(); $this->logger->log( 'WARNING', 'case_removed_remote_untouched', 'A companion was removed locally; the remote Case was left untouched because no official delete/archive endpoint is confirmed.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'external_id' => $known_link['case_id'] ?? '', 'companion_uid' => sanitize_text_field( $known_uid ), 'trace_id' => $trace, 'official_support' => 'not_confirmed' ) ); } } unset( $known_link );
 		update_post_meta( $post_id, '_didar_fields', $fields ); update_post_meta( $post_id, self::META_COMPANION_CASES, $links );
-		$pending_cases = false; foreach ( $links as $uid => $link ) { if ( is_array( $link ) && 'removed' === ( $link['status'] ?? '' ) ) continue; if ( ! isset( $link['status'] ) || 'synced' !== $link['status'] ) { $pending_cases = true; $this->logger->log( 'WARNING', 'case_retry_scheduled', 'A companion Case remains pending for the next canonical submission sync.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'companion_uid' => sanitize_text_field( $uid ), 'trace_id' => $trace ) ); } } if ( $pending_cases ) $this->schedule_submission( $post_id, time() + 60, 'case_retry' );
+		$pending_cases = false; foreach ( $links as $uid => $link ) { if ( is_array( $link ) && 'removed' === ( $link['status'] ?? '' ) ) continue; if ( ! isset( $link['status'] ) || 'synced' !== $link['status'] ) { $pending_cases = true; $this->logger->log( 'WARNING', 'case_retry_scheduled', 'A companion Case remains pending for the next canonical submission sync.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'companion_uid' => sanitize_text_field( $uid ), 'trace_id' => $trace ) ); } }
+		$main_state = get_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, true );
+		if ( ! is_array( $main_state ) || 'synced' !== ( $main_state['status'] ?? '' ) ) { $pending_cases = true; }
+		update_post_meta( $post_id, self::META_CASE_STATE, array( 'status' => $pending_cases ? 'pending' : 'synced', 'form_type' => sanitize_key( $form_type ), 'updated_at' => time() ) );
+		if ( $pending_cases ) $this->schedule_submission( $post_id, time() + 60, 'case_retry' );
 		return true;
 	}
 
 	private function companion_case_title( $row, $post_id ) { $name = isset( $row['full_name'] ) && is_scalar( $row['full_name'] ) ? trim( sanitize_text_field( (string) $row['full_name'] ) ) : ''; return $name ? 'همراه - ' . $name : 'همراه درخواست #' . absint( $post_id ); }
+
+	private function persist_pending_case_state( $post_id, $form_type, &$fields, $issues ) {
+		$rows = isset( $fields['companions'] ) && is_array( $fields['companions'] ) ? Didar_Companion_Model::normalize_rows( $fields['companions'] ) : array();
+		$links = get_post_meta( $post_id, self::META_COMPANION_CASES, true );
+		$links = is_array( $links ) ? $links : array();
+		$active = array();
+		foreach ( $rows as &$row ) {
+			if ( ! is_array( $row ) ) { $row = array(); }
+			$uid = sanitize_text_field( (string) ( $row['companion_uid'] ?? '' ) );
+			if ( ! preg_match( '/^cmp_[a-f0-9-]{16,}$/', $uid ) || isset( $active[ $uid ] ) ) { $uid = 'cmp_' . wp_generate_uuid4(); }
+			$row['companion_uid'] = $uid;
+			$active[ $uid ] = true;
+			if ( ! isset( $links[ $uid ] ) || ! is_array( $links[ $uid ] ) ) { $links[ $uid ] = array( 'case_id' => '' ); }
+			$links[ $uid ]['status'] = 'pending';
+			$links[ $uid ]['last_error'] = 'case_configuration_' . sanitize_key( (string) ( $issues[0] ?? 'incomplete' ) );
+			$links[ $uid ]['updated_at'] = time();
+		}
+		unset( $row );
+		foreach ( $links as $uid => &$link ) {
+			if ( ! isset( $active[ $uid ] ) && is_array( $link ) && 'removed' !== ( $link['status'] ?? '' ) ) { $link['status'] = 'removed'; $link['removed_at'] = time(); }
+		}
+		unset( $link );
+		$fields['companions'] = $rows;
+		$fields['companions_count'] = (string) Didar_Companion_Model::active_count( $rows );
+		update_post_meta( $post_id, '_didar_fields', $fields );
+		update_post_meta( $post_id, self::META_COMPANION_CASES, $links );
+		$main = get_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, true );
+		$main = is_array( $main ) ? $main : array();
+		$main['uid'] = $main['uid'] ?? Didar_Companion_Model::main_uid( $post_id );
+		$main['case_id'] = sanitize_text_field( (string) ( $main['case_id'] ?? '' ) );
+		$main['status'] = 'pending';
+		$main['last_error'] = 'case_configuration_' . sanitize_key( (string) ( $issues[0] ?? 'incomplete' ) );
+		$main['updated_at'] = time();
+		update_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, $main );
+		update_post_meta( $post_id, self::META_CASE_STATE, array( 'status' => 'pending', 'form_type' => sanitize_key( $form_type ), 'issues' => array_values( array_map( 'sanitize_key', (array) $issues ) ), 'updated_at' => time() ) );
+	}
+
+	private function sync_main_applicant_case( $post_id, $form_type, $fields, $deal_id, $trace, $config, $system ) {
+		$main = get_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, true );
+		$main = is_array( $main ) ? $main : array();
+		$uid = sanitize_text_field( (string) ( $main['uid'] ?? '' ) );
+		if ( ! preg_match( '/^main_[0-9]+$/', $uid ) ) { $uid = Didar_Companion_Model::main_uid( $post_id ); }
+		$mappings = ! empty( $config['main_field_mappings'] ) && is_array( $config['main_field_mappings'] ) ? $config['main_field_mappings'] : (array) ( $config['field_mappings'] ?? array() );
+		$row = Didar_Companion_Model::main_applicant_row( $form_type, $fields );
+		$case_id = sanitize_text_field( (string) ( $main['case_id'] ?? '' ) );
+		if ( ! $case_id ) {
+			if ( 'case_id_missing' === ( $main['last_error'] ?? '' ) && ( empty( $system['submission_id'] ) || empty( $system['companion_uid'] ) ) ) { return; }
+			$resolved = $this->resolve_case_id( $post_id, $deal_id, $uid, $system, $trace );
+			if ( false === $resolved ) { update_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, array( 'uid' => $uid, 'case_id' => '', 'status' => 'pending', 'last_error' => 'case_resolution_failed', 'updated_at' => time() ) ); return; }
+			$case_id = $resolved;
+		}
+		$case = array( 'Id' => $case_id, 'Title' => $this->main_applicant_case_title( $row, $post_id ), 'PipelineStageId' => sanitize_text_field( (string) ( $config['initial_stage_id'] ?? '' ) ), 'DealId' => $deal_id, 'Status' => 'InProgress', 'Fields' => $this->mapper->case_fields( $form_type, $row, $post_id, $mappings ) );
+		if ( ! $case_id ) { unset( $case['Id'] ); }
+		foreach ( array( 'submission_id' => 'Submission ID', 'companion_uid' => 'Companion UID', 'form_type' => 'Form Type' ) as $system_key => $label ) { $target = sanitize_text_field( (string) ( $system[ $system_key ] ?? '' ) ); if ( $target ) { $case['Fields'][ $target ] = 'submission_id' === $system_key ? (string) $post_id : ( 'companion_uid' === $system_key ? $uid : $form_type ); } }
+		if ( ! empty( $config['category_id'] ) ) { $case['CaseCategoryId'] = sanitize_text_field( (string) $config['category_id'] ); }
+		$result = $this->case_service->save( $case );
+		if ( is_wp_error( $result ) ) { $main = array( 'uid' => $uid, 'case_id' => $case_id, 'status' => 'pending', 'last_error' => sanitize_key( $result->get_error_code() ), 'updated_at' => time() ); update_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, $main ); return; }
+		$response = $this->response_object( $result ); if ( empty( $response['Id'] ) && isset( $response['List'][0]['Id'] ) ) { $response = $response['List'][0]; }
+		$resolved_id = $case_id ?: sanitize_text_field( (string) ( $response['Id'] ?? '' ) );
+		$main = array( 'uid' => $uid, 'case_id' => $resolved_id, 'status' => $resolved_id ? 'synced' : 'pending', 'last_error' => $resolved_id ? '' : 'case_id_missing', 'updated_at' => time() );
+		update_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, $main );
+		update_post_meta( $post_id, self::META_CASE_STATE, array( 'status' => $resolved_id ? 'synced' : 'pending', 'form_type' => sanitize_key( $form_type ), 'issues' => array(), 'updated_at' => time() ) );
+		$this->logger->log( 'INFO', $case_id ? 'main_case_updated' : 'main_case_created', 'Main applicant Case synchronized and linked locally.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'external_id' => $resolved_id, 'companion_uid' => $uid, 'deal_id' => $deal_id, 'form_type' => $form_type, 'trace_id' => $trace ) );
+	}
+
+	private function resolve_case_id( $post_id, $deal_id, $uid, $system, $trace ) {
+		if ( empty( $system['submission_id'] ) || empty( $system['companion_uid'] ) ) { return ''; }
+		$submission_field = $this->case_service->case_field( $system['submission_id'] );
+		$uid_field = $this->case_service->case_field( $system['companion_uid'] );
+		if ( ! $submission_field || ! $uid_field ) { return ''; }
+		$lookup = $this->case_service->search( array( 'IsDeleted' => false, 'DealId' => $deal_id, 'CustomFields' => array( array( 'CustomFieldId' => $submission_field['id'], 'OR' => array( array( 'Type' => 'EqualToAny', 'Value' => array( (string) $post_id ) ) ) ), array( 'CustomFieldId' => $uid_field['id'], 'OR' => array( array( 'Type' => 'EqualToAny', 'Value' => array( $uid ) ) ) ) ) ), 0, 10 );
+		if ( is_wp_error( $lookup ) ) { return false; }
+		$matches = array();
+		foreach ( $this->response_items( $lookup ) as $item ) { if ( is_array( $item ) && ! empty( $item['Id'] ) && (string) ( $item['DealId'] ?? $deal_id ) === (string) $deal_id ) { $matches[ sanitize_text_field( $item['Id'] ) ] = true; } }
+		if ( count( $matches ) > 1 ) { return false; }
+		return 1 === count( $matches ) ? (string) array_key_first( $matches ) : '';
+	}
+
+	private function main_applicant_case_title( $row, $post_id ) { return ! empty( $row['full_name'] ) ? 'متقاضی اصلی - ' . sanitize_text_field( $row['full_name'] ) : 'متقاضی اصلی درخواست #' . absint( $post_id ); }
 
 	public function receive_webhook( WP_REST_Request $request ) {
 		$settings = $this->settings->all();

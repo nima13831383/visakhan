@@ -1,0 +1,2 @@
+# Preserve Composer-distributed third-party formatting without treating it as project whitespace.
+vendor/** -whitespace

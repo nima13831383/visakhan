@@ -19,6 +19,8 @@ class Didar_Ajax {
 
 		add_action( 'wp_ajax_didar_upload_file', array( $this, 'upload_file' ) );
 		add_action( 'wp_ajax_didar_remove_file', array( $this, 'remove_file' ) );
+		add_action( 'wp_ajax_didar_upload_profile_document', array( $this, 'upload_profile_document' ) );
+		add_action( 'wp_ajax_didar_remove_profile_document', array( $this, 'remove_profile_document' ) );
 		add_action( 'wp_ajax_didar_get_form_fields', array( $this, 'get_form_fields' ) );
 	}
 
@@ -85,5 +87,30 @@ class Didar_Ajax {
 			wp_send_json_error( array( 'message' => $result->get_error_message() ), $status );
 		}
 		wp_send_json_success( array( 'file_id' => $file_id, 'message' => __( 'فایل حذف شد.', 'didar' ) ) );
+	}
+
+	public function upload_profile_document() {
+		if ( ! is_user_logged_in() || false === check_ajax_referer( 'didar_profile_document_upload', 'nonce', false ) ) { wp_send_json_error( array( 'message' => 'درخواست معتبر نیست.' ), 403 ); }
+		$key = isset( $_POST['field'] ) && ! is_array( $_POST['field'] ) ? sanitize_key( wp_unslash( $_POST['field'] ) ) : '';
+		if ( ! Didar_Profile_Document_Catalog::definition( $key ) ) { wp_send_json_error( array( 'message' => 'فیلد مدرک معتبر نیست.' ), 400 ); }
+		$file = isset( $_FILES['file'] ) ? $_FILES['file'] : array();
+		$result = $this->files->upload( $file, 'profile', $key, 0 );
+		if ( is_wp_error( $result ) ) { wp_send_json_error( array( 'code' => $result->get_error_code(), 'message' => $result->get_error_message() ), 400 ); }
+		if ( is_wp_error( $promoted = $this->files->promote_profile_file( $result['file_id'], get_current_user_id() ) ) ) { wp_send_json_error( array( 'message' => $promoted->get_error_message() ), 500 ); }
+		$old = Didar_Profile_Document_Catalog::get_user_documents( get_current_user_id() )[ $key ] ?? 0;
+		Didar_Profile_Document_Catalog::set_user_document( get_current_user_id(), $key, $result['file_id'] );
+		if ( $old && absint( $old ) !== absint( $result['file_id'] ) ) { $this->files->delete_profile_file( $old, get_current_user_id() ); }
+		$result['download_url'] = $this->files->get_download_url( $result['file_id'] );
+		wp_send_json_success( $result );
+	}
+
+	public function remove_profile_document() {
+		if ( ! is_user_logged_in() || false === check_ajax_referer( 'didar_profile_document_remove', 'nonce', false ) ) { wp_send_json_error( array( 'message' => 'درخواست معتبر نیست.' ), 403 ); }
+		$key = isset( $_POST['field'] ) && ! is_array( $_POST['field'] ) ? sanitize_key( wp_unslash( $_POST['field'] ) ) : '';
+		if ( ! Didar_Profile_Document_Catalog::definition( $key ) ) { wp_send_json_error( array( 'message' => 'فیلد مدرک معتبر نیست.' ), 400 ); }
+		$file_id = absint( Didar_Profile_Document_Catalog::get_user_documents( get_current_user_id() )[ $key ] ?? 0 );
+		Didar_Profile_Document_Catalog::remove_user_document( get_current_user_id(), $key );
+		if ( $file_id ) { $this->files->delete_profile_file( $file_id, get_current_user_id() ); }
+		wp_send_json_success( array( 'file_id' => $file_id, 'message' => 'فایل حذف شد.' ) );
 	}
 }

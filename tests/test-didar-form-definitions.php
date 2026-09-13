@@ -68,7 +68,7 @@ class Test_Didar_Form_Definitions extends WP_UnitTestCase {
 
 	public function test_consultation_active_schema_and_rendering() {
 		$fields = $this->registry->fields( 'consultation' );
-		$this->assertSame( array( 'first_name', 'last_name', 'input_3', 'email', 'input_5', 'description' ), array_keys( $fields ) );
+		$this->assertSame( array( 'first_name', 'last_name', 'input_3', 'email', 'input_5', 'description', 'preferred_date', 'preferred_time' ), array_keys( $fields ) );
 		$this->assertSame( 'email', $fields['email']['type'] );
 		$this->assertSame( 'text', $fields['input_5']['type'] );
 		$this->assertSame( array(), $fields['input_5']['options'] );
@@ -89,6 +89,222 @@ class Test_Didar_Form_Definitions extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( 'didar_fields[input_6]', $html );
 		$this->assertStringNotContainsString( 'didar_fields[input_7]', $html );
 		$this->assertStringNotContainsString( 'didar_fields[input_8]', $html );
+	}
+
+	public function test_iran_is_shared_by_country_fields_and_birth_country_defaults() {
+		$countries = Didar_Reference_Data::countries();
+		$this->assertArrayHasKey( 'iran', $countries );
+		$this->assertSame( 'ایران', $countries['iran'] );
+
+		$expected_country_fields = array(
+			'embassy_appointment' => array( 'country', 'birth_country' ),
+			'traveler_evaluation' => array( 'passport_issuer_country', 'main_destination_country', 'first_entry_country' ),
+			'visa_request'        => array( 'birth_country', 'passport_issuer_country', 'travel_destination', 'previous_schengen_country' ),
+		);
+		foreach ( $expected_country_fields as $form_type => $field_names ) {
+			$fields = $this->registry->fields( $form_type );
+			foreach ( $field_names as $field_name ) {
+				$this->assertArrayHasKey( $field_name, $fields );
+				$this->assertArrayHasKey( 'iran', $fields[ $field_name ]['options'], $form_type . '.' . $field_name );
+			}
+		}
+
+		foreach ( array( 'embassy_appointment', 'visa_request' ) as $form_type ) {
+			$field = $this->registry->fields( $form_type )['birth_country'];
+			$this->assertSame( 'iran', $field['default'] );
+
+			ob_start();
+			( new Didar_Field_Renderer() )->render_sections( $this->registry->get( $form_type ), array(), array(), 'frontend' );
+			$html = ob_get_clean();
+			$this->assertMatchesRegularExpression( '/<option[^>]+value="iran"[^>]+selected/', $html, $form_type );
+		}
+	}
+
+	public function test_birth_country_validation_and_rendering_preserve_explicit_values() {
+		foreach ( array( 'embassy_appointment', 'visa_request' ) as $form_type ) {
+			$iran = $this->validator->validate( $form_type, array( 'birth_country' => 'iran' ), 'frontend' );
+			$this->assertTrue( $iran['valid'], $form_type );
+			$this->assertSame( 'iran', $iran['data']['birth_country'] );
+
+			ob_start();
+			( new Didar_Field_Renderer() )->render_sections( $this->registry->get( $form_type ), array( 'birth_country' => 'canada' ), array(), 'frontend' );
+			$html = ob_get_clean();
+			$this->assertMatchesRegularExpression( '/<option[^>]+value="canada"[^>]+selected/', $html, $form_type );
+		$this->assertDoesNotMatchRegularExpression( '/<option[^>]+value="iran"[^>]+selected/', $html, $form_type );
+		}
+	}
+
+	public function test_phase_three_embassy_and_visa_base_schema_uses_central_catalogs() {
+		$service_types = Didar_Reference_Data::service_types();
+		$this->assertSame( array( 'short_stay_tourist', 'business', 'work', 'family_reunification', 'transit', 'long_stay', 'residence' ), array_keys( $service_types ) );
+		$this->assertSame( 'درخواست ویزای کوتاه مدت/توریستی', $service_types['short_stay_tourist'] );
+		$this->assertSame( 'ویزای خانوادگی / الحاق خانواده', $service_types['family_reunification'] );
+
+		$embassy = $this->registry->fields( 'embassy_appointment' );
+		$visa    = $this->registry->fields( 'visa_request' );
+		$this->assertSame( $service_types, $embassy['service_type']['options'] );
+		$this->assertSame( 'فوریت وقت سفارت', $embassy['urgency']['label'] );
+		$this->assertTrue( $embassy['profession']['searchable'] );
+		$this->assertTrue( $embassy['profession']['allow_legacy'] );
+		$this->assertArrayHasKey( 'other', $embassy['profession']['options'] );
+		$this->assertSame( 'سایر', $embassy['profession']['options']['other'] );
+		$this->assertGreaterThan( 150, count( $embassy['profession']['options'] ) );
+		$this->assertSame( Didar_Reference_Data::request_for(), $visa['request_for']['options'] );
+		$this->assertSame( 'self', $visa['request_for']['default'] );
+		$this->assertTrue( $visa['occupation']['searchable'] );
+		update_option( Didar_Settings::OPTION_NAME, array( 'didar_form_field_defaults' => array( 'visa_request' => array( 'request_for' => 'other' ) ) ) );
+		$this->assertSame( 'other', ( new Didar_Settings() )->field_default_value( 'visa_request', 'request_for', 'self', $visa['request_for']['options'] ) );
+		delete_option( Didar_Settings::OPTION_NAME );
+	}
+
+	public function test_phase_three_legacy_service_and_free_text_values_are_renderable_and_editable() {
+		$embassy = $this->registry->get( 'embassy_appointment' );
+		ob_start();
+		( new Didar_Field_Renderer() )->render_sections( $embassy, array( 'service_type' => 'study_visa', 'profession' => 'مهندس قدیمی' ), array(), 'frontend', 77 );
+		$html = ob_get_clean();
+		$this->assertStringContainsString( 'ویزای تحصیلی', $html );
+		$this->assertStringContainsString( 'مهندس قدیمی', $html );
+
+		$legacy = $this->validator->validate( 'embassy_appointment', array( 'service_type' => 'study_visa', 'profession' => 'مهندس قدیمی' ), 'frontend', 77 );
+		$this->assertSame( 'study_visa', $legacy['data']['service_type'] );
+		$this->assertSame( 'مهندس قدیمی', $legacy['data']['profession'] );
+	}
+
+	public function test_iran_geography_is_a_unique_referential_catalog() {
+		$geography = Didar_Reference_Data::iran_geography();
+		$this->assertCount( 31, $geography );
+		$this->assertCount( 1531, Didar_Reference_Data::cities() );
+		$this->assertSame( array_keys( $geography ), array_values( array_unique( array_keys( $geography ) ) ) );
+
+		$city_keys = array();
+		foreach ( $geography as $province_key => $province ) {
+			$this->assertMatchesRegularExpression( '/^[a-z0-9_]+$/', $province_key );
+			$this->assertNotEmpty( $province['label'] );
+			$this->assertNotEmpty( $province['cities'] );
+			foreach ( $province['cities'] as $city_key => $label ) {
+				$this->assertMatchesRegularExpression( '/^[a-z0-9_]+$/', $city_key );
+				$this->assertNotEmpty( $label );
+				$this->assertArrayNotHasKey( $city_key, $city_keys, 'City slugs must be unique across provinces.' );
+				$city_keys[ $city_key ] = $province_key;
+			}
+			$this->assertSame( $province['cities'], Didar_Reference_Data::cities_for_province( $province_key ) );
+		}
+
+		$this->assertSame( 'tehran', Didar_Reference_Data::city_province_map()['tehran'] );
+		$this->assertSame( 'fars', Didar_Reference_Data::city_province_map()['shiraz'] );
+
+		$representative_cities = array(
+			'tehran'            => array( 'tehran', 'rey', 'damavand' ),
+			'fars'              => array( 'shiraz', 'marvdasht', 'jahrom' ),
+			'isfahan'            => array( 'isfahan', 'kashan', 'najafabad' ),
+			'razavi_khorasan'   => array( 'mashhad', 'neyshabur', 'sabzevar', 'torbat_e_heydariyeh' ),
+			'khuzestan'         => array( 'ahvaz', 'abadan', 'dezful', 'khorramshahr' ),
+			'east_azerbaijan'   => array( 'tabriz', 'maragheh', 'marand', 'mianeh' ),
+		);
+		foreach ( $representative_cities as $province_key => $city_keys_for_province ) {
+			foreach ( $city_keys_for_province as $city_key ) {
+				$this->assertArrayHasKey( $city_key, $geography[ $province_key ]['cities'], $province_key . '.' . $city_key );
+			}
+		}
+
+		$phase2_keys = array(
+			'ardabil' => array( 'ardabil', 'khalkhal', 'meshgin_shahr', 'parsabad' ),
+			'east_azerbaijan' => array( 'tabriz', 'maragheh', 'marand', 'mianeh' ),
+			'west_azerbaijan' => array( 'urmia', 'khoy', 'mahabad', 'maku' ),
+			'alborz' => array( 'karaj', 'taleqan', 'nazarabad', 'savojbolagh' ),
+			'bushehr' => array( 'bushehr', 'borazjan', 'kangan', 'genaveh' ),
+			'chaharmahal_and_bakhtiari' => array( 'shahrekord', 'lordegan', 'borujen', 'farrokhshahr' ),
+			'fars' => array( 'shiraz', 'marvdasht', 'jahrom', 'lar' ),
+			'gilan' => array( 'rasht', 'anzali', 'lahijan', 'langarud' ),
+			'golestan' => array( 'gorgan', 'gonbad_e_kavus', 'aliabad_katul', 'bandar_torkaman' ),
+			'hamadan' => array( 'hamadan', 'malayer', 'nahavand', 'asadabad' ),
+			'hormozgan' => array( 'bandar_abbas', 'kish', 'qeshm', 'minab' ),
+			'ilam' => array( 'ilam', 'dehloran', 'mehran', 'abadanan' ),
+			'isfahan' => array( 'isfahan', 'kashan', 'najafabad', 'khomeinishahr' ),
+			'kerman' => array( 'kerman', 'sirjan', 'rafsanjan', 'bam' ),
+			'kermanshah' => array( 'kermanshah', 'javanrud', 'eslamabad_e_gharb', 'paveh' ),
+			'khuzestan' => array( 'ahvaz', 'abadan', 'dezful', 'khorramshahr' ),
+			'kohgiluyeh_and_boyer_ahmad' => array( 'yasuj', 'dugombadan', 'dehdasht', 'charam' ),
+			'kurdistan' => array( 'sanandaj', 'marivan', 'saghez', 'baneh' ),
+			'lorestan' => array( 'khorramabad', 'borujerd', 'dorud', 'aligoodarz' ),
+			'mazandaran' => array( 'sari', 'babol', 'amol', 'qaem_shahr' ),
+			'markazi' => array( 'arak', 'saveh', 'khomein', 'mahalat' ),
+			'north_khorasan' => array( 'bojnurd', 'shirvan', 'jajarm', 'esfarayen' ),
+			'razavi_khorasan' => array( 'mashhad', 'neyshabur', 'sabzevar', 'torbat_e_heydariyeh' ),
+			'south_khorasan' => array( 'birjand', 'qayen', 'tabas', 'nehbandan' ),
+			'qazvin' => array( 'qazvin', 'takestan', 'abeyek', 'alvand' ),
+			'qom' => array( 'qom', 'jafarieh', 'dastjerd', 'kahak' ),
+			'semnan' => array( 'semnan', 'shahroud', 'damghan', 'garmsar' ),
+			'sistan_and_baluchestan' => array( 'zahedan', 'chabahar', 'zabol', 'iranshahr' ),
+			'tehran' => array( 'tehran', 'rey', 'shemiranat', 'damavand' ),
+			'yazd' => array( 'yazd', 'meybod', 'ardakan', 'taft' ),
+			'zanjan' => array( 'zanjan', 'abhar', 'khoramdareh', 'khodabandeh' ),
+		);
+		foreach ( $phase2_keys as $province_key => $city_keys_for_province ) {
+			foreach ( $city_keys_for_province as $city_key ) {
+				$this->assertArrayHasKey( $city_key, $geography[ $province_key ]['cities'], 'Phase 2 key removed: ' . $province_key . '.' . $city_key );
+			}
+		}
+		$city_map = Didar_Reference_Data::city_province_map();
+		foreach ( $city_map as $city_key => $province_key ) {
+			$this->assertArrayHasKey( $province_key, $geography );
+			$this->assertArrayHasKey( $city_key, $geography[ $province_key ]['cities'] );
+		}
+		foreach ( array( 'embassy_appointment', 'visa_request' ) as $form_type ) {
+			$city_field = $this->registry->fields( $form_type )['birth_city'];
+			$this->assertCount( 1531, $city_field['options'] );
+			$this->assertSame( $city_map, $city_field['option_provinces'] );
+		}
+		$this->assertArrayHasKey( 'glvgah_mazandaran', $geography['mazandaran']['cities'] );
+		$this->assertArrayHasKey( 'kshkvyyh_kerman', $geography['kerman']['cities'] );
+	}
+
+	public function test_birth_geography_validates_province_city_pairs_and_removes_foreign_stale_values() {
+		$valid = $this->validator->validate( 'visa_request', array( 'birth_country' => 'iran', 'birth_province' => 'tehran', 'birth_city' => 'tehran', 'birth_place' => 'stale foreign value' ), 'frontend' );
+		$this->assertTrue( $valid['valid'] );
+		$this->assertArrayNotHasKey( 'birth_place', $valid['data'] );
+
+		$invalid = $this->validator->validate( 'visa_request', array( 'birth_country' => 'iran', 'birth_province' => 'tehran', 'birth_city' => 'shiraz' ), 'frontend' );
+		$this->assertFalse( $invalid['valid'] );
+		$this->assertArrayHasKey( 'birth_city', $invalid['errors'] );
+		foreach ( array( array( 'east_azerbaijan', 'tabriz' ), array( 'isfahan', 'kashan' ), array( 'razavi_khorasan', 'mashhad' ), array( 'khuzestan', 'ahvaz' ) ) as $pair ) {
+			$result = $this->validator->validate( 'visa_request', array( 'birth_country' => 'iran', 'birth_province' => $pair[0], 'birth_city' => $pair[1] ), 'frontend' );
+			$this->assertTrue( $result['valid'], $pair[0] . '.' . $pair[1] );
+		}
+		$invalid_cross_province = $this->validator->validate( 'visa_request', array( 'birth_country' => 'iran', 'birth_province' => 'isfahan', 'birth_city' => 'ahvaz' ), 'frontend' );
+		$this->assertFalse( $invalid_cross_province['valid'] );
+		$this->assertArrayHasKey( 'birth_city', $invalid_cross_province['errors'] );
+
+		$foreign = $this->validator->validate( 'visa_request', array( 'birth_country' => 'canada', 'birth_province' => 'tehran', 'birth_city' => 'tehran', 'birth_place' => 'Toronto' ), 'frontend' );
+		$this->assertTrue( $foreign['valid'] );
+		$this->assertArrayNotHasKey( 'birth_province', $foreign['data'] );
+		$this->assertArrayNotHasKey( 'birth_city', $foreign['data'] );
+		$this->assertSame( 'Toronto', $foreign['data']['birth_place'] );
+
+		$fields = $this->registry->fields( 'visa_request' );
+		$this->assertSame( 'iran', $fields['birth_country']['default'] );
+		$this->assertSame( 'birth_country', $fields['birth_province']['dependent_on'] );
+		$this->assertSame( 'iran', $fields['birth_province']['dependent_value'] );
+		$this->assertSame( 'birth_province', $fields['birth_city']['dependent_on'] );
+		$this->assertSame( 'iran_cities', $fields['birth_city']['option_source'] );
+	}
+
+	public function test_new_upload_definitions_are_images_only_and_limited_to_five_mb() {
+		$upload_fields = array();
+		foreach ( $this->registry->all() as $form_type => $form ) {
+			foreach ( $this->registry->fields( $form_type ) as $field_name => $field ) {
+				if ( 'file' === ( $field['type'] ?? '' ) ) { $upload_fields[] = $field; }
+				if ( 'repeater' === ( $field['type'] ?? '' ) ) {
+					foreach ( (array) ( $field['columns'] ?? array() ) as $column ) { if ( is_array( $column ) && 'file' === ( $column['type'] ?? '' ) ) { $upload_fields[] = $column; } }
+				}
+			}
+		}
+		$this->assertNotEmpty( $upload_fields );
+		foreach ( $upload_fields as $field ) {
+			$this->assertSame( 5 * MB_IN_BYTES, (int) $field['max_size'] );
+			$this->assertSame( array( 'jpg|jpeg', 'png', 'webp' ), array_keys( $field['upload_mimes'] ) );
+			$this->assertSame( array( 'image/jpeg', 'image/png', 'image/webp' ), array_values( $field['mime_types'] ) );
+		}
 	}
 
 	public function test_consultation_validation_accepts_free_text_and_multiline_description() {
@@ -239,7 +455,7 @@ class Test_Didar_Form_Definitions extends WP_UnitTestCase {
 	public function test_visa_companions_preserve_identifiers_and_validate_nested_email() {
 		$fields  = $this->registry->fields( 'visa_request' );
 		$columns = $fields['companions']['columns'];
-		$this->assertSame( array( 'full_name', 'age', 'occupation', 'national_id', 'passport_number', 'email', 'phone', 'personal_photo', 'passport_main_page', 'round_trip_ticket', 'other_documents' ), array_keys( $columns ) );
+		$this->assertSame( array( 'companion_uid', 'full_name', 'family_relation', 'age', 'age_group', 'occupation', 'national_id', 'passport_number', 'email', 'phone', 'personal_photo', 'passport_main_page', 'round_trip_ticket', 'other_documents' ), array_keys( $columns ) );
 
 		$result = $this->validator->validate(
 			'visa_request',

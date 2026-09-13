@@ -28,6 +28,10 @@ class Didar_Validator {
 		$errors = array();
 		foreach ( $this->registry->fields( $form_type ) as $name => $field ) {
 			$field['required'] = $this->settings->is_required( $form_type, $name, ! empty( $field['required'] ) );
+			if ( ! empty( $field['conditional_on'] ) && ( ! isset( $data[ $field['conditional_on'] ] ) || (string) $data[ $field['conditional_on'] ] !== (string) ( $field['conditional_value'] ?? 'yes' ) ) ) {
+				$data[ $name ] = ( 'select' === $field['type'] && ! empty( $field['multiple'] ) ) ? array() : '';
+				continue;
+			}
 			$raw = array_key_exists( $name, $submitted ) ? $submitted[ $name ] : null;
 
 			if ( 'honeypot' === $field['type'] ) {
@@ -39,6 +43,9 @@ class Didar_Validator {
 			if ( ! empty( $field['internal'] ) ) {
 				continue;
 			}
+			if ( ! empty( $field['derived'] ) ) {
+				continue;
+			}
 
 			$result = $this->validate_field( $field, $raw, $context, $submission_id );
 			if ( is_wp_error( $result ) ) {
@@ -47,8 +54,66 @@ class Didar_Validator {
 			}
 			$data[ $name ] = $result;
 		}
+		$this->preserve_inactive_conditional_values( $form_type, $submitted, $data, $submission_id );
+		if ( Didar_Companion_Model::supports_form( $form_type ) ) {
+			$data['companions'] = Didar_Companion_Model::normalize_rows( $data['companions'] ?? array() );
+			$data['companions_count'] = (string) Didar_Companion_Model::active_count( $data['companions'] );
+		}
+		$this->validate_birth_geography( $data, $errors );
+		$this->validate_date_ranges( $form_type, $data, $errors );
 
 		return array( 'valid' => empty( $errors ), 'data' => $data, 'errors' => $errors );
+	}
+
+	private function preserve_inactive_conditional_values( $form_type, $submitted, &$data, $submission_id ) {
+		if ( ! $submission_id ) {
+			return;
+		}
+		$stored = get_post_meta( absint( $submission_id ), '_didar_fields', true );
+		if ( ! is_array( $stored ) ) {
+			return;
+		}
+		foreach ( $this->registry->fields( $form_type ) as $name => $field ) {
+			if ( empty( $field['conditional_on'] ) || ! array_key_exists( $name, $stored ) ) {
+				continue;
+			}
+			$parent = $field['conditional_on'];
+			$target = (string) ( $field['conditional_value'] ?? 'yes' );
+			if ( (string) ( $stored[ $parent ] ?? '' ) === $target || (string) ( $submitted[ $parent ] ?? '' ) === $target ) {
+				continue;
+			}
+			$data[ $name ] = $stored[ $name ];
+		}
+	}
+
+	private function validate_date_ranges( $form_type, $data, &$errors ) {
+		foreach ( $this->registry->fields( $form_type ) as $name => $field ) {
+			if ( empty( $field['date_range_start'] ) || ! empty( $errors[ $name ] ) ) {
+				continue;
+			}
+			$start = (string) ( $data[ $field['date_range_start'] ] ?? '' );
+			$end   = (string) ( $data[ $name ] ?? '' );
+			if ( '' !== $start && '' !== $end && $end < $start ) {
+				$errors[ $name ] = __( 'تاریخ «تا» نمی‌تواند پیش از تاریخ «از» باشد.', 'didar' );
+			}
+		}
+	}
+
+	private function validate_birth_geography( &$data, &$errors ) {
+		if ( ! isset( $data['birth_country'] ) || ! isset( $data['birth_province'], $data['birth_city'] ) ) { return; }
+		if ( 'iran' !== $data['birth_country'] ) {
+			unset( $data['birth_province'], $data['birth_city'] );
+			return;
+		}
+		unset( $data['birth_place'] );
+		$province = (string) $data['birth_province'];
+		$city     = (string) $data['birth_city'];
+		if ( '' !== $province && ! array_key_exists( $province, Didar_Reference_Data::provinces() ) ) {
+			$errors['birth_province'] = 'استان انتخاب‌شده معتبر نیست.';
+		}
+		if ( '' !== $city && '' !== $province && ! array_key_exists( $city, Didar_Reference_Data::cities_for_province( $province ) ) ) {
+			$errors['birth_city'] = 'شهر انتخاب‌شده با استان انتخابی همخوانی ندارد.';
+		}
 	}
 
 	private function validate_field( $field, $raw, $context, $submission_id = 0 ) {
@@ -64,7 +129,11 @@ class Didar_Validator {
 			return $value ? $value : new WP_Error( 'invalid_date', sprintf( __( 'تاریخ «%s» معتبر نیست.', 'didar' ), $label ) );
 		}
 
-		if ( in_array( $type, array( 'checkbox', 'repeater' ), true ) || ( in_array( $type, array( 'time', 'file' ), true ) && ! empty( $field['multiple'] ) ) ) {
+		$is_multiple_select = 'select' === $type && ! empty( $field['multiple'] );
+		if ( $is_multiple_select && null !== $raw && ! is_array( $raw ) && ! empty( $field['allow_legacy'] ) && ( 'admin' === $context || $submission_id ) ) {
+			$raw = array( $raw );
+		}
+		if ( in_array( $type, array( 'checkbox', 'repeater' ), true ) || $is_multiple_select || ( in_array( $type, array( 'time', 'file' ), true ) && ! empty( $field['multiple'] ) ) ) {
 			if ( null !== $raw && ! is_array( $raw ) ) {
 				return new WP_Error( 'invalid_structure', sprintf( __( 'ساختار فیلد «%s» معتبر نیست.', 'didar' ), $label ) );
 			}
@@ -149,8 +218,37 @@ class Didar_Validator {
 					}
 					return array_values( array_unique( $values ) );
 				}
-				return sanitize_text_field( $raw );
+				$time = $this->normalize_digits( sanitize_text_field( $raw ) );
+				if ( '' === $time ) { return ''; }
+				return preg_match( '/^(?:[01]\d|2[0-3]):[0-5]\d$/', $time ) ? $time : new WP_Error( 'invalid_time', sprintf( __( 'زمان «%s» معتبر نیست.', 'didar' ), $label ) );
 			case 'select':
+				if ( ! empty( $field['multiple'] ) ) {
+					$values          = array();
+					$allowed_options = $field['options'];
+					if ( ! empty( $field['legacy_options'] ) ) {
+						$allowed_options = $allowed_options + $field['legacy_options'];
+					}
+					foreach ( $raw as $item ) {
+						if ( is_array( $item ) || is_object( $item ) ) {
+							return new WP_Error( 'invalid_option', sprintf( __( 'گزینه انتخاب‌شده برای «%s» معتبر نیست.', 'didar' ), $label ) );
+						}
+						$item  = (string) $item;
+						$value = sanitize_key( $item );
+						if ( '' === $value ) {
+							continue;
+						}
+						if ( array_key_exists( $value, $allowed_options ) ) {
+							$values[] = $value;
+							continue;
+						}
+						if ( ! empty( $field['allow_legacy'] ) && ( 'admin' === $context || $submission_id ) ) {
+							$values[] = sanitize_text_field( $item );
+							continue;
+						}
+						return new WP_Error( 'invalid_option', sprintf( __( 'گزینه انتخاب‌شده برای «%s» معتبر نیست.', 'didar' ), $label ) );
+					}
+					return array_values( array_unique( $values ) );
+				}
 			case 'radio':
 				if ( '' === trim( $raw ) ) {
 					return '';
@@ -161,7 +259,7 @@ class Didar_Validator {
 					$allowed_options = $allowed_options + $field['legacy_options'];
 				}
 				if ( '' === $value || ! array_key_exists( $value, $allowed_options ) ) {
-					if ( 'admin' === $context && ! empty( $field['allow_legacy'] ) ) {
+					if ( ! empty( $field['allow_legacy'] ) && ( 'admin' === $context || $submission_id ) ) {
 						return sanitize_text_field( $raw );
 					}
 					return new WP_Error( 'invalid_option', sprintf( __( 'گزینه انتخاب‌شده برای «%s» معتبر نیست.', 'didar' ), $label ) );
@@ -220,6 +318,10 @@ class Didar_Validator {
 				$is_structured  = is_array( $column_definition );
 				$column_type    = $is_structured && isset( $column_definition['type'] ) ? $column_definition['type'] : 'text';
 				$column_label   = $is_structured && isset( $column_definition['label'] ) ? $column_definition['label'] : $column_definition;
+				if ( $is_structured && ! empty( $column_definition['derived'] ) ) {
+					$clean[ $column ] = '';
+					continue;
+				}
 				if ( 'file' === $column_type ) {
 					$file_field = is_array( $column_definition ) ? $column_definition : array();
 					$file_field['name']       = 'companions.' . absint( $row_index ) . '.' . $column;
@@ -250,6 +352,9 @@ class Didar_Validator {
 					$normalized = $this->normalize_digits( $value );
 					if ( '' !== trim( $normalized ) && ! is_numeric( $normalized ) ) {
 						return new WP_Error( 'invalid_repeater_number', sprintf( __( 'مقدار «%s» باید عددی باشد.', 'didar' ), $column_label ) );
+					}
+					if ( '' !== trim( $normalized ) && 'age' === ( $column_definition['semantic'] ?? '' ) && ( (float) $normalized < 0 || (float) $normalized > 130 || (float) $normalized != (int) $normalized ) ) {
+						return new WP_Error( 'invalid_repeater_age', sprintf( __( 'مقدار «%s» باید یک سن صحیح بین ۰ تا ۱۳۰ باشد.', 'didar' ), $column_label ) );
 					}
 					$clean[ $column ] = '' === trim( $normalized ) ? '' : (string) ( 0 + $normalized );
 				} elseif ( is_array( $column_definition ) && 'national_id' === ( $column_definition['semantic'] ?? '' ) ) {

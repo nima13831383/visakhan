@@ -8,7 +8,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Owns Didar document storage, records, authorization, download, and cleanup.
  */
 class Didar_File_Service {
-	const SCHEMA_VERSION         = '1.1.0';
+	const SCHEMA_VERSION         = '1.2.0';
 	const SCHEMA_VERSION_OPTION  = 'didar_file_schema_version';
 	const SCHEMA_VERIFIED_OPTION = 'didar_file_schema_verified_version';
 	const STORAGE_DIRECTORY      = 'didar-private';
@@ -27,6 +27,8 @@ class Didar_File_Service {
 
 		add_action( 'admin_post_didar_download_file', array( $this, 'handle_secure_download' ) );
 		add_action( 'admin_post_nopriv_didar_download_file', array( $this, 'deny_unauthenticated_download' ) );
+		add_action( 'admin_post_didar_download_pdf_file', array( $this, 'handle_pdf_download' ) );
+		add_action( 'admin_post_nopriv_didar_download_pdf_file', array( $this, 'deny_unauthenticated_pdf_download' ) );
 		add_action( 'didar_cleanup_temporary_uploads', array( $this, 'cleanup_temporary_files' ) );
 		add_action( 'update_option_' . Didar_Settings::OPTION_NAME, array( $this, 'settings_updated' ), 10, 2 );
 		add_action( 'before_delete_post', array( $this, 'delete_submission_files' ), 10, 2 );
@@ -39,6 +41,11 @@ class Didar_File_Service {
 	public static function table_name() {
 		global $wpdb;
 		return $wpdb->prefix . 'didar_files';
+	}
+
+	public static function references_table_name() {
+		global $wpdb;
+		return $wpdb->prefix . 'didar_file_references';
 	}
 
 	public static function maybe_upgrade() {
@@ -80,8 +87,21 @@ class Didar_File_Service {
 			KEY submission_field (submission_id,field_key),
 			KEY temp_context (owner_user_id,form_type,field_key,submission_id,file_status)
 		) {$charset_collate};";
+		$reference_sql = "CREATE TABLE " . self::references_table_name() . " (
+			reference_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			file_id bigint(20) unsigned NOT NULL,
+			submission_id bigint(20) unsigned NOT NULL,
+			form_type varchar(64) NOT NULL,
+			field_key varchar(191) NOT NULL,
+			created_at_gmt datetime NOT NULL,
+			PRIMARY KEY (reference_id),
+			UNIQUE KEY submission_file_field (submission_id,field_key,file_id),
+			KEY file_submission (file_id,submission_id),
+			KEY submission_field (submission_id,field_key)
+		) {$charset_collate};";
 
 		dbDelta( $sql );
+		dbDelta( $reference_sql );
 		$database_error = (string) $wpdb->last_error;
 
 		if ( ! self::table_exists() ) {
@@ -91,6 +111,10 @@ class Didar_File_Service {
 			if ( false === $created ) {
 				$database_error = (string) $wpdb->last_error;
 			}
+		}
+		if ( ! self::references_table_exists() ) {
+			$create_reference_sql = preg_replace( '/^CREATE TABLE /', 'CREATE TABLE IF NOT EXISTS ', $reference_sql, 1 );
+			$wpdb->query( $create_reference_sql ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		}
 
 		if ( ! self::table_exists() ) {
@@ -159,7 +183,9 @@ class Didar_File_Service {
 		$required_indexes = array( 'PRIMARY', 'relative_path', 'owner_status_created', 'submission_field', 'temp_context' );
 		$indexes          = wp_list_pluck( (array) $wpdb->get_results( "SHOW INDEX FROM {$table_name}", ARRAY_A ), 'Key_name' );
 
-		return ! array_diff( $required_indexes, array_unique( $indexes ) );
+		if ( array_diff( $required_indexes, array_unique( $indexes ) ) || ! self::references_table_exists() ) { return false; }
+		$reference_indexes = wp_list_pluck( (array) $wpdb->get_results( 'SHOW INDEX FROM ' . self::references_table_name(), ARRAY_A ), 'Key_name' );
+		return ! array_diff( array( 'PRIMARY', 'submission_file_field', 'file_submission', 'submission_field' ), array_unique( $reference_indexes ) );
 	}
 
 	public function upload( $file, $form_type, $field_key, $submission_id = 0 ) {
@@ -296,6 +322,106 @@ class Didar_File_Service {
 		return $row;
 	}
 
+	/** Resolve a file as belonging to a submission, including a non-binary profile reference. */
+	public function get_for_submission( $file_id, $submission_id, $field_key = '' ) {
+		$record = $this->get( $file_id ); $submission_id = absint( $submission_id );
+		if ( ! $record || ! $submission_id ) { return null; }
+		if ( (int) $record['submission_id'] === $submission_id && ( ! $field_key || (string) $record['field_key'] === (string) $field_key ) ) { return $record; }
+		return ( 'profile' === $record['form_type'] && $this->has_reference( $file_id, $submission_id, $field_key ) ) ? $record : null;
+	}
+
+	/** Resolve an authorized submission file to a private local path for in-memory PDF generation. */
+	public function get_private_file_for_submission( $file_id, $submission_id, $field_key = '' ) {
+		$record = $this->get_for_submission( $file_id, $submission_id, $field_key );
+		if ( ! $record ) { return null; }
+		$path = $this->absolute_path( $record );
+		if ( is_wp_error( $path ) || ! is_readable( $path ) ) { return null; }
+		return array( 'record' => $record, 'path' => $path );
+	}
+
+	/** Return a stable, authorization-checked-at-click-time URL for a PDF file reference. */
+	public function get_pdf_download_url( $file_id, $submission_id, $field_key = '' ) {
+		$field_key = self::normalize_field_key( $field_key );
+		if ( ! $field_key ) {
+			return '';
+		}
+		$record = $this->get_for_submission( $file_id, $submission_id, $field_key );
+		if ( ! $record || 'final' !== $record['file_status'] ) {
+			return '';
+		}
+
+		$path = $this->absolute_path( $record );
+		if ( is_wp_error( $path ) || ! is_readable( $path ) ) {
+			return '';
+		}
+
+		return add_query_arg(
+			array(
+				'action'        => 'didar_download_pdf_file',
+				'file_id'       => absint( $record['file_id'] ),
+				'submission_id' => absint( $submission_id ),
+				'field'         => self::normalize_field_key( $field_key ),
+			),
+			admin_url( 'admin-post.php' )
+		);
+	}
+
+	/** Resolve a stored submission reference to its configured direct file URL. */
+	public function get_direct_url_for_reference( $file_id, $submission_id, $field_key = '' ) {
+		$field_key = self::normalize_field_key( $field_key );
+		$record    = $field_key ? $this->get_for_submission( $file_id, $submission_id, $field_key ) : null;
+		if ( ! $record || 'final' !== $record['file_status'] ) {
+			return '';
+		}
+
+		$path = $this->absolute_path( $record );
+		if ( is_wp_error( $path ) || ! is_readable( $path ) ) {
+			return '';
+		}
+
+		return $this->direct_url( $record );
+	}
+
+	public function has_reference( $file_id, $submission_id, $field_key = '' ) {
+		global $wpdb;
+		$where = 'file_id = %d AND submission_id = %d'; $args = array( absint( $file_id ), absint( $submission_id ) );
+		if ( '' !== (string) $field_key ) { $where .= ' AND field_key = %s'; $args[] = (string) $field_key; }
+		return (bool) $wpdb->get_var( $wpdb->prepare( 'SELECT reference_id FROM ' . self::references_table_name() . ' WHERE ' . $where . ' LIMIT 1', $args ) );
+	}
+
+	public function has_any_reference( $file_id ) {
+		global $wpdb;
+		return (bool) $wpdb->get_var( $wpdb->prepare( 'SELECT reference_id FROM ' . self::references_table_name() . ' WHERE file_id = %d LIMIT 1', absint( $file_id ) ) );
+	}
+
+	public function add_reference( $file_id, $submission_id, $form_type, $field_key ) {
+		global $wpdb;
+		if ( ! $this->get( $file_id ) || ! absint( $submission_id ) ) { return false; }
+		$wpdb->query( $wpdb->prepare( 'INSERT IGNORE INTO ' . self::references_table_name() . ' (file_id,submission_id,form_type,field_key,created_at_gmt) VALUES (%d,%d,%s,%s,%s)', absint( $file_id ), absint( $submission_id ), sanitize_key( $form_type ), (string) $field_key, current_time( 'mysql', true ) ) );
+		return true;
+	}
+
+	public function remove_reference( $file_id, $submission_id, $field_key = '' ) {
+		global $wpdb;
+		$where = array( 'file_id' => absint( $file_id ), 'submission_id' => absint( $submission_id ) ); $formats = array( '%d', '%d' );
+		if ( '' !== (string) $field_key ) { $where['field_key'] = (string) $field_key; $formats[] = '%s'; }
+		return false !== $wpdb->delete( self::references_table_name(), $where, $formats );
+	}
+
+	public function promote_profile_file( $file_id, $user_id = 0 ) {
+		global $wpdb; $record = $this->get( $file_id ); $user_id = absint( $user_id ? $user_id : get_current_user_id() );
+		if ( ! $record || 'profile' !== $record['form_type'] || $record['owner_user_id'] !== $user_id || 'temporary' !== $record['file_status'] ) { return new WP_Error( 'invalid_profile_file', __( 'فایل پروفایل معتبر نیست.', 'didar' ) ); }
+		$updated = $wpdb->update( self::table_name(), array( 'file_status' => 'final', 'finalized_at_gmt' => current_time( 'mysql', true ) ), array( 'file_id' => absint( $file_id ) ), array( '%s', '%s' ), array( '%d' ) );
+		return false === $updated ? new WP_Error( 'file_record_update_failed', __( 'ثبت فایل پروفایل انجام نشد.', 'didar' ) ) : true;
+	}
+
+	public function delete_profile_file( $file_id, $user_id = 0 ) {
+		$record = $this->get( $file_id ); $user_id = absint( $user_id ? $user_id : get_current_user_id() );
+		if ( ! $record || 'profile' !== $record['form_type'] || $record['owner_user_id'] !== $user_id ) { return new WP_Error( 'forbidden_document', __( 'شما اجازه حذف این فایل را ندارید.', 'didar' ) ); }
+		if ( $this->has_any_reference( $file_id ) ) { return true; }
+		return $this->delete_file_record( $file_id );
+	}
+
 	public function validate_file_id( $field, $raw, $context = 'frontend', $submission_id = 0 ) {
 		$file_id = absint( $raw );
 		if ( ! $file_id ) {
@@ -307,6 +433,11 @@ class Didar_File_Service {
 		}
 
 		$submission_id = absint( $submission_id );
+		if ( 'profile' === $record['form_type'] && ! empty( $field['profile_autofill'] ) ) {
+			if ( $record['owner_user_id'] !== get_current_user_id() ) { return new WP_Error( 'invalid_file_owner', __( 'شما اجازه استفاده از این فایل را ندارید.', 'didar' ) ); }
+			if ( 'temporary' === $record['file_status'] && ! $submission_id ) { return $file_id; }
+			if ( 'final' === $record['file_status'] && ( ! $submission_id || $this->has_reference( $file_id, $submission_id, $field['name'] ) ) ) { return $file_id; }
+		}
 		if ( $record['form_type'] !== $field['form_type'] || $record['field_key'] !== $field['name'] ) {
 			return new WP_Error( 'invalid_file_context', __( 'این فایل برای فیلد دیگری بارگذاری شده است.', 'didar' ) );
 		}
@@ -330,7 +461,8 @@ class Didar_File_Service {
 
 		$allowed_mimes = isset( $field['mime_types'] ) ? (array) $field['mime_types'] : array();
 		$allowed_exts  = $this->allowed_extensions( isset( $field['upload_mimes'] ) ? (array) $field['upload_mimes'] : array() );
-		if ( ! in_array( $record['mime_type'], $allowed_mimes, true ) || ! in_array( $record['extension'], $allowed_exts, true ) || is_wp_error( $this->absolute_path( $record ) ) ) {
+		$is_historical_final = 'final' === $record['file_status'];
+		if ( ( ! $is_historical_final && ( ! in_array( $record['mime_type'], $allowed_mimes, true ) || ! in_array( $record['extension'], $allowed_exts, true ) ) ) || is_wp_error( $this->absolute_path( $record ) ) ) {
 			return new WP_Error( 'invalid_file_type', __( 'نوع فایل انتخاب‌شده مجاز نیست.', 'didar' ) );
 		}
 
@@ -350,6 +482,10 @@ class Didar_File_Service {
 
 			foreach ( $new_ids as $file_id ) {
 				$record = $this->get( $file_id );
+				if ( $record && 'profile' === $record['form_type'] && ! empty( $field['profile_autofill'] ) && $record['owner_user_id'] === get_current_user_id() && 'final' === $record['file_status'] ) {
+					$this->add_reference( $file_id, $post_id, $form_type, $field_key );
+					continue;
+				}
 				if ( ! $record || $record['form_type'] !== $form_type || $record['field_key'] !== $field_key ) {
 					continue;
 				}
@@ -366,7 +502,7 @@ class Didar_File_Service {
 
 			if ( $log_changes && 1 === count( $added ) && 1 === count( $removed ) ) {
 				$this->events->add( $post_id, 'file_replaced', $removed[0], $added[0], array( 'field_name' => $field_key, 'field_label' => $field['label'], 'file_id' => $added[0] ) );
-				$this->delete_final_file( $removed[0], $post_id, $field_key );
+				if ( $this->has_reference( $removed[0], $post_id, $field_key ) ) { $this->remove_reference( $removed[0], $post_id, $field_key ); } else { $this->delete_final_file( $removed[0], $post_id, $field_key ); }
 				$added   = array();
 				$removed = array();
 			}
@@ -376,7 +512,7 @@ class Didar_File_Service {
 				}
 			}
 			foreach ( $removed as $file_id ) {
-				$this->delete_final_file( $file_id, $post_id, $field_key );
+				if ( $this->has_reference( $file_id, $post_id, $field_key ) ) { $this->remove_reference( $file_id, $post_id, $field_key ); } else { $this->delete_final_file( $file_id, $post_id, $field_key ); }
 				if ( $log_changes ) {
 					$this->events->add( $post_id, 'file_removed', $file_id, null, array( 'field_name' => $field_key, 'field_label' => $field['label'], 'file_id' => $file_id ) );
 				}
@@ -427,28 +563,28 @@ class Didar_File_Service {
 		if ( ! $record ) {
 			return null;
 		}
-		if ( $submission_id && ( $record['submission_id'] !== absint( $submission_id ) || ( $field_key && $record['field_key'] !== $field_key ) ) ) {
+		if ( $submission_id && ! $this->get_for_submission( $file_id, $submission_id, $field_key ) ) {
 			return null;
 		}
 		return array(
 			'file_id'      => $record['file_id'],
 			'file_name'    => $record['original_name'],
-			'download_url' => 'final' === $record['file_status'] ? $this->get_download_url( $record['file_id'] ) : '',
+			'download_url' => 'final' === $record['file_status'] ? $this->get_download_url( $record['file_id'], $submission_id, $field_key ) : '',
 			'can_delete'   => (bool) $can_delete,
 			'mime_type'    => $record['mime_type'],
 			'size'         => $record['file_size'],
 		);
 	}
 
-	public function get_download_url( $file_id ) {
+	public function get_download_url( $file_id, $submission_id = 0, $field_key = '' ) {
 		$record = $this->get( $file_id );
-		if ( ! $record || 'final' !== $record['file_status'] || ! $this->can_download( $record ) ) {
+		if ( ! $record || 'final' !== $record['file_status'] || ! $this->can_download( $record, $submission_id, $field_key ) ) {
 			return '';
 		}
 		if ( 'direct' === $this->settings->file_download_mode() ) {
 			return $this->direct_url( $record );
 		}
-		$url = add_query_arg( array( 'action' => 'didar_download_file', 'file_id' => $record['file_id'] ), admin_url( 'admin-post.php' ) );
+		$url = add_query_arg( array_filter( array( 'action' => 'didar_download_file', 'file_id' => $record['file_id'], 'submission_id' => absint( $submission_id ), 'field' => $field_key ) ), admin_url( 'admin-post.php' ) );
 		return add_query_arg( '_wpnonce', wp_create_nonce( 'didar_download_file_' . $record['file_id'] ), $url );
 	}
 
@@ -458,7 +594,7 @@ class Didar_File_Service {
 			return '';
 		}
 		$record = $this->get( $file_id );
-		if ( ! $record || 'final' !== $record['file_status'] || (int) $record['submission_id'] !== absint( $submission_id ) || (string) $record['field_key'] !== (string) $field_key ) {
+		if ( ! $record || 'final' !== $record['file_status'] || ! $this->get_for_submission( $file_id, $submission_id, $field_key ) ) {
 			return '';
 		}
 		return $this->direct_url( $record );
@@ -470,8 +606,10 @@ class Didar_File_Service {
 		if ( ! is_user_logged_in() || ! $file_id || ! wp_verify_nonce( $nonce, 'didar_download_file_' . $file_id ) ) {
 			wp_die( esc_html__( 'اجازه دانلود این فایل را ندارید.', 'didar' ), '', array( 'response' => 403 ) );
 		}
+		$submission_id = isset( $_GET['submission_id'] ) && ! is_array( $_GET['submission_id'] ) ? absint( wp_unslash( $_GET['submission_id'] ) ) : 0;
+		$field_key = isset( $_GET['field'] ) && ! is_array( $_GET['field'] ) ? self::normalize_field_key( wp_unslash( $_GET['field'] ) ) : '';
 		$record = $this->get( $file_id );
-		if ( ! $record || 'final' !== $record['file_status'] || ! $this->can_download( $record ) ) {
+		if ( ! $record || 'final' !== $record['file_status'] || ! $this->can_download( $record, $submission_id, $field_key ) ) {
 			wp_die( esc_html__( 'فایل یافت نشد یا در دسترس شما نیست.', 'didar' ), '', array( 'response' => 404 ) );
 		}
 		$path = $this->absolute_path( $record );
@@ -502,12 +640,62 @@ class Didar_File_Service {
 		exit;
 	}
 
+	/** Stream a PDF file reference after rechecking login, submission access, ownership, and storage. */
+	public function handle_pdf_download() {
+		if ( ! is_user_logged_in() ) {
+			$this->deny_unauthenticated_pdf_download();
+		}
+
+		$file_id       = isset( $_GET['file_id'] ) && ! is_array( $_GET['file_id'] ) ? absint( wp_unslash( $_GET['file_id'] ) ) : 0;
+		$submission_id = isset( $_GET['submission_id'] ) && ! is_array( $_GET['submission_id'] ) ? absint( wp_unslash( $_GET['submission_id'] ) ) : 0;
+		$field_key     = isset( $_GET['field'] ) && ! is_array( $_GET['field'] ) ? self::normalize_field_key( wp_unslash( $_GET['field'] ) ) : '';
+		$post          = $this->submission_service ? $this->submission_service->get_accessible_submission( $submission_id, get_current_user_id() ) : null;
+		$private_file  = $post && $field_key ? $this->get_private_file_for_submission( $file_id, $submission_id, $field_key ) : null;
+
+		if ( ! $post || ! is_array( $private_file ) || empty( $private_file['record'] ) || empty( $private_file['path'] ) || 'final' !== $private_file['record']['file_status'] ) {
+			wp_die( esc_html__( 'فایل یافت نشد یا در دسترس شما نیست.', 'didar' ), '', array( 'response' => 404 ) );
+		}
+
+		$record = $private_file['record'];
+		$path   = $private_file['path'];
+		while ( ob_get_level() ) {
+			ob_end_clean();
+		}
+		nocache_headers();
+		header( 'Content-Type: ' . $record['mime_type'] );
+		header( 'Content-Length: ' . (string) filesize( $path ) );
+		header( 'X-Content-Type-Options: nosniff' );
+		header( "Content-Security-Policy: default-src 'none'; sandbox" );
+		$ascii_name = preg_replace( '/[^A-Za-z0-9._-]/', '_', $record['original_name'] );
+		$ascii_name = $ascii_name ? $ascii_name : 'didar-file-' . $record['file_id'] . '.' . $record['extension'];
+		header( 'Content-Disposition: attachment; filename="' . $ascii_name . '"; filename*=UTF-8\'\'' . rawurlencode( $record['original_name'] ) );
+		$handle = fopen( $path, 'rb' );
+		if ( false === $handle ) {
+			wp_die( esc_html__( 'فایل در دسترس نیست.', 'didar' ), '', array( 'response' => 404 ) );
+		}
+		while ( ! feof( $handle ) ) {
+			echo fread( $handle, 1024 * 1024 ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+			flush();
+		}
+		fclose( $handle );
+		exit;
+	}
+
+	public function deny_unauthenticated_pdf_download() {
+		wp_die( esc_html__( 'برای دانلود فایل وارد حساب کاربری شوید.', 'didar' ), '', array( 'response' => 401 ) );
+	}
+
 	public function deny_unauthenticated_download() {
 		wp_die( esc_html__( 'برای دانلود فایل وارد حساب کاربری شوید.', 'didar' ), '', array( 'response' => 401 ) );
 	}
 
-	public function can_download( $record ) {
-		if ( ! is_array( $record ) || 'final' !== $record['file_status'] || ! $record['submission_id'] || ! $this->submission_service || ! $this->submission_service->can_view_public( $record['submission_id'] ) ) {
+	public function can_download( $record, $submission_id = 0, $field_key = '' ) {
+		if ( ! is_array( $record ) || 'final' !== $record['file_status'] ) { return false; }
+		if ( 'profile' === $record['form_type'] ) {
+			if ( $submission_id && $this->has_reference( $record['file_id'], $submission_id, $field_key ) ) { return $this->submission_service && $this->submission_service->can_view_public( $submission_id ); }
+			return is_user_logged_in() && ( (int) $record['owner_user_id'] === get_current_user_id() || current_user_can( 'manage_options' ) );
+		}
+		if ( ! $record['submission_id'] || ! $this->submission_service || ! $this->submission_service->can_view_public( $record['submission_id'] ) ) {
 			return false;
 		}
 		$post = get_post( $record['submission_id'] );
@@ -535,6 +723,7 @@ class Didar_File_Service {
 		if ( ! $post || Didar_Post_Type::POST_TYPE !== $post->post_type ) {
 			return;
 		}
+		$wpdb->delete( self::references_table_name(), array( 'submission_id' => absint( $post_id ) ), array( '%d' ) );
 		$table = self::table_name();
 		$ids   = $wpdb->get_col( $wpdb->prepare( "SELECT file_id FROM {$table} WHERE submission_id = %d", absint( $post_id ) ) );
 		foreach ( (array) $ids as $file_id ) {
@@ -592,7 +781,9 @@ class Didar_File_Service {
 
 		$allowed_mimes = isset( $field['upload_mimes'] ) ? (array) $field['upload_mimes'] : array();
 		$checked       = wp_check_filetype_and_ext( $file['tmp_name'], $file['name'], $allowed_mimes );
-		if ( empty( $checked['ext'] ) || empty( $checked['type'] ) || ! in_array( $checked['type'], array_values( $allowed_mimes ), true ) ) {
+		$actual_mime   = function_exists( 'wp_get_image_mime' ) ? wp_get_image_mime( $file['tmp_name'] ) : false;
+		$allowed_types = array( 'image/jpeg', 'image/png', 'image/webp' );
+		if ( empty( $checked['ext'] ) || empty( $checked['type'] ) || ! in_array( $checked['type'], $allowed_types, true ) || ! in_array( $actual_mime, $allowed_types, true ) ) {
 			return new WP_Error( 'file_type', __( 'نوع یا پسوند فایل مجاز نیست.', 'didar' ) );
 		}
 
@@ -611,6 +802,10 @@ class Didar_File_Service {
 	}
 
 	private function get_file_field( $form_type, $field_key ) {
+		if ( 'profile' === sanitize_key( $form_type ) ) {
+			$definition = Didar_Profile_Document_Catalog::definition( $field_key );
+			if ( $definition ) { $definition['form_type'] = 'profile'; return $definition; }
+		}
 		$fields = $this->registry->fields( sanitize_key( $form_type ) );
 		if ( isset( $fields[ $field_key ] ) && 'file' === $fields[ $field_key ]['type'] ) { return $fields[ $field_key ]; }
 		$parts = explode( '.', (string) $field_key );
@@ -739,6 +934,13 @@ class Didar_File_Service {
 			)
 		);
 
+		return $table_name === $found_table;
+	}
+
+	private static function references_table_exists() {
+		global $wpdb;
+		$table_name = self::references_table_name();
+		$found_table = $wpdb->get_var( $wpdb->prepare( 'SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s', $table_name ) );
 		return $table_name === $found_table;
 	}
 

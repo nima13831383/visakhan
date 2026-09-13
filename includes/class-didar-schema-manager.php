@@ -99,6 +99,7 @@ class Didar_Schema_Manager {
 		return array(
 			Didar_Event_Log::table_name(),
 			Didar_File_Service::table_name(),
+			Didar_File_Service::references_table_name(),
 		);
 	}
 

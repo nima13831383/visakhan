@@ -11,13 +11,15 @@ class Didar_User_Profile {
 	private $sync;
 	private $logger;
 	private $mapper;
+	private $files;
 
-	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings, Didar_Sync_Manager $sync, Didar_Logger $logger = null ) {
+	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings, Didar_Sync_Manager $sync, Didar_Logger $logger = null, Didar_File_Service $files = null ) {
 		$this->registry = $registry;
 		$this->settings = $settings;
 		$this->sync     = $sync;
 		$this->logger   = $logger ? $logger : new Didar_Logger();
 		$this->mapper   = new Didar_Field_Mapper( $registry, $settings, null, $this->logger );
+		$this->files    = $files;
 		add_shortcode( 'didar_profile_form', array( $this, 'shortcode' ) );
 	}
 
@@ -29,6 +31,7 @@ class Didar_User_Profile {
 		}
 
 		wp_enqueue_script( 'didar-user-profile', DIDAR_URL . 'assets/js/user-profile.js', array(), DIDAR_VERSION, true );
+		wp_localize_script( 'didar-user-profile', 'didarProfileConfig', array( 'ajaxUrl' => admin_url( 'admin-ajax.php' ), 'uploadNonce' => wp_create_nonce( 'didar_profile_document_upload' ), 'removeNonce' => wp_create_nonce( 'didar_profile_document_remove' ), 'messages' => array( 'uploading' => 'در حال بارگذاری…', 'uploaded' => 'فایل با موفقیت بارگذاری شد.', 'removed' => 'فایل حذف شد.' ) ) );
 		wp_enqueue_script( 'didar-form-input-rules', DIDAR_URL . 'assets/js/form-input-rules.js', array(), DIDAR_VERSION, true );
 		wp_enqueue_script( 'didar-jalali-datepicker', DIDAR_URL . 'assets/js/jalali-datepicker.js', array(), DIDAR_VERSION, true );
 		$user    = wp_get_current_user();
@@ -72,10 +75,36 @@ class Didar_User_Profile {
 		$this->text_field( 'national_id', 'کد ملی', $profile['national_id'], 'text' );
 		$this->text_field( 'mobile', 'شماره تلفن', $profile['mobile'], 'tel' );
 		$this->text_field( 'email', 'ایمیل', $profile['email'], 'email' );
-		echo '</div></div>';
-		echo '<div class="didar-actions"><button type="submit" class="didar-submit"><span>ذخیره تغییرات</span><span class="didar-spinner" aria-hidden="true"></span></button></div>';
+		 echo '</div></div>';
+		$this->profile_documents( $user->ID );
+		 echo '<div class="didar-actions"><button type="submit" class="didar-submit"><span>ذخیره تغییرات</span><span class="didar-spinner" aria-hidden="true"></span></button></div>';
 		echo '</form></div>';
 		return ob_get_clean();
+	}
+
+	private function profile_documents( $user_id ) {
+		if ( ! $this->files ) { return; }
+		$documents = Didar_Profile_Document_Catalog::get_user_documents( $user_id );
+		echo '<section class="didar-profile-documents" aria-labelledby="didar-profile-documents-title"><h3 id="didar-profile-documents-title">مدارک تصویری</h3><div class="didar-grid">';
+		foreach ( Didar_Profile_Document_Catalog::definitions() as $key => $definition ) {
+			$definition = Didar_Profile_Document_Catalog::definition( $key );
+			$file_id = absint( $documents[ $key ] ?? 0 ); $file = $file_id ? $this->files->get_display_data( $file_id, 0, '', true ) : null;
+			echo '<div class="didar-profile-document" data-didar-profile-document data-profile-field="' . esc_attr( $key ) . '"><label class="didar-label" for="didar-profile-document-' . esc_attr( $key ) . '">' . esc_html( $definition['label'] ) . '</label>';
+			echo '<div class="didar-file-upload" data-didar-upload data-didar-profile-upload data-form-type="profile" data-field="' . esc_attr( $key ) . '" data-max-files="' . esc_attr( $definition['max_files'] ) . '" data-max-size="' . esc_attr( $definition['max_size'] ) . '" data-required="0" data-input-name=""><div class="didar-file-picker"><input type="file" id="didar-profile-document-' . esc_attr( $key ) . '" accept="' . esc_attr( $definition['accept'] ) . '"></div><ul class="didar-uploaded-files" aria-live="polite">';
+		if ( $file ) {
+			echo '<li class="didar-upload-item is-success" data-didar-file="' . esc_attr( $file_id ) . '" data-didar-upload-state="success">';
+			if ( $file['download_url'] ) {
+				echo '<img class="didar-upload-thumb" src="' . esc_url( $file['download_url'] ) . '" alt="" loading="lazy">';
+			}
+			echo '<span class="didar-upload-item__content"><span class="didar-upload-item-name">' . esc_html( $file['file_name'] ) . '</span><span class="didar-upload-item-status" role="status" aria-live="polite">✓ بارگذاری شد</span></span><span class="didar-file-actions">';
+			if ( $file['download_url'] ) {
+				echo '<a class="didar-download-file" href="' . esc_url( $file['download_url'] ) . '">دانلود</a>';
+			}
+			echo '<button type="button" class="didar-remove-upload" data-file-id="' . esc_attr( $file_id ) . '">حذف</button></span></li>';
+		}
+		echo '</ul><div class="didar-upload-preview" aria-live="polite"></div></div></div>';
+		}
+		echo '</div></section>';
 	}
 
 	private function profile_image_area( $user, $url ) {
@@ -97,7 +126,7 @@ class Didar_User_Profile {
 		}
 		echo '</div>';
 		if ( 'editable' === $state ) {
-			echo '<input id="didar-profile-image" class="screen-reader-text" type="file" name="didar_profile_image" accept="image/jpeg,image/png,image/gif,image/webp">';
+			echo '<input id="didar-profile-image" class="screen-reader-text" type="file" name="didar_profile_image" accept="image/jpeg,image/png,image/webp">';
 			echo '<label class="didar-profile-image-picker" for="didar-profile-image">تغییر تصویر</label>';
 		}
 		echo '</div>';
@@ -243,13 +272,13 @@ class Didar_User_Profile {
 		$file = $_FILES['didar_profile_image'];
 		if ( ! is_array( $file ) || UPLOAD_ERR_NO_FILE === (int) ( $file['error'] ?? UPLOAD_ERR_NO_FILE ) ) { return true; }
 		if ( UPLOAD_ERR_OK !== (int) $file['error'] || (int) $file['size'] > 5 * MB_IN_BYTES ) { return new WP_Error( 'didar_profile_image_invalid', 'بارگذاری تصویر ناموفق بود یا حجم آن بیش از ۵ مگابایت است.' ); }
-		$allowed = array( 'image/jpeg', 'image/png', 'image/gif', 'image/webp' );
+		$allowed = array( 'image/jpeg', 'image/png', 'image/webp' );
 		$type    = wp_check_filetype_and_ext( $file['tmp_name'], $file['name'] );
-		if ( empty( $type['type'] ) || ! in_array( $type['type'], $allowed, true ) ) { return new WP_Error( 'didar_profile_image_type', 'فقط تصویرهای JPG، PNG، GIF یا WebP مجاز هستند.' ); }
+		if ( empty( $type['type'] ) || ! in_array( $type['type'], $allowed, true ) ) { return new WP_Error( 'didar_profile_image_type', 'فقط تصویرهای JPG، PNG یا WebP مجاز هستند.' ); }
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		require_once ABSPATH . 'wp-admin/includes/image.php';
 		require_once ABSPATH . 'wp-admin/includes/media.php';
-		$attachment_id = media_handle_upload( 'didar_profile_image', 0, array( 'post_author' => absint( $user_id ) ), array( 'test_form' => false, 'mimes' => array( 'jpg|jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp' ) ) );
+		$attachment_id = media_handle_upload( 'didar_profile_image', 0, array( 'post_author' => absint( $user_id ) ), array( 'test_form' => false, 'mimes' => array( 'jpg|jpeg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp' ) ) );
 		if ( is_wp_error( $attachment_id ) ) { return new WP_Error( 'didar_profile_image_upload', 'تصویر پروفایل ذخیره نشد.' ); }
 		update_user_meta( $user_id, 'profile_image', absint( $attachment_id ) );
 		return true;

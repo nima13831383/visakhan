@@ -62,10 +62,10 @@ class Didar_Field_Mapper {
 	/** Return account/profile identity data, with Digits' canonical mobile metadata first. */
 	public function wordpress_user_profile( $user ) {
 		if ( ! $user || empty( $user->ID ) ) {
-			return array( 'first_name' => '', 'last_name' => '', 'nickname' => '', 'display_name' => '', 'email' => '', 'mobile' => '', 'gender' => '', 'birth_date' => '', 'national_id' => '', 'profile_image_url' => '' );
+			return array_merge( array( 'first_name' => '', 'last_name' => '', 'nickname' => '', 'display_name' => '', 'email' => '', 'mobile' => '', 'gender' => '', 'birth_date' => '', 'national_id' => '', 'profile_image_url' => '' ), array_fill_keys( Didar_Profile_Document_Catalog::keys(), array() ) );
 		}
 
-		return array(
+		$profile = array(
 			// Digits' WooCommerce integration stores name fields under these
 			// billing keys in some registration flows. WordPress remains
 			// canonical, so those values are read only when the WP field is empty.
@@ -80,6 +80,8 @@ class Didar_Field_Mapper {
 			'national_id' => sanitize_text_field( (string) get_user_meta( $user->ID, Didar_User_Profile_Value_Catalog::NATIONAL_ID_META, true ) ),
 			'profile_image_url' => $this->profile_image_url( $user->ID ),
 		);
+		foreach ( Didar_Profile_Document_Catalog::get_user_documents( $user->ID ) as $key => $file_id ) { $profile[ $key ] = $file_id ? array( $file_id ) : array(); }
+		return $profile;
 	}
 
 	/** Prefer canonical WordPress name metadata over the installed Digits/WooCommerce fallback. */
@@ -232,14 +234,21 @@ class Didar_Field_Mapper {
 
 	/** Serialize one Visa companion row using the same safe file/value rules as Deal fields. */
 	public function companion_case_fields( $form_type, $row, $row_index, $post_id = 0, $mappings = array() ) {
+		return $this->case_fields( $form_type, $row, $post_id, $mappings, $row_index );
+	}
+
+	/** Serialize either a companion row or the main applicant through the same Case mapping rules. */
+	public function case_fields( $form_type, $row, $post_id = 0, $mappings = array(), $row_index = null ) {
 		$out = array();
 		$definitions = $this->registry->fields( $form_type );
 		$columns = isset( $definitions['companions']['columns'] ) ? $definitions['companions']['columns'] : array();
 		foreach ( (array) $mappings as $source_key => $target_key ) {
 			$source_key = sanitize_key( $source_key ); $target_key = sanitize_text_field( (string) $target_key );
-			if ( ! $source_key || ! $target_key || ! array_key_exists( $source_key, $row ) || ! isset( $columns[ $source_key ] ) ) continue;
+			$definition = isset( $columns[ $source_key ] ) ? $columns[ $source_key ] : ( $definitions[ $source_key ] ?? array() );
+			if ( ! $source_key || ! $target_key || ! array_key_exists( $source_key, $row ) || ! $definition ) continue;
 			$value = $row[ $source_key ];
-			$out[ $target_key ] = $this->serializer->serialize( $form_type, 'companions.' . absint( $row_index ) . '.' . $source_key, $columns[ $source_key ], $value, $post_id );
+			$serializer_key = null === $row_index ? $source_key : 'companions.' . absint( $row_index ) . '.' . $source_key;
+			$out[ $target_key ] = $this->serializer->serialize( $form_type, $serializer_key, $definition, $value, $post_id );
 		}
 		return $out;
 	}

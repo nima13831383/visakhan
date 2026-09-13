@@ -59,6 +59,7 @@ class Didar_Admin {
 		add_action( 'admin_post_didar_settings_export', array( $this, 'settings_export' ) );
 		add_action( 'admin_post_didar_settings_import_preview', array( $this, 'settings_import_preview' ) );
 		add_action( 'admin_post_didar_settings_import_apply', array( $this, 'settings_import_apply' ) );
+		add_action( 'admin_post_didar_save_case_settings', array( $this, 'save_case_settings' ) );
 		add_action( 'admin_post_didar_rotate_webhook_secret', array( $this, 'rotate_webhook_secret' ) );
 	}
 
@@ -138,6 +139,9 @@ class Didar_Admin {
 			array( 'key' => 'edit_page_id', 'shortcode' => '[didar_submission_edit]' )
 		);
 
+		add_settings_section( 'didar_form_access', __( 'لینک و بارکد فرم‌های دیدار', 'didar' ), array( $this, 'render_form_access_description' ), 'didar-page-settings' );
+		add_settings_field( 'didar_form_access_settings', __( 'دسترسی فرم‌ها', 'didar' ), array( $this, 'render_form_access_settings' ), 'didar-page-settings', 'didar_form_access' );
+
 		add_settings_section(
 			'didar_behavior_settings',
 			__( 'تنظیمات دسترسی و فهرست درخواست‌ها', 'didar' ),
@@ -176,6 +180,8 @@ class Didar_Admin {
 			'didar-page-settings',
 			'didar_file_settings'
 		);
+		add_settings_section( 'didar_pdf_settings', __( 'تنظیمات چاپ درخواست', 'didar' ), '__return_false', 'didar-page-settings' );
+		add_settings_field( 'didar_pdf_print_texts', __( 'متن دکمه‌های چاپ', 'didar' ), array( $this, 'render_pdf_print_texts' ), 'didar-page-settings', 'didar_pdf_settings' );
 
 		add_settings_section( 'didar_form_field_settings', __( 'تنظیمات فیلدهای فرم‌ها', 'didar' ), array( $this, 'render_form_field_settings_description' ), 'didar-page-settings' );
 		add_settings_field( 'didar_form_field_settings_table', __( 'تنظیمات فیلدها', 'didar' ), array( $this, 'render_form_field_settings' ), 'didar-page-settings', 'didar_form_field_settings' );
@@ -196,9 +202,6 @@ class Didar_Admin {
 		add_settings_section( 'didar_form_default_assignees_section', __( 'مسئول پیش‌فرض فرم‌ها', 'didar' ), '__return_false', 'didar-page-settings' );
 		add_settings_field( 'didar_form_default_assignees', __( 'مسئول پیش‌فرض فرم‌ها', 'didar' ), array( $this, 'render_form_default_assignees' ), 'didar-page-settings', 'didar_form_default_assignees_section' );
 		add_settings_field( 'didar_public_status_field_id', __( 'Custom Field وضعیت عمومی Deal', 'didar' ), array( $this, 'render_didar_text_setting' ), 'didar-page-settings', 'didar_crm_workflow', array( 'key' => 'didar_public_status_field_id', 'description' => 'اختیاری؛ برای Public Status است، نه Pipeline Stage.' ) );
-		add_settings_section( 'didar_case_companions', 'تنظیمات کارت‌های همراهان درخواست ویزا', '__return_false', 'didar-page-settings' );
-		add_settings_field( 'didar_case_companion_settings', 'نگاشت Case همراهان', array( $this, 'render_case_companion_settings' ), 'didar-page-settings', 'didar_case_companions' );
-
 	}
 
 	public function settings_capability() {
@@ -219,6 +222,12 @@ class Didar_Admin {
 		$output['frontend_requests_per_page'] = min( Didar_Settings::MAX_REQUESTS_PER_PAGE, max( Didar_Settings::MIN_REQUESTS_PER_PAGE, $per_page ) );
 		$download_mode = isset( $input['file_download_mode'] ) && ! is_array( $input['file_download_mode'] ) ? sanitize_key( wp_unslash( $input['file_download_mode'] ) ) : Didar_Settings::DEFAULT_FILE_DOWNLOAD_MODE;
 		$output['file_download_mode'] = in_array( $download_mode, array( 'secure', 'direct' ), true ) ? $download_mode : Didar_Settings::DEFAULT_FILE_DOWNLOAD_MODE;
+		$current_pdf = isset( $current['pdf_settings'] ) && is_array( $current['pdf_settings'] ) ? $current['pdf_settings'] : array();
+		$submitted_pdf = isset( $input['pdf_settings'] ) && is_array( $input['pdf_settings'] ) ? $input['pdf_settings'] : $current_pdf;
+		$output['pdf_settings'] = Didar_Settings::normalize_pdf_settings( $submitted_pdf );
+		$current_form_access = isset( $current['didar_form_access'] ) && is_array( $current['didar_form_access'] ) ? $current['didar_form_access'] : array();
+		$submitted_form_access = isset( $input['didar_form_access'] ) && is_array( $input['didar_form_access'] ) ? $input['didar_form_access'] : $current_form_access;
+		$output['didar_form_access'] = $this->sanitize_form_access_settings( $submitted_form_access, $current_form_access );
 
 		$submitted_overrides = isset( $input['field_required_overrides'] ) && is_array( $input['field_required_overrides'] ) ? $input['field_required_overrides'] : array();
 		$clean_overrides     = array();
@@ -308,8 +317,10 @@ class Didar_Admin {
 			foreach ( $this->registry->fields( $form_type ) as $field_key => $field ) {
 				if ( ! array_key_exists( $field_key, $submitted_profile_defaults[ $form_type ] ?? array() ) ) { continue; }
 				$source = $submitted_profile_defaults[ $form_type ][ $field_key ];
-				if ( is_scalar( $source ) && '' === sanitize_key( $source ) ) { unset( $output['didar_form_field_defaults'][ $form_type ][ $field_key ] ); }
-				elseif ( is_scalar( $source ) && in_array( sanitize_key( $source ), $profile_catalog->keys(), true ) ) { $output['didar_form_field_defaults'][ $form_type ][ $field_key ] = sanitize_key( $source ); }
+				$candidate = is_scalar( $source ) ? sanitize_key( $source ) : '';
+				if ( '' === $candidate ) { unset( $output['didar_form_field_defaults'][ $form_type ][ $field_key ] ); }
+				elseif ( ! empty( $field['default_value_options'] ) && isset( $field['options'][ $candidate ] ) ) { $output['didar_form_field_defaults'][ $form_type ][ $field_key ] = $candidate; }
+				elseif ( in_array( $candidate, $profile_catalog->keys(), true ) ) { $output['didar_form_field_defaults'][ $form_type ][ $field_key ] = $candidate; }
 			}
 		}
 		$output['didar_field_mappings'] = isset( $current['didar_field_mappings'] ) && is_array( $current['didar_field_mappings'] ) ? $current['didar_field_mappings'] : array();
@@ -317,7 +328,10 @@ class Didar_Admin {
 		$targets = array( 'person_native', 'person_custom', 'deal_native', 'deal_custom' );
 		foreach ( $this->registry->all() as $form_type => $form ) { foreach ( $this->registry->fields( $form_type ) as $field_key => $field ) { if ( ! empty( $field['internal'] ) || 'honeypot' === $field['type'] || ! array_key_exists( $field_key, $submitted_mappings[ $form_type ] ?? array() ) ) { continue; } $raw = is_array( $submitted_mappings[ $form_type ][ $field_key ] ) ? $submitted_mappings[ $form_type ][ $field_key ] : array(); $target = isset( $raw['target'] ) && in_array( sanitize_key( $raw['target'] ), $targets, true ) ? sanitize_key( $raw['target'] ) : ''; $field_name = isset( $raw['field'] ) && is_scalar( $raw['field'] ) ? sanitize_text_field( wp_unslash( $raw['field'] ) ) : ''; if ( ! $target || ! $field_name ) { unset( $output['didar_field_mappings'][ $form_type ][ $field_key ] ); continue; } if ( 'deal_custom' === $target ) { $pipeline_id = $output['didar_form_workflows'][ $form_type ]['pipeline_id'] ?? ( $this->workflow->workflow( $form_type )['pipeline_id'] ?? '' ); $metadata = $this->workflow->custom_field( $field_name ); $valid = $pipeline_id && Didar_Custom_Field_Catalog::is_deal_field( $metadata ) && $this->workflow->custom_field_available_for_pipeline( $metadata, $pipeline_id ); if ( ! $valid ) { $current_map = $current['didar_field_mappings'][ $form_type ][ $field_key ] ?? array(); if ( is_array( $current_map ) && ( $current_map['field'] ?? '' ) === $field_name && ( $current_map['target'] ?? '' ) === $target ) { $output['didar_field_mappings'][ $form_type ][ $field_key ] = $current_map; } add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_custom_field_' . $form_type . '_' . $field_key, __( 'فیلد انتخاب‌شده در کاریز فعلی قابل استفاده نیست و ذخیره نشد.', 'didar' ), 'error' ); $this->logger->log( 'WARNING', 'didar_custom_field_mapping_invalid', 'Rejected invalid Deal Custom Field mapping.', array( 'form_type' => $form_type, 'field_key' => $field_key, 'custom_field_key' => $field_name, 'custom_field_id' => $metadata['id'] ?? '', 'pipeline_id' => $pipeline_id ) ); $this->logger->log( 'WARNING', 'didar_custom_field_pipeline_mismatch', 'Deal Custom Field is unavailable for the selected pipeline.', array( 'form_type' => $form_type, 'field_key' => $field_key, 'custom_field_key' => $field_name, 'pipeline_id' => $pipeline_id ) ); continue; } } $output['didar_field_mappings'][ $form_type ][ $field_key ] = array( 'target' => $target, 'field' => $field_name ); } }
 		foreach ( (array) ( $current['didar_field_mappings'] ?? array() ) as $form_type => $maps ) { foreach ( (array) $maps as $field_key => $map ) { if ( is_array( $map ) && in_array( $map['target'] ?? '', array( 'person_native', 'person_custom', 'deal_native' ), true ) && ! isset( $output['didar_field_mappings'][ $form_type ][ $field_key ] ) ) { $output['didar_field_mappings'][ $form_type ][ $field_key ] = $map; } } }
-		foreach ( array( 'embassy_appointment', 'traveler_evaluation', 'visa_request' ) as $applicant_note_form ) {
+		foreach ( $this->registry->all() as $applicant_note_form => $form ) {
+			if ( ! $this->registry->supports_applicant_note( $applicant_note_form ) ) {
+				continue;
+			}
 			$raw = $submitted_mappings[ $applicant_note_form ]['applicant_note'] ?? array();
 			$raw = is_array( $raw ) ? $raw : array();
 			$field_name = isset( $raw['field'] ) && is_scalar( $raw['field'] ) ? sanitize_text_field( wp_unslash( $raw['field'] ) ) : '';
@@ -329,19 +343,28 @@ class Didar_Admin {
 				unset( $output['didar_field_mappings'][ $applicant_note_form ]['applicant_note'] );
 			}
 		}
-		foreach ( array( 'consultation', 'complaint_suggestion' ) as $unsupported_form ) {
-			unset( $output['didar_field_mappings'][ $unsupported_form ]['applicant_note'] );
-		}
 		// Case settings are an independent namespace; invalid posted IDs never replace valid saved IDs.
 		$old_case = isset( $current['visa_companion_case_settings'] ) && is_array( $current['visa_companion_case_settings'] ) ? $current['visa_companion_case_settings'] : array();
+		$old_case_forms = isset( $current['case_form_settings'] ) && is_array( $current['case_form_settings'] ) ? $current['case_form_settings'] : array();
+		if ( ! array_key_exists( 'visa_companion_case_settings', $input ) && ! array_key_exists( 'case_form_settings', $input ) ) {
+			$output['visa_companion_case_settings'] = $old_case;
+			$output['case_form_settings']           = $old_case_forms;
+		} else {
 		$posted_case = isset( $input['visa_companion_case_settings'] ) && is_array( $input['visa_companion_case_settings'] ) ? $input['visa_companion_case_settings'] : array();
 		$case = array( 'pipeline_id' => sanitize_text_field( (string) ( $posted_case['pipeline_id'] ?? '' ) ), 'initial_stage_id' => sanitize_text_field( (string) ( $posted_case['initial_stage_id'] ?? '' ) ), 'category_id' => sanitize_text_field( (string) ( $posted_case['category_id'] ?? '' ) ), 'field_mappings' => array(), 'system_fields' => array() );
 		if ( ! $case['pipeline_id'] || ! $this->case_service->pipeline( $case['pipeline_id'] ) || ! $case['initial_stage_id'] || ! $this->case_service->valid_stage( $case['pipeline_id'], $case['initial_stage_id'] ) ) { $case['pipeline_id'] = $old_case['pipeline_id'] ?? ''; $case['initial_stage_id'] = $old_case['initial_stage_id'] ?? ''; if ( $case['pipeline_id'] && ! $this->case_service->valid_stage( $case['pipeline_id'], $case['initial_stage_id'] ) ) { $case['initial_stage_id'] = ''; } add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_case_stage', 'کاریز یا مرحله Case معتبر نیست؛ تنظیم قبلی حفظ شد.', 'error' ); }
 		$columns = $this->registry->fields( 'visa_request' )['companions']['columns'] ?? array();
 		$case_targets = array(); foreach ( (array) ( $posted_case['field_mappings'] ?? array() ) as $source => $target ) { $source = sanitize_key( $source ); $target = is_scalar( $target ) ? sanitize_text_field( wp_unslash( $target ) ) : ''; $metadata = $this->case_service->case_field( $target ); if ( isset( $columns[ $source ] ) && Didar_Case_Service::is_case_field( $metadata ) && ! in_array( $target, $case_targets, true ) ) { $case['field_mappings'][ $source ] = $target; $case_targets[] = $target; } }
+		$case['main_field_mappings'] = array();
+		foreach ( (array) ( $posted_case['main_field_mappings'] ?? array() ) as $source => $target ) { $source = sanitize_key( $source ); $target = is_scalar( $target ) ? sanitize_text_field( wp_unslash( $target ) ) : ''; $metadata = $this->case_service->case_field( $target ); if ( $source && $target && Didar_Case_Service::is_case_field( $metadata ) && ! in_array( $target, $case_targets, true ) ) { $case['main_field_mappings'][ $source ] = $target; $case_targets[] = $target; } }
 		$system_targets = array(); foreach ( array( 'submission_id', 'companion_uid', 'form_type' ) as $system_key ) { $target = is_scalar( $posted_case['system_fields'][ $system_key ] ?? null ) ? sanitize_text_field( wp_unslash( $posted_case['system_fields'][ $system_key ] ) ) : ''; if ( $target && Didar_Case_Service::is_case_field( $this->case_service->case_field( $target ) ) && ! in_array( $target, $system_targets, true ) ) { $case['system_fields'][ $system_key ] = $target; $system_targets[] = $target; } }
 		if ( ! array_key_exists( 'category_id', $posted_case ) ) $case['category_id'] = sanitize_text_field( (string) ( $old_case['category_id'] ?? '' ) );
 		$output['visa_companion_case_settings'] = $case;
+		$posted_case_forms = isset( $input['case_form_settings'] ) && is_array( $input['case_form_settings'] ) ? $input['case_form_settings'] : array();
+		$output['case_form_settings'] = $old_case_forms;
+		if ( isset( $posted_case_forms['embassy_appointment'] ) && is_array( $posted_case_forms['embassy_appointment'] ) ) { $output['case_form_settings']['embassy_appointment'] = $this->sanitize_case_form_config( 'embassy_appointment', $posted_case_forms['embassy_appointment'], $old_case_forms['embassy_appointment'] ?? array() ); }
+		$output['case_form_settings']['visa_request'] = $case;
+		}
 		$protection = $this->files->sync_storage_protection( $output['file_download_mode'] );
 		if ( is_wp_error( $protection ) ) {
 			$output['file_download_mode'] = Didar_Settings::DEFAULT_FILE_DOWNLOAD_MODE;
@@ -349,6 +372,62 @@ class Didar_Admin {
 		}
 
 		return $output;
+	}
+
+	private function sanitize_form_access_settings( $submitted, $current ) {
+		$out = array();
+		foreach ( $this->registry->all() as $form_type => $form ) {
+			$raw = isset( $submitted[ $form_type ] ) && is_array( $submitted[ $form_type ] ) ? $submitted[ $form_type ] : array();
+			$old = isset( $current[ $form_type ] ) && is_array( $current[ $form_type ] ) ? Didar_Form_Access::normalize_entry( $current[ $form_type ] ) : array( 'url' => '', 'barcode' => '' );
+			$url = array_key_exists( 'url', $raw ) ? Didar_Form_Access::sanitize_url( $raw['url'] ) : $old['url'];
+			$raw_url = array_key_exists( 'url', $raw ) && is_scalar( $raw['url'] ) ? trim( (string) wp_unslash( $raw['url'] ) ) : '';
+			if ( '' !== $raw_url && ! $url ) {
+				$url = $old['url'];
+				add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_form_access_url_' . $form_type, sprintf( __( 'نشانی فرم دیدار برای «%s» معتبر نیست و مقدار قبلی حفظ شد.', 'didar' ), $form['label'] ), 'error' );
+			}
+
+			$barcode = array_key_exists( 'barcode', $raw ) ? Didar_Form_Access::sanitize_image_url( $raw['barcode'] ) : $old['barcode'];
+			$raw_barcode = array_key_exists( 'barcode', $raw ) && is_scalar( $raw['barcode'] ) ? trim( (string) wp_unslash( $raw['barcode'] ) ) : '';
+			$attachment_id = absint( $raw['barcode_attachment_id'] ?? 0 );
+			if ( $attachment_id ) {
+				$attachment_url = Didar_Form_Access::attachment_image_url( $attachment_id );
+				if ( $attachment_url ) {
+					$barcode = $attachment_url;
+				} else {
+					$barcode = $old['barcode'];
+					add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_form_access_barcode_' . $form_type, sprintf( __( 'تصویر بارکد برای «%s» باید JPG، PNG یا WebP و حداکثر ۵ مگابایت باشد؛ مقدار قبلی حفظ شد.', 'didar' ), $form['label'] ), 'error' );
+				}
+			} elseif ( '' !== $raw_barcode && ! $barcode ) {
+				$barcode = $old['barcode'];
+				add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_form_access_barcode_url_' . $form_type, sprintf( __( 'نشانی تصویر بارکد برای «%s» معتبر نیست و مقدار قبلی حفظ شد.', 'didar' ), $form['label'] ), 'error' );
+			}
+			$out[ $form_type ] = array( 'url' => $url, 'barcode' => $barcode );
+		}
+		return $out;
+	}
+
+	public function render_form_access_description() {
+		echo '<p>' . esc_html__( 'نشانی عمومی فرم و تصویر بارکد را برای هر فرم وارد کنید. تصویر انتخاب‌شده از کتابخانه رسانه در تنظیمات فقط به‌صورت نشانی عمومی ذخیره می‌شود.', 'didar' ) . '</p>';
+	}
+
+	public function render_form_access_settings() {
+		$settings = $this->settings->all();
+		$access   = isset( $settings['didar_form_access'] ) && is_array( $settings['didar_form_access'] ) ? $settings['didar_form_access'] : array();
+		echo '<div class="didar-form-access-settings">';
+		foreach ( $this->registry->all() as $form_type => $form ) {
+			$item = Didar_Form_Access::normalize_entry( $access[ $form_type ] ?? array() );
+			$base = Didar_Settings::OPTION_NAME . '[didar_form_access][' . $form_type . ']';
+			echo '<div class="didar-form-access-row"><h3>' . esc_html( $form['label'] ) . ' <code>' . esc_html( $form_type ) . '</code></h3>';
+			echo '<label><span>' . esc_html__( 'نشانی فرم دیدار', 'didar' ) . '</span><input type="url" class="regular-text" name="' . esc_attr( $base . '[url]' ) . '" value="' . esc_attr( $item['url'] ) . '" placeholder="https://" inputmode="url"></label>';
+			echo '<label><span>' . esc_html__( 'تصویر QR / بارکد', 'didar' ) . '</span><span class="didar-form-access-media"><input type="url" class="regular-text didar-form-access-barcode" data-didar-form-access-barcode name="' . esc_attr( $base . '[barcode]' ) . '" value="' . esc_attr( $item['barcode'] ) . '" placeholder="https://.../barcode.png" inputmode="url"><input type="hidden" data-didar-form-access-attachment name="' . esc_attr( $base . '[barcode_attachment_id]' ) . '" value=""><button type="button" class="button didar-form-access-select">' . esc_html__( 'انتخاب از رسانه', 'didar' ) . '</button><button type="button" class="button-link-delete didar-form-access-remove">' . esc_html__( 'حذف', 'didar' ) . '</button></span></label>';
+			if ( $item['barcode'] ) {
+				echo '<img class="didar-form-access-preview" data-didar-form-access-preview src="' . esc_url( $item['barcode'] ) . '" alt="' . esc_attr( sprintf( __( 'پیش‌نمایش بارکد %s', 'didar' ), $form['label'] ) ) . '">';
+			} else {
+				echo '<img class="didar-form-access-preview" data-didar-form-access-preview alt="" hidden>';
+			}
+			echo '<p class="description">' . esc_html__( 'JPG، PNG و WebP تا ۵ مگابایت. می‌توانید نشانی تصویر میزبانی‌شده یا تصویر کتابخانه رسانه را استفاده کنید.', 'didar' ) . '</p></div>';
+		}
+		echo '</div>';
 	}
 
 	public function render_profile_settings_description() {
@@ -521,6 +600,13 @@ class Didar_Admin {
 		echo '</fieldset>';
 	}
 
+	public function render_pdf_print_texts() {
+		echo '<div class="didar-pdf-print-settings" dir="rtl">';
+		echo '<p><label for="didar-pdf-print-with-files"><strong>' . esc_html__( 'متن دکمه چاپ همراه فایل‌ها', 'didar' ) . '</strong></label><br><input id="didar-pdf-print-with-files" type="text" class="regular-text" name="' . esc_attr( Didar_Settings::OPTION_NAME . '[pdf_settings][print_with_files_text]' ) . '" value="' . esc_attr( $this->settings->pdf_print_with_files_text() ) . '"></p>';
+		echo '<p><label for="didar-pdf-print-without-files"><strong>' . esc_html__( 'متن دکمه چاپ بدون فایل‌ها', 'didar' ) . '</strong></label><br><input id="didar-pdf-print-without-files" type="text" class="regular-text" name="' . esc_attr( Didar_Settings::OPTION_NAME . '[pdf_settings][print_without_files_text]' ) . '" value="' . esc_attr( $this->settings->pdf_print_without_files_text() ) . '"></p>';
+		echo '<p class="description">' . esc_html__( 'اگر مقدار خالی باشد، متن پیش‌فرض فارسی استفاده می‌شود.', 'didar' ) . '</p></div>';
+	}
+
 	public function render_requirement_settings_description() {
 		echo '<p>' . esc_html__( 'فقط وضعیت ضروری بودن قابل تغییر است. «پیش‌فرض» همیشه از تعریف فعلی Form Registry استفاده می‌کند.', 'didar' ) . '</p>';
 	}
@@ -561,7 +647,8 @@ class Didar_Admin {
 				echo '<td data-label="' . esc_attr__( 'نگاشت Didar', 'didar' ) . '"><input type="hidden" name="' . esc_attr( $base . '[target]' ) . '" value="deal_custom">';
 				$this->render_custom_field_select( $base . '[field]', $map['field'], $pipeline_id ? array( $pipeline_id ) : array() );
 				echo '</td><td data-label="' . esc_attr__( 'مقدار پیش‌فرض', 'didar' ) . '"><select name="' . esc_attr( $default_name ) . '"><option value="">' . esc_html__( 'بدون مقدار پیش‌فرض', 'didar' ) . '</option>';
-				foreach ( $sources as $source_key => $source ) { echo '<option value="' . esc_attr( $source_key ) . '" ' . selected( $defaults[ $form_type ][ $field_key ] ?? '', $source_key, false ) . '>' . esc_html( $source['label'] ) . '</option>'; }
+				$default_options = ! empty( $field['default_value_options'] ) ? $field['options'] : $sources;
+				foreach ( $default_options as $source_key => $source ) { $label = is_array( $source ) ? ( $source['label'] ?? '' ) : $source; echo '<option value="' . esc_attr( $source_key ) . '" ' . selected( $defaults[ $form_type ][ $field_key ] ?? '', $source_key, false ) . '>' . esc_html( $label ) . '</option>'; }
 				echo '</select></td><td data-label="' . esc_attr__( 'Placeholder', 'didar' ) . '">';
 				if ( Didar_Form_Registry::supports_placeholder( $field ) ) {
 					echo '<input type="text" class="regular-text" name="' . esc_attr( $placeholder_name ) . '" value="' . esc_attr( $placeholders[ $form_type ][ $field_key ] ?? '' ) . '">';
@@ -615,8 +702,23 @@ class Didar_Admin {
 		do_settings_sections( 'didar-page-settings' );
 		submit_button( __( 'ذخیره تنظیمات', 'didar' ) );
 		echo '</form>';
+		$this->render_case_settings_form();
 		$this->render_settings_transfer_page();
 		echo '</div>';
+	}
+
+	private function render_case_settings_form() {
+		$saved = isset( $_GET['didar_case_settings'] ) && ! is_array( $_GET['didar_case_settings'] ) ? sanitize_key( wp_unslash( $_GET['didar_case_settings'] ) ) : '';
+		echo '<hr><section class="didar-case-settings"><h2>' . esc_html__( 'تنظیمات کارت‌های همراهان', 'didar' ) . '</h2><p class="description">نگاشت‌های Case در یک فرم مستقل ذخیره می‌شوند تا تنظیمات بزرگ دیگر در این ذخیره‌سازی دخالت نداشته باشند.</p>';
+		if ( 'saved' === $saved ) {
+			echo '<div class="notice notice-success inline"><p>' . esc_html__( 'تنظیمات Case ذخیره شد.', 'didar' ) . '</p></div>';
+		} elseif ( 'invalid' === $saved ) {
+			echo '<div class="notice notice-warning inline"><p>' . esc_html__( 'مرحله انتخاب‌شده برای کاریز فعلی معتبر نیست و پاک شد؛ کاریز معتبر ذخیره شده است.', 'didar' ) . '</p></div>';
+		}
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '"><input type="hidden" name="action" value="didar_save_case_settings">';
+		wp_nonce_field( 'didar_save_case_settings' );
+		$this->render_case_companion_settings( 'didar_case_settings' );
+		echo '</form></section>';
 	}
 
 	/** Admin coordinator only; parsing, validation and writes live in Didar_Settings_Transfer. */
@@ -648,6 +750,51 @@ class Didar_Admin {
 	}
 
 	public function settings_export() { $this->assert_transfer_request( 'didar_settings_export' ); $json = $this->settings_transfer->export_json(); nocache_headers(); header( 'Content-Type: application/json; charset=utf-8' ); header( 'Content-Disposition: attachment; filename="ns-didar-settings-' . gmdate( 'Y-m-d' ) . '.json"' ); echo $json; exit; }
+
+	/** Save the high-cardinality Case mapping section independently of the general settings form. */
+	public function save_case_settings() {
+		if ( ! current_user_can( 'didar_manage_settings' ) || ! check_admin_referer( 'didar_save_case_settings' ) ) {
+			wp_die( esc_html__( 'درخواست نامعتبر است.', 'didar' ), '', array( 'response' => 403 ) );
+		}
+		$current = get_option( Didar_Settings::OPTION_NAME, array() );
+		$current = is_array( $current ) ? $current : array();
+		$input   = isset( $_POST['didar_case_settings'] ) && is_array( $_POST['didar_case_settings'] ) ? wp_unslash( $_POST['didar_case_settings'] ) : array();
+		$scope = isset( $_POST['didar_case_save_scope'] ) && is_scalar( $_POST['didar_case_save_scope'] ) ? sanitize_key( wp_unslash( $_POST['didar_case_save_scope'] ) ) : 'all';
+		$scope = in_array( $scope, array( 'visa_request', 'embassy_appointment', 'all' ), true ) ? $scope : 'all';
+		$prepared = $this->prepare_case_settings_save( $current, $input, $scope );
+		update_option( Didar_Settings::OPTION_NAME, $prepared['settings'], false );
+		wp_safe_redirect( add_query_arg( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'page' => 'didar-page-settings', 'didar_case_settings' => $prepared['invalid'] ? 'invalid' : 'saved' ), admin_url( 'edit.php' ) ) );
+		exit;
+	}
+
+	/** Prepare only the Case sections present in the dedicated Case-settings form. */
+	protected function prepare_case_settings_save( $current, $input, $scope = 'all' ) {
+		$current = is_array( $current ) ? $current : array();
+		$input = is_array( $input ) ? $input : array();
+		$scope = in_array( $scope, array( 'visa_request', 'embassy_appointment', 'all' ), true ) ? $scope : 'all';
+		$has_visa = 'embassy_appointment' !== $scope && isset( $input['visa_companion_case_settings'] ) && is_array( $input['visa_companion_case_settings'] );
+		$has_embassy = 'visa_request' !== $scope && isset( $input['case_form_settings']['embassy_appointment'] ) && is_array( $input['case_form_settings']['embassy_appointment'] );
+		$invalid = false;
+
+		if ( $has_visa ) {
+			$clean = $this->sanitize_didar_settings( array( 'visa_companion_case_settings' => $input['visa_companion_case_settings'] ) );
+			if ( isset( $clean['visa_companion_case_settings'] ) && is_array( $clean['visa_companion_case_settings'] ) ) {
+				$current['visa_companion_case_settings'] = $clean['visa_companion_case_settings'];
+			}
+		}
+
+		if ( $has_embassy ) {
+			$posted_embassy = $input['case_form_settings']['embassy_appointment'];
+			$case_forms = isset( $current['case_form_settings'] ) && is_array( $current['case_form_settings'] ) ? $current['case_form_settings'] : array();
+			$old_embassy = isset( $case_forms['embassy_appointment'] ) && is_array( $case_forms['embassy_appointment'] ) ? $case_forms['embassy_appointment'] : array();
+			$state = $this->normalize_case_pipeline_and_stage( $posted_embassy, $old_embassy );
+			$case_forms['embassy_appointment'] = $this->sanitize_case_form_config( 'embassy_appointment', $posted_embassy, $old_embassy );
+			$current['case_form_settings'] = $case_forms;
+			$invalid = $invalid || $state['invalid'];
+		}
+
+		return array( 'settings' => $current, 'invalid' => $invalid );
+	}
 	public function settings_import_preview() { $this->assert_transfer_request( 'didar_settings_import_preview' ); if ( empty( $_FILES['didar_settings_file'] ) || ! is_array( $_FILES['didar_settings_file'] ) || UPLOAD_ERR_OK !== (int) $_FILES['didar_settings_file']['error'] ) { $this->transfer_redirect( 'error', 'فایل JSON معتبر انتخاب نشده است.' ); }
 		$file = $_FILES['didar_settings_file']; $name = sanitize_file_name( $file['name'] ?? '' ); if ( strtolower( pathinfo( $name, PATHINFO_EXTENSION ) ) !== 'json' || (int) $file['size'] > Didar_Settings_Transfer::MAX_BYTES || ! is_uploaded_file( $file['tmp_name'] ) ) { $this->transfer_redirect( 'error', 'فایل تنظیمات معتبر نیست یا حجم آن بیش از حد مجاز است.' ); }
 		$json = file_get_contents( $file['tmp_name'] ); @unlink( $file['tmp_name'] ); $parsed = $this->settings_transfer->parse_json( $json ); if ( is_wp_error( $parsed ) ) { $this->transfer_redirect( 'error', $parsed->get_error_message() ); }
@@ -806,7 +953,7 @@ class Didar_Admin {
 				echo '<p class="didar-activity-context">' . esc_html( sprintf( __( 'دسته مدرک: %s', 'didar' ), $context_label ) ) . '</p>';
 			}
 			if ( null !== $event['old_value'] || null !== $event['new_value'] ) {
-				echo '<div class="didar-activity-change"><span><b>' . esc_html__( 'مقدار قبلی:', 'didar' ) . '</b> ' . nl2br( esc_html( $this->service->format_event_value( $event['event_type'], $event['old_value'] ) ) ) . '</span><span><b>' . esc_html__( 'مقدار جدید:', 'didar' ) . '</b> ' . nl2br( esc_html( $this->service->format_event_value( $event['event_type'], $event['new_value'] ) ) ) . '</span></div>';
+				echo '<div class="didar-activity-change"><span><b>' . esc_html__( 'مقدار قبلی:', 'didar' ) . '</b> ' . nl2br( esc_html( $this->service->format_event_value( $event['event_type'], $event['old_value'], $event['event_meta'] ?? array() ) ) ) . '</span><span><b>' . esc_html__( 'مقدار جدید:', 'didar' ) . '</b> ' . nl2br( esc_html( $this->service->format_event_value( $event['event_type'], $event['new_value'], $event['event_meta'] ?? array() ) ) ) . '</span></div>';
 			}
 			echo '</li>';
 		}
@@ -1107,7 +1254,7 @@ class Didar_Admin {
 		}
 		wp_enqueue_style( 'didar-admin', DIDAR_URL . 'assets/css/admin.css', array(), DIDAR_VERSION );
 		wp_enqueue_style( 'didar-jalali-datepicker', DIDAR_URL . 'assets/css/jalali-datepicker.css', array( 'didar-admin' ), DIDAR_VERSION );
-		if ( $is_settings ) { wp_enqueue_script( 'didar-admin', DIDAR_URL . 'assets/js/admin.js', array(), DIDAR_VERSION, true ); wp_enqueue_script( 'didar-jalali-datepicker', DIDAR_URL . 'assets/js/jalali-datepicker.js', array(), DIDAR_VERSION, true ); return; }
+		if ( $is_settings ) { wp_enqueue_media(); wp_enqueue_script( 'didar-admin', DIDAR_URL . 'assets/js/admin.js', array(), DIDAR_VERSION, true ); wp_enqueue_script( 'didar-jalali-datepicker', DIDAR_URL . 'assets/js/jalali-datepicker.js', array(), DIDAR_VERSION, true ); return; }
 		wp_enqueue_script( 'didar-admin', DIDAR_URL . 'assets/js/admin.js', array(), DIDAR_VERSION, true );
 		wp_enqueue_script( 'didar-form-input-rules', DIDAR_URL . 'assets/js/form-input-rules.js', array(), DIDAR_VERSION, true );
 		wp_enqueue_script( 'didar-jalali-datepicker', DIDAR_URL . 'assets/js/jalali-datepicker.js', array(), DIDAR_VERSION, true );
@@ -1302,13 +1449,66 @@ class Didar_Admin {
 		if ( ! $rows ) { echo '<tr><td colspan="9">گزارشی ثبت نشده است.</td></tr>'; } echo '</tbody></table></div>';
 	}
 
-	public function render_case_companion_settings() {
-		$settings = $this->settings->all(); $config = isset( $settings['visa_companion_case_settings'] ) && is_array( $settings['visa_companion_case_settings'] ) ? $settings['visa_companion_case_settings'] : array(); $base = Didar_Settings::OPTION_NAME . '[visa_companion_case_settings]'; $pipelines = $this->case_service->pipelines(); $fields = $this->case_service->custom_fields(); $validation = $this->case_service->validate_companion_case_configuration( $config );
+	/** Normalize the independently saveable Case pipeline and its optional initial stage. */
+	private function normalize_case_pipeline_and_stage( $posted, $old = array() ) {
+		$posted = is_array( $posted ) ? $posted : array();
+		$old = is_array( $old ) ? $old : array();
+		$old_pipeline_id = isset( $old['pipeline_id'] ) && is_scalar( $old['pipeline_id'] ) ? sanitize_text_field( (string) $old['pipeline_id'] ) : '';
+		$old_stage_id = isset( $old['initial_stage_id'] ) && is_scalar( $old['initial_stage_id'] ) ? sanitize_text_field( (string) $old['initial_stage_id'] ) : '';
+		$has_pipeline = array_key_exists( 'pipeline_id', $posted ) && is_scalar( $posted['pipeline_id'] );
+		$pipeline_id = $has_pipeline ? sanitize_text_field( wp_unslash( $posted['pipeline_id'] ) ) : $old_pipeline_id;
+		$stage_id = isset( $posted['initial_stage_id'] ) && is_scalar( $posted['initial_stage_id'] ) ? sanitize_text_field( wp_unslash( $posted['initial_stage_id'] ) ) : '';
+
+		if ( '' === $pipeline_id ) {
+			return array( 'pipeline_id' => '', 'initial_stage_id' => '', 'invalid' => '' !== $stage_id );
+		}
+		if ( ! $this->case_service->pipeline( $pipeline_id ) ) {
+			return array( 'pipeline_id' => $old_pipeline_id, 'initial_stage_id' => $this->case_service->valid_stage( $old_pipeline_id, $old_stage_id ) ? $old_stage_id : '', 'invalid' => true );
+		}
+		if ( '' === $stage_id ) {
+			return array( 'pipeline_id' => $pipeline_id, 'initial_stage_id' => '', 'invalid' => false );
+		}
+
+		return array( 'pipeline_id' => $pipeline_id, 'initial_stage_id' => $this->case_service->valid_stage( $pipeline_id, $stage_id ) ? $stage_id : '', 'invalid' => ! $this->case_service->valid_stage( $pipeline_id, $stage_id ) );
+	}
+
+	private function sanitize_case_form_config( $form_type, $posted, $old = array() ) {
+		$posted = is_array( $posted ) ? $posted : array(); $old = is_array( $old ) ? $old : array();
+		$pipeline_and_stage = $this->normalize_case_pipeline_and_stage( $posted, $old );
+		$config = array( 'pipeline_id' => $pipeline_and_stage['pipeline_id'], 'initial_stage_id' => $pipeline_and_stage['initial_stage_id'], 'category_id' => sanitize_text_field( (string) ( $posted['category_id'] ?? '' ) ), 'field_mappings' => array(), 'main_field_mappings' => array(), 'system_fields' => array() );
+		$columns = $this->registry->fields( $form_type )['companions']['columns'] ?? array(); $targets = array();
+		foreach ( (array) ( $posted['field_mappings'] ?? array() ) as $source => $target ) { $source = sanitize_key( $source ); $target = is_scalar( $target ) ? sanitize_text_field( wp_unslash( $target ) ) : ''; if ( isset( $columns[ $source ] ) && Didar_Case_Service::is_case_field( $this->case_service->case_field( $target ) ) && ! in_array( $target, $targets, true ) ) { $config['field_mappings'][ $source ] = $target; $targets[] = $target; } }
+		foreach ( (array) ( $posted['main_field_mappings'] ?? array() ) as $source => $target ) { $source = sanitize_key( $source ); $target = is_scalar( $target ) ? sanitize_text_field( wp_unslash( $target ) ) : ''; if ( $source && $target && Didar_Case_Service::is_case_field( $this->case_service->case_field( $target ) ) && ! in_array( $target, $targets, true ) ) { $config['main_field_mappings'][ $source ] = $target; $targets[] = $target; } }
+		foreach ( array( 'submission_id', 'companion_uid', 'form_type' ) as $system_key ) { $target = is_scalar( $posted['system_fields'][ $system_key ] ?? null ) ? sanitize_text_field( wp_unslash( $posted['system_fields'][ $system_key ] ) ) : ''; if ( $target && Didar_Case_Service::is_case_field( $this->case_service->case_field( $target ) ) && ! in_array( $target, $targets, true ) ) { $config['system_fields'][ $system_key ] = $target; $targets[] = $target; } }
+		if ( ! array_key_exists( 'category_id', $posted ) ) { $config['category_id'] = sanitize_text_field( (string) ( $old['category_id'] ?? '' ) ); }
+		return $config;
+	}
+
+	private function render_case_form_block( $form_type, $config, $base, $pipelines, $fields ) {
+		$label = 'embassy_appointment' === $form_type ? 'Case همراهان وقت سفارت' : 'Case همراهان درخواست ویزا';
+		$validation = $this->case_service->validate_companion_case_configuration( $config, $form_type );
+		echo '<h3>' . esc_html( $label ) . '</h3><p class="description">Pipeline و Stage این فرم مستقل است؛ شناسه‌های Embassy را جداگانه از Didar انتخاب کنید.</p>';
+		if ( 'ready' !== $validation['status'] ) { echo '<p class="notice notice-warning inline">وضعیت تنظیمات Case: ' . esc_html( $validation['status'] . ' — ' . implode( ', ', $validation['issues'] ) ) . '</p>'; }
+		echo '<p><label>کاریز کارت همراهان<br><select data-didar-case-pipeline data-didar-case-form="' . esc_attr( $form_type ) . '" name="' . esc_attr( $base . '[pipeline_id]' ) . '"><option value="">— انتخاب کاریز —</option>'; foreach ( $pipelines as $pipeline ) echo '<option value="' . esc_attr( $pipeline['id'] ) . '" ' . selected( $config['pipeline_id'] ?? '', $pipeline['id'], false ) . '>' . esc_html( $pipeline['title'] ) . '</option>'; echo '</select></label></p>';
+		$selected_pipeline = $this->case_service->pipeline( $config['pipeline_id'] ?? '' ); echo '<p><label>مرحله اولیه کارت<br><select data-didar-case-stage data-didar-case-form="' . esc_attr( $form_type ) . '" name="' . esc_attr( $base . '[initial_stage_id]' ) . '"><option value="">' . esc_html( $selected_pipeline ? '— مرحله را انتخاب کنید —' : '— ابتدا کاریز را انتخاب کنید —' ) . '</option>'; foreach ( (array) ( $selected_pipeline['stages'] ?? array() ) as $stage ) echo '<option value="' . esc_attr( $stage['id'] ) . '" ' . selected( $config['initial_stage_id'] ?? '', $stage['id'], false ) . '>' . esc_html( $stage['title'] ) . '</option>'; echo '</select></label></p>';
+		echo '<p><label>شناسه دسته‌بندی کارت (اختیاری)<br><input class="regular-text" name="' . esc_attr( $base . '[category_id]' ) . '" value="' . esc_attr( $config['category_id'] ?? '' ) . '"></label></p><table class="widefat striped"><thead><tr><th>فیلد همراه</th><th>Case Custom Field</th></tr></thead><tbody>';
+		$columns = $this->registry->fields( $form_type )['companions']['columns'] ?? array(); foreach ( $columns as $key => $column ) { if ( ! empty( $column['internal'] ) ) { continue; } echo '<tr><td><strong>' . esc_html( $column['label'] ?? $key ) . '</strong><br><code>' . esc_html( $key ) . '</code></td><td><select name="' . esc_attr( $base . '[field_mappings][' . $key . ']' ) . '"><option value="">— بدون نگاشت —</option>'; foreach ( $fields as $field ) echo '<option value="' . esc_attr( $field['key'] ) . '" ' . selected( $config['field_mappings'][ $key ] ?? '', $field['key'], false ) . '>' . esc_html( $field['title'] . ' (' . $field['key'] . ')' ) . '</option>'; echo '</select></td></tr>'; }
+		echo '</tbody></table><h4>فیلدهای متقاضی اصلی</h4><table class="widefat striped"><tbody>'; foreach ( array( 'full_name' => 'نام و نام خانوادگی', 'occupation' => 'شغل', 'national_id' => 'کد ملی', 'passport_number' => 'شماره گذرنامه', 'email' => 'ایمیل', 'phone' => 'شماره تماس', 'case_role' => 'نقش Case' ) as $key => $label ) { echo '<tr><td>' . esc_html( $label ) . '<br><code>' . esc_html( $key ) . '</code></td><td><select name="' . esc_attr( $base . '[main_field_mappings][' . $key . ']' ) . '"><option value="">— بدون نگاشت —</option>'; foreach ( $fields as $field ) echo '<option value="' . esc_attr( $field['key'] ) . '" ' . selected( $config['main_field_mappings'][ $key ] ?? '', $field['key'], false ) . '>' . esc_html( $field['title'] . ' (' . $field['key'] . ')' ) . '</option>'; echo '</select></td></tr>'; } echo '</tbody></table><h4>فیلدهای سیستمی Case</h4><table class="widefat striped"><tbody>'; foreach ( array( 'submission_id' => 'Submission ID', 'companion_uid' => 'Companion UID / Applicant UID', 'form_type' => 'Form Type' ) as $key => $label ) { echo '<tr><td>' . esc_html( $label ) . '</td><td><select name="' . esc_attr( $base . '[system_fields][' . $key . ']' ) . '"><option value="">— بدون نگاشت —</option>'; foreach ( $fields as $field ) echo '<option value="' . esc_attr( $field['key'] ) . '" ' . selected( $config['system_fields'][ $key ] ?? '', $field['key'], false ) . '>' . esc_html( $field['title'] . ' (' . $field['key'] . ')' ) . '</option>'; echo '</select></td></tr>'; } echo '</tbody></table>';
+	}
+
+	public function render_case_companion_settings( $input_name = Didar_Settings::OPTION_NAME ) {
+		$input_name = sanitize_key( (string) $input_name );
+		$input_name = $input_name ? $input_name : Didar_Settings::OPTION_NAME;
+		$settings = $this->settings->all(); $config = isset( $settings['visa_companion_case_settings'] ) && is_array( $settings['visa_companion_case_settings'] ) ? $settings['visa_companion_case_settings'] : array(); $base = $input_name . '[visa_companion_case_settings]'; $pipelines = $this->case_service->pipelines(); $fields = $this->case_service->custom_fields(); $validation = $this->case_service->validate_companion_case_configuration( $config );
 		echo '<p><a class="button button-secondary" href="' . esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=didar_refresh_pipelines' ), 'didar_refresh_pipelines' ) ) . '">به‌روزرسانی اطلاعات Case از Didar</a></p><p class="description">هر ردیف همراه یک Case مستقل می‌شود و با Case.DealId به Deal اصلی متصل می‌گردد. Case Pipeline مستقل از Deal Pipeline است.</p><p class="description">شناسه دسته‌بندی کارت از API فعلی Didar قابل دریافت خودکار نیست و باید از تنظیمات/اطلاعات Didar وارد شود.</p>'; if ( 'ready' !== $validation['status'] ) echo '<p class="notice notice-warning inline">وضعیت تنظیمات Case: ' . esc_html( $validation['status'] . ' — ' . implode( ', ', $validation['issues'] ) ) . '</p>'; echo '<script type="application/json" id="didar-case-pipeline-data">' . wp_json_encode( $pipelines, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) . '</script>';
-		echo '<p><label>کاریز کارت همراهان<br><select name="' . esc_attr( $base . '[pipeline_id]' ) . '"><option value="">— انتخاب کاریز —</option>'; foreach ( $pipelines as $pipeline ) echo '<option value="' . esc_attr( $pipeline['id'] ) . '" ' . selected( $config['pipeline_id'] ?? '', $pipeline['id'], false ) . '>' . esc_html( $pipeline['title'] ) . '</option>'; echo '</select></label></p>';
-		$selected_pipeline = $this->case_service->pipeline( $config['pipeline_id'] ?? '' ); echo '<p><label>مرحله اولیه کارت<br><select name="' . esc_attr( $base . '[initial_stage_id]' ) . '"><option value="">— ابتدا کاریز را انتخاب کنید —</option>'; foreach ( (array) ( $selected_pipeline['stages'] ?? array() ) as $stage ) echo '<option value="' . esc_attr( $stage['id'] ) . '" ' . selected( $config['initial_stage_id'] ?? '', $stage['id'], false ) . '>' . esc_html( $stage['title'] ) . '</option>'; echo '</select></label></p>';
+		echo '<p><label>کاریز کارت همراهان<br><select data-didar-case-pipeline data-didar-case-form="visa_request" name="' . esc_attr( $base . '[pipeline_id]' ) . '"><option value="">— انتخاب کاریز —</option>'; foreach ( $pipelines as $pipeline ) echo '<option value="' . esc_attr( $pipeline['id'] ) . '" ' . selected( $config['pipeline_id'] ?? '', $pipeline['id'], false ) . '>' . esc_html( $pipeline['title'] ) . '</option>'; echo '</select></label></p>';
+		$selected_pipeline = $this->case_service->pipeline( $config['pipeline_id'] ?? '' ); echo '<p><label>مرحله اولیه کارت<br><select data-didar-case-stage data-didar-case-form="visa_request" name="' . esc_attr( $base . '[initial_stage_id]' ) . '"><option value="">— ابتدا کاریز را انتخاب کنید —</option>'; foreach ( (array) ( $selected_pipeline['stages'] ?? array() ) as $stage ) echo '<option value="' . esc_attr( $stage['id'] ) . '" ' . selected( $config['initial_stage_id'] ?? '', $stage['id'], false ) . '>' . esc_html( $stage['title'] ) . '</option>'; echo '</select></label></p>';
 		echo '<p><label>شناسه دسته‌بندی کارت (اختیاری)<br><input class="regular-text" name="' . esc_attr( $base . '[category_id]' ) . '" value="' . esc_attr( $config['category_id'] ?? '' ) . '"></label><br><span class="description">برای ساخت کارت الزامی نیست. فقط اگر می‌خواهید کارت در یک دسته‌بندی مشخص Didar قرار بگیرد، شناسه معتبر دسته‌بندی را وارد کنید.</span></p><table class="widefat striped"><thead><tr><th>فیلد همراه</th><th>Case Custom Field</th></tr></thead><tbody>';
 		$columns = $this->registry->fields( 'visa_request' )['companions']['columns'] ?? array(); foreach ( $columns as $key => $column ) { echo '<tr><td><strong>' . esc_html( $column['label'] ?? $key ) . '</strong><br><code>' . esc_html( $key ) . '</code></td><td><select name="' . esc_attr( $base . '[field_mappings][' . $key . ']' ) . '"><option value="">— بدون نگاشت —</option>'; foreach ( $fields as $field ) echo '<option value="' . esc_attr( $field['key'] ) . '" ' . selected( $config['field_mappings'][ $key ] ?? '', $field['key'], false ) . '>' . esc_html( $field['title'] . ' (' . $field['key'] . ')' ) . '</option>'; echo '</select></td></tr>'; }
-		echo '</tbody></table><h3>فیلدهای سیستمی Case</h3><table class="widefat striped"><tbody>'; foreach ( array( 'submission_id' => 'Submission ID', 'companion_uid' => 'Companion UID', 'form_type' => 'Form Type' ) as $key => $label ) { echo '<tr><td>' . esc_html( $label ) . '</td><td><select name="' . esc_attr( $base . '[system_fields][' . $key . ']' ) . '"><option value="">— بدون نگاشت —</option>'; foreach ( $fields as $field ) echo '<option value="' . esc_attr( $field['key'] ) . '" ' . selected( $config['system_fields'][ $key ] ?? '', $field['key'], false ) . '>' . esc_html( $field['title'] . ' (' . $field['key'] . ')' ) . '</option>'; echo '</select></td></tr>'; } echo '</tbody></table>';
+		echo '</tbody></table><h3>فیلدهای سیستمی Case</h3><table class="widefat striped"><tbody>'; foreach ( array( 'submission_id' => 'Submission ID', 'companion_uid' => 'Companion UID / Applicant UID', 'form_type' => 'Form Type' ) as $key => $label ) { echo '<tr><td>' . esc_html( $label ) . '</td><td><select name="' . esc_attr( $base . '[system_fields][' . $key . ']' ) . '"><option value="">— بدون نگاشت —</option>'; foreach ( $fields as $field ) echo '<option value="' . esc_attr( $field['key'] ) . '" ' . selected( $config['system_fields'][ $key ] ?? '', $field['key'], false ) . '>' . esc_html( $field['title'] . ' (' . $field['key'] . ')' ) . '</option>'; echo '</select></td></tr>'; } echo '</tbody></table><h3>فیلدهای متقاضی اصلی Visa</h3><table class="widefat striped"><tbody>'; foreach ( array( 'full_name' => 'نام و نام خانوادگی', 'occupation' => 'شغل', 'national_id' => 'کد ملی', 'passport_number' => 'شماره گذرنامه', 'email' => 'ایمیل', 'phone' => 'شماره تماس', 'case_role' => 'نقش Case' ) as $key => $label ) { echo '<tr><td>' . esc_html( $label ) . '<br><code>' . esc_html( $key ) . '</code></td><td><select name="' . esc_attr( $base . '[main_field_mappings][' . $key . ']' ) . '"><option value="">— بدون نگاشت —</option>'; foreach ( $fields as $field ) echo '<option value="' . esc_attr( $field['key'] ) . '" ' . selected( $config['main_field_mappings'][ $key ] ?? '', $field['key'], false ) . '>' . esc_html( $field['title'] . ' (' . $field['key'] . ')' ) . '</option>'; echo '</select></td></tr>'; } echo '</tbody></table>';
+		echo '<p><button type="submit" class="button button-secondary" name="didar_case_save_scope" value="visa_request">' . esc_html__( 'ذخیره تنظیمات Case ویزا', 'didar' ) . '</button></p>';
+		$embassy = isset( $settings['case_form_settings']['embassy_appointment'] ) && is_array( $settings['case_form_settings']['embassy_appointment'] ) ? $settings['case_form_settings']['embassy_appointment'] : array();
+		$this->render_case_form_block( 'embassy_appointment', $embassy, $input_name . '[case_form_settings][embassy_appointment]', $pipelines, $fields );
+		echo '<p><button type="submit" class="button button-primary" name="didar_case_save_scope" value="embassy_appointment">' . esc_html__( 'ذخیره تنظیمات Case وقت سفارت', 'didar' ) . '</button></p>';
 	}
 }
