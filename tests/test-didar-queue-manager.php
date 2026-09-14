@@ -4,7 +4,7 @@ class Didar_Queue_Manager_Test_Double extends Didar_Sync_Manager {
 	public $executed = array();
 	public $result = true;
 
-	public function process_scheduled_submission( $post_id = 0 ) {
+	public function process_scheduled_submission( $post_id = 0, $generation_id = '' ) {
 		$this->executed[] = array( 'submission', absint( $post_id ) );
 		if ( true === $this->result ) {
 			delete_post_meta( absint( $post_id ), self::META_STATE );
@@ -12,12 +12,20 @@ class Didar_Queue_Manager_Test_Double extends Didar_Sync_Manager {
 		return $this->result;
 	}
 
-	public function process_scheduled_user( $user_id = 0 ) {
+	public function process_scheduled_user( $user_id = 0, $generation_id = '' ) {
 		$this->executed[] = array( 'person', absint( $user_id ) );
 		if ( true === $this->result ) {
 			delete_user_meta( absint( $user_id ), self::META_PERSON_STATE );
 		}
 		return $this->result;
+	}
+
+	public function manual_sync( $post_id ) {
+		return $this->process_scheduled_submission( $post_id );
+	}
+
+	public function manual_user_sync( $user_id ) {
+		return $this->process_scheduled_user( $user_id );
 	}
 }
 
@@ -40,11 +48,10 @@ class Test_Didar_Queue_Manager extends WP_UnitTestCase {
 
 	public function tear_down() {
 		foreach ( array( $this->post_id, $this->other_post_id ) as $post_id ) {
-			foreach ( array( Didar_Sync_Manager::CRON_HOOK, Didar_Sync_Manager::USER_HOOK ) as $hook ) {
-				while ( $when = wp_next_scheduled( $hook, array( $post_id ) ) ) { wp_unschedule_event( $when, $hook, array( $post_id ) ); }
-			}
+			$this->unschedule_object_events( $post_id );
 			wp_delete_post( $post_id, true );
 		}
+		$this->unschedule_object_events( $this->user_id );
 		foreach ( array( $this->admin_id, $this->user_id ) as $user_id ) { if ( function_exists( 'wp_delete_user' ) ) { wp_delete_user( $user_id ); } }
 		wp_set_current_user( 0 );
 		parent::tear_down();
@@ -71,7 +78,7 @@ class Test_Didar_Queue_Manager extends WP_UnitTestCase {
 		$this->manager()->discard_queue_item( $items[0]['item_key'] );
 		$this->assertFalse( metadata_exists( 'user', $this->user_id, Didar_Sync_Manager::META_PERSON_STATE ) );
 		$this->assertSame( 'person-existing', get_user_meta( $this->user_id, Didar_Sync_Manager::USER_PERSON_META, true ) );
-		$this->assertFalse( wp_next_scheduled( Didar_Sync_Manager::USER_HOOK, array( $this->user_id ) ) );
+		$this->assertFalse( $this->has_scheduled_object_event( Didar_Sync_Manager::USER_HOOK, $this->user_id ) );
 	}
 
 	public function test_discarding_one_submission_removes_only_its_state_and_retry() {
@@ -84,9 +91,9 @@ class Test_Didar_Queue_Manager extends WP_UnitTestCase {
 		$this->manager()->discard_queue_item( 'submission:' . $this->post_id );
 		$this->assertFalse( metadata_exists( 'post', $this->post_id, Didar_Sync_Manager::META_STATE ) );
 		$this->assertSame( 'deal-existing', get_post_meta( $this->post_id, Didar_Sync_Manager::META_DEAL_ID, true ) );
-		$this->assertFalse( wp_next_scheduled( Didar_Sync_Manager::CRON_HOOK, array( $this->post_id ) ) );
+		$this->assertFalse( $this->has_scheduled_object_event( Didar_Sync_Manager::CRON_HOOK, $this->post_id ) );
 		$this->assertTrue( metadata_exists( 'post', $this->other_post_id, Didar_Sync_Manager::META_STATE ) );
-		$this->assertNotFalse( wp_next_scheduled( Didar_Sync_Manager::CRON_HOOK, array( $this->other_post_id ) ) );
+		$this->assertTrue( $this->has_scheduled_object_event( Didar_Sync_Manager::CRON_HOOK, $this->other_post_id ) );
 	}
 
 	public function test_run_now_uses_only_the_selected_canonical_worker_item() {
@@ -139,5 +146,25 @@ class Test_Didar_Queue_Manager extends WP_UnitTestCase {
 	private function test_manager() {
 		$plugin = Didar_Plugin::instance();
 		return new Didar_Queue_Manager_Test_Double( $plugin->registry, $plugin->settings, $plugin->event_log, $plugin->service, $plugin->file_service, $plugin->logger, $plugin->case_service );
+	}
+
+	private function has_scheduled_object_event( $hook, $object_id ) {
+		foreach ( (array) _get_cron_array() as $events ) {
+			foreach ( (array) ( $events[ $hook ] ?? array() ) as $event ) {
+				if ( absint( $event['args'][0] ?? 0 ) === absint( $object_id ) ) { return true; }
+			}
+		}
+		return false;
+	}
+
+	private function unschedule_object_events( $object_id ) {
+		foreach ( (array) _get_cron_array() as $timestamp => $hooks ) {
+			foreach ( array( Didar_Sync_Manager::CRON_HOOK, Didar_Sync_Manager::USER_HOOK ) as $hook ) {
+				foreach ( (array) ( $hooks[ $hook ] ?? array() ) as $event ) {
+					$args = is_array( $event['args'] ?? null ) ? $event['args'] : array();
+					if ( absint( $args[0] ?? 0 ) === absint( $object_id ) ) { wp_unschedule_event( $timestamp, $hook, $args ); }
+				}
+			}
+		}
 	}
 }

@@ -9,7 +9,7 @@ stateDiagram-v2
  [*] --> pending: queue
  pending --> synced: API موفق
  pending --> pending: خطای retryable / retry
- pending --> failed: خطای دائمی یا اتمام ۱۰ تلاش
+ pending --> exhausted: اتمام حداکثر ۳ تلاش خودکار
  pending --> pending: sweep پنج‌دقیقه‌ای
 ```
 
@@ -21,19 +21,31 @@ lock هر submission در option با پیشوند `didar_submission_sync_lock_`
 
 بخش `مدیریت صف همگام‌سازی` در همان صفحه، inventory محلی `_didar_sync_state`، `_didar_person_sync_state`، stateهای Case و فقط eventهای شناسه‌دار `didar_process_sync` و `didar_process_user_sync` را نمایش می‌دهد. event زمان‌بندی‌شده به state پایدار همان submission یا Person متصل می‌شود تا یک job منطقی دو بار نمایش داده نشود. باز کردن صفحه هیچ تماس Didar ندارد.
 
-- `اجرای فوری` فقط برای submission و Person دارای state قابل اجرا فعال است و همان entry point worker خودکار را فراخوانی می‌کند. قفل فعال submission اجرای هم‌زمان و حذف آن را متوقف می‌کند؛ قفل منقضی طبق سیاست فعلی worker پاک‌سازی می‌شود.
+- `اجرای فوری` override دستی است. برای generation exhausted نیز مجاز است، اما failure دستی زنجیرهٔ retry خودکار تازه ایجاد نمی‌کند. قفل فعال submission اجرای هم‌زمان و حذف آن را متوقف می‌کند؛ قفل منقضی طبق سیاست فعلی worker پاک‌سازی می‌شود.
 - Caseها اطلاعاتی هستند: retry Case با worker submission والد انجام می‌شود و مسیر اجرای مستقل ندارند. حذف موردی Case فقط state retry محلی را discarded می‌کند و cron والد را حذف نمی‌کند.
 - `حذف از صف` فقط همان state و event تک‌بارهٔ وابسته را حذف می‌کند، هیچ callback یا درخواست Didar اجرا نمی‌کند و IDهای Deal، Person و Case را نگه می‌دارد.
 - `پاک کردن کامل صف همگام‌سازی` همچنان عملیات گستردهٔ قبلی است؛ مدیریت موردی جایگزین آن نیست.
 
 ```mermaid
 flowchart LR
- P[pending state] --> O[رویداد یک‌باره]
+ P[pending generation] --> O[رویداد یک‌باره با generation ID]
  O --> R{موفق؟}
  R -->|بله| S[synced]
- R -->|خیر، کمتر از ۱۰ تلاش| B[backoff و retry]
+ R -->|خیر، کمتر از ۳ تلاش خودکار| B[backoff و retry]
  B --> P
  P --> W[sweep پنج‌دقیقه‌ای]
  W --> R
- R -->|خطای دائمی یا اتمام تلاش| F[failed]
+ R -->|خطای دائمی یا اتمام سقف| F[failed / exhausted]
 ```
+
+## نسل همگام‌سازی و سقف retry
+
+هر save صریح کاربر/ادمین یک `generation_id` یکتا می‌سازد؛ حتی اگر مقدار نهایی با save قبلی یکسان باشد. fingerprint فقط برای تشخیص retry/cron تکراری همان generation است، نه جلوگیری از save صریح هم‌ارزش. تغییرات داخلی metadata، worker، history، IDهای Didar و webhook ورودی generation جدید نمی‌سازند.
+
+- هر generation حداکثر **۳ تلاش خودکار** دارد: اجرای اول نیز جزو سقف است.
+- event تک‌باره با `(object_id, generation_id)` شناسایی می‌شود؛ برای یک generation بیش از یک event آینده ایجاد نمی‌شود.
+- قبل از هر اجرای خودکار، worker زیر lock تلاش را reserve می‌کند. callback قدیمی، generation نامطابق، `synced` یا `exhausted` بدون تماس Didar no-op است.
+- موفقیت terminal است: eventهای موردی حذف و generation `synced` می‌شود.
+- failure سوم `exhausted` است؛ sweep و cron آن را اجرا نمی‌کنند. اجرای دستی فقط شمارندهٔ `manual_attempts` را افزایش می‌دهد و retry خودکار را reset یا بازسازی نمی‌کند.
+- Person نیز همین قرارداد را با state و lock مستقل دارد. Case مستقل queue نمی‌شود و در generation submission والد اجرا می‌شود.
+- state قدیمیِ فاقد generation با شمارندهٔ موجود normalize می‌شود. اگر شمارنده قابل اعتماد نداشته باشد، conservatively exhausted می‌ماند و خودکار replay نمی‌شود.

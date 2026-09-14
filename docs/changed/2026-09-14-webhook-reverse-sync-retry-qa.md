@@ -83,7 +83,7 @@ The current handler supports inbound profile application only for the configured
 - storage: `_didar_sync_state` post meta for submissions; `_didar_person_sync_state` user meta for Person sync.
 - worker: per-item `didar_process_sync` and `didar_process_user_sync` WP-Cron hooks, plus recurring five-minute no-argument sweeps.
 - lock: `didar_submission_sync_lock_<submission_id>` option with a 120-second TTL.
-- attempt policy: pending failures increment `attempts`; retry remains enabled below 10 attempts. Delay is `min(1 hour, 60 * attempts)` seconds. At the limit, the state becomes failed/exhausted.
+- historical attempt policy at the time of this QA: pending failures incremented `attempts` and retried below 10. This was superseded by the generation-scoped three-total-automatic-execution cap in `2026-09-14-sync-generation-retry-cap.md`.
 - success cleanup: submission state becomes `synced`; user retry events are cleared. A completed submission had no pending per-item event after the worker callback.
 - failure retention: pending state, last error, trace, attempt count, and failure event remain available for diagnostics.
 

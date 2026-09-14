@@ -16,14 +16,8 @@ class Test_Didar_Queue_Purge extends WP_UnitTestCase {
 	}
 
 	public function tear_down() {
-		foreach ( array( Didar_Sync_Manager::CRON_HOOK, Didar_Sync_Manager::USER_HOOK ) as $hook ) {
-			while ( $timestamp = wp_next_scheduled( $hook, array( $this->post_id ) ) ) {
-				wp_unschedule_event( $timestamp, $hook, array( $this->post_id ) );
-			}
-			while ( $timestamp = wp_next_scheduled( $hook, array( $this->user_id ) ) ) {
-				wp_unschedule_event( $timestamp, $hook, array( $this->user_id ) );
-			}
-		}
+		$this->unschedule_object_events( $this->post_id );
+		$this->unschedule_object_events( $this->user_id );
 		wp_delete_post( $this->post_id, true );
 		if ( function_exists( 'wp_delete_user' ) ) {
 			wp_delete_user( $this->user_id );
@@ -84,6 +78,18 @@ class Test_Didar_Queue_Purge extends WP_UnitTestCase {
 		$this->manager()->purge_queue();
 		$this->manager()->queue_submission( $this->post_id );
 		$this->assertSame( 'pending', get_post_meta( $this->post_id, Didar_Sync_Manager::META_STATE, true )['status'] );
-		$this->assertNotFalse( wp_next_scheduled( Didar_Sync_Manager::CRON_HOOK, array( $this->post_id ) ) );
+		$state = get_post_meta( $this->post_id, Didar_Sync_Manager::META_STATE, true );
+		$this->assertNotFalse( wp_next_scheduled( Didar_Sync_Manager::CRON_HOOK, array( $this->post_id, $state['generation_id'] ) ) );
+	}
+
+	private function unschedule_object_events( $object_id ) {
+		foreach ( (array) _get_cron_array() as $timestamp => $hooks ) {
+			foreach ( array( Didar_Sync_Manager::CRON_HOOK, Didar_Sync_Manager::USER_HOOK ) as $hook ) {
+				foreach ( (array) ( $hooks[ $hook ] ?? array() ) as $event ) {
+					$args = is_array( $event['args'] ?? null ) ? $event['args'] : array();
+					if ( absint( $args[0] ?? 0 ) === absint( $object_id ) ) { wp_unschedule_event( $timestamp, $hook, $args ); }
+				}
+			}
+		}
 	}
 }

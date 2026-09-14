@@ -1688,14 +1688,14 @@ class Didar_Admin {
 		}
 		echo implode( ' | ', $links ) . '</p>';
 		echo '<form method="get" style="margin:10px 0"><input type="hidden" name="post_type" value="' . esc_attr( Didar_Post_Type::POST_TYPE ) . '"><input type="hidden" name="page" value="didar-diagnostics"><input type="hidden" name="didar_queue_filter" value="' . esc_attr( $filter ) . '"><label>جستجوی شناسه درخواست یا کاربر <input name="didar_queue_search" value="' . esc_attr( $search ) . '" inputmode="numeric"></label> <button class="button">جستجو</button></form>';
-		echo '<table class="widefat striped"><thead><tr><th>نوع</th><th>شناسه وردپرس</th><th>نوع فرم / کاربر</th><th>وضعیت</th><th>تلاش‌ها</th><th>اجرای بعدی</th><th>آخرین خطا</th><th>عملیات</th></tr></thead><tbody>';
+		echo '<table class="widefat striped"><thead><tr><th>نوع</th><th>شناسه وردپرس</th><th>نوع فرم / کاربر</th><th>نسل همگام‌سازی</th><th>وضعیت</th><th>تلاش خودکار</th><th>اجرای بعدی</th><th>آخرین خطا</th><th>عملیات</th></tr></thead><tbody>';
 		$shown = 0;
 		foreach ( $inventory as $item ) {
 			if ( ! $this->queue_item_matches_filter( $item, $filter, $search ) ) { continue; }
 			$shown++;
 			$this->render_queue_item_row( $item );
 		}
-		if ( ! $shown ) { echo '<tr><td colspan="8">موردی در صف همگام‌سازی پیدا نشد.</td></tr>'; }
+		if ( ! $shown ) { echo '<tr><td colspan="9">موردی در صف همگام‌سازی پیدا نشد.</td></tr>'; }
 		echo '</tbody></table></section>';
 	}
 
@@ -1722,7 +1722,9 @@ class Didar_Admin {
 		}
 		$next = ! empty( $item['scheduled_at'] ) ? Didar_Logger::display_timestamp( $item['scheduled_at'] ) : ( ! empty( $item['executable'] ) ? 'در انتظار worker دوره‌ای' : '—' );
 		$error = ! empty( $item['last_error'] ) ? $item['last_error'] : '—';
-		echo '<tr><td>' . esc_html( $this->queue_type_label( $item['queue_type'] ) ) . '</td><td>#' . esc_html( $item['object_id'] ) . '</td><td>' . esc_html( $context ? $context : '—' ) . '</td><td>' . esc_html( $this->queue_state_label( $item['current_state'] ) ) . '</td><td>' . esc_html( $item['attempt_count'] ) . '</td><td>' . esc_html( $next ) . '</td><td><code>' . esc_html( $error ) . '</code></td><td>';
+		$generation = ! empty( $item['generation_id'] ) ? substr( (string) $item['generation_id'], 0, 12 ) : 'legacy';
+		$attempts = absint( $item['automatic_attempts'] ?? $item['attempt_count'] ?? 0 ) . ' از ' . Didar_Sync_Manager::MAX_AUTOMATIC_EXECUTIONS;
+		echo '<tr><td>' . esc_html( $this->queue_type_label( $item['queue_type'] ) ) . '</td><td>#' . esc_html( $item['object_id'] ) . '</td><td>' . esc_html( $context ? $context : '—' ) . '</td><td><code>' . esc_html( $generation ) . '</code></td><td>' . esc_html( $this->queue_state_label( $item['current_state'] ) ) . '</td><td>' . esc_html( $attempts ) . '</td><td>' . esc_html( $next ) . '</td><td><code>' . esc_html( $error ) . '</code></td><td>';
 		if ( ! empty( $item['locked'] ) ) {
 			echo '<span class="description">در حال پردازش</span>';
 		} else {
@@ -1744,7 +1746,7 @@ class Didar_Admin {
 	}
 
 	private function queue_state_label( $state ) {
-		$labels = array( 'queued' => 'در صف', 'pending' => 'در انتظار', 'retry' => 'تلاش مجدد', 'retrying' => 'در حال تلاش مجدد', 'failed' => 'خطادار', 'scheduled' => 'زمان‌بندی‌شده' );
+		$labels = array( 'queued' => 'در صف', 'pending' => 'در انتظار', 'retry' => 'تلاش مجدد', 'retrying' => 'در حال تلاش مجدد', 'failed' => 'خطادار', 'exhausted' => 'ناموفق — سقف تلاش خودکار', 'synced' => 'همگام‌شده', 'scheduled' => 'زمان‌بندی‌شده' );
 		return $labels[ $state ] ?? ( $state ? $state : '—' );
 	}
 

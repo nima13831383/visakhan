@@ -618,7 +618,7 @@ Deal custom fields are accepted only when metadata identifies a Deal field and t
 - Submission state is `_didar_sync_state`.
 - Per-submission locks use `didar_submission_sync_lock_{post_id}` with a 120-second TTL.
 - State records attempts, trace ID, last attempt, last success, last error, and Deal ID.
-- Pending failures retry with increasing delay capped at one hour and stop after 10 attempts.
+- Each explicit outbound sync intent owns a generation with at most three total automatic executions, including the initial execution. A manual override never resets that automatic cap or starts a new automatic retry chain.
 - Permanent identity/configuration errors stop rather than retry indefinitely.
 - Every sync operation receives a trace ID and redacted diagnostic context.
 - Local canonical persistence completes before asynchronous external work is queued.
@@ -854,7 +854,7 @@ Additional behavior:
 - Durable post/user meta state is the source of truth if a single event is missed.
 - `spawn_cron` is requested after queueing.
 - Submission sync has a 120-second lock.
-- User sync retries are capped at 10 attempts.
+- User sync follows the same per-generation cap of three total automatic executions.
 - Submission sync retry delay is bounded between one minute and one hour.
 
 ## 19. Security, privacy, and defensive behavior
