@@ -13,3 +13,7 @@
 فرم `display_name` را ویرایش می‌کند، نه `nickname`. هنگام `wp_update_user`، `nickname` از مقدار موجود، سپس display name و در نهایت login تعیین می‌شود؛ `user_login` تغییر نمی‌کند. `user_nicename` نامعتبر قدیمی با `user-{id}` ترمیم می‌شود.
 
 تصویر فقط در حالت editable، با فرمت JPG/PNG/GIF/WebP و سقف ۵MB در Media Library ذخیره می‌شود. پس از ذخیرهٔ پروفایل، Person sync فوری تلاش و در خطا برای retry صف می‌شود.
+
+بخش «مدارک تصویری» در رابط `[didar_profile_form]` پنج کلید canonical دارد: `national_card_front`، `national_card_back`، `passport_main_page`، `personal_photo` و `birth_certificate_first_page`. در بخش مدیریت «نگاشت اطلاعات کاربر به مخاطب دیدار» می‌توان برای هر کلید، Field Key یک Custom Field متنی از Person را تنظیم کرد.
+
+در حالت وجود مدرک نهایی و فعال بودن حالت فایل مستقیم، sync کاربر نشانی URL حل‌شدهٔ سرویس فایل را در فیلد Person می‌فرستد. شناسهٔ فایل، مسیر محلی، metadata و محتوای binary ارسال نمی‌شود. حالت امن که URL آن به نشست WordPress وابسته است برای Person قابل استفادهٔ CRM نیست و در آن حالت این فیلد بدون تضعیف مجوزها ارسال نمی‌شود. جایگزینی مدرک، Person موجود را با نشانی جدید به‌روزرسانی می‌کند؛ حذف صریح مدرک، فیلد نگاشت‌شده را در sync بعدی خالی می‌کند. این مسیر outbound-only است و از Didar به WordPress فایل دانلود نمی‌کند.

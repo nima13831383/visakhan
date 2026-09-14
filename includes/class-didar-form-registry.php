@@ -146,6 +146,9 @@ class Didar_Form_Registry {
 			'traveler_evaluation' => Didar_Reference_Data::countries_for_form( 'traveler_evaluation' ),
 			'visa_request'        => Didar_Reference_Data::countries_for_form( 'visa_request' ),
 		);
+		// Keep inactive managed countries available only as historical options.
+		// New selections always use the active catalog above.
+		$country_archived_options = Didar_Country_Catalog::get_archived_countries();
 		$occupation_lists = array(
 			'embassy_appointment' => Didar_Reference_Data::occupations_for_form( 'embassy_appointment' ),
 			'visa_request'        => Didar_Reference_Data::occupations_for_form( 'visa_request' ),
@@ -194,7 +197,7 @@ class Didar_Form_Registry {
 					'request' => $this->section( 'اطلاعات درخواست', array(
 						$this->field( 'twitter', 'X/Twitter', 'honeypot', false, array( 'internal' => true ) ),
 						$this->field( 'request_for', 'ثبت درخواست برای خود یا شخص دیگر', 'radio', false, array( 'default' => 'self', 'options' => $request_for, 'default_value_options' => true ) ),
-						$this->field( 'country', 'انتخاب کشور', 'select', true, array( 'options' => $country_lists['embassy_appointment'], 'searchable' => true, 'allow_legacy' => true ) ),
+						$this->field( 'country', 'انتخاب کشور', 'select', true, array( 'options' => $country_lists['embassy_appointment'], 'archived_options' => $country_archived_options, 'searchable' => true, 'allow_legacy' => true ) ),
 						$this->field( 'service_type', 'نوع خدمات', 'select', true, array( 'options' => $service_types, 'allow_legacy' => true, 'legacy_options' => array( 'study_immigration' => 'مهاجرت تحصیلی', 'tourist_visa' => 'ویزای توریستی', 'work_visa' => 'ویزای کاری', 'study_visa' => 'ویزای تحصیلی', 'short_term_tourist' => 'ویزای کوتاه‌مدت توریستی', 'business_visa' => 'ویزای تجاری', 'family_reunion' => 'پیوست خانواده', 'transit_visa' => 'ویزای ترانزیت', 'long_term_visa' => 'ویزای بلندمدت' ) ) ),
 						$this->field( 'profession', 'شغل (حرفه و تخصص)', 'select', false, array( 'options' => $occupation_lists['embassy_appointment'], 'legacy_options' => array( 'doctor' => 'پزشک', 'computer_engineer' => 'مهندس کامپیوتر', 'mechanic' => 'مکانیک' ), 'allow_legacy' => true, 'searchable' => true ) ),
 						$this->field( 'appointment_date', 'تاریخ', 'date', true, array( 'display_format' => 'روز/ماه/سال', 'description' => 'تاریخ به‌صورت استاندارد ذخیره می‌شود.' ) ),
@@ -207,7 +210,7 @@ class Didar_Form_Registry {
 						$this->field( 'email', 'ایمیل', 'email', false, array( 'autocomplete' => 'email', 'profile_autofill' => 'email' ) ),
 						$this->field( 'current_nationality', 'ملیت فعلی', 'text', true ),
 						$this->passport_number_field(),
-						$this->field( 'birth_country', 'کشور محل تولد', 'select', false, array( 'default' => 'iran', 'default_value_options' => true, 'options' => $country_lists['embassy_appointment'], 'allow_legacy' => true, 'searchable' => true ) ),
+						$this->field( 'birth_country', 'کشور محل تولد', 'select', false, array( 'default' => 'iran', 'default_value_options' => true, 'options' => $country_lists['embassy_appointment'], 'archived_options' => $country_archived_options, 'allow_legacy' => true, 'searchable' => true ) ),
 						$this->field( 'birth_province', 'استان محل تولد', 'select', false, array( 'options' => $provinces, 'searchable' => true, 'dependent_on' => 'birth_country', 'dependent_value' => 'iran', 'option_source' => 'iran_provinces' ) ),
 						$this->field( 'birth_city', 'شهر محل تولد', 'select', false, array( 'options' => $cities, 'searchable' => true, 'allow_legacy' => true, 'dependent_on' => 'birth_province', 'dependent_country' => 'birth_country', 'dependent_value' => 'iran', 'option_source' => 'iran_cities', 'option_provinces' => $city_provinces ) ),
 						$this->field( 'birth_place', 'شهر یا محل تولد خارج از ایران', 'text', false, array( 'foreign_birth_location' => true ) ),
@@ -239,7 +242,7 @@ class Didar_Form_Registry {
 						$this->field( 'evaluation_date', 'تاریخ', 'date' ), $this->field( 'first_name', 'نام' ), $this->field( 'last_name', 'نام خانوادگی' ),
 						$this->field( 'mobile', 'تلفن همراه', 'text', false, array( 'inputmode' => 'tel', 'autocomplete' => 'tel' ) ), $this->field( 'email', 'ایمیل', 'email' ),
 						$this->field( 'mother_name', 'نام مادر' ), $this->field( 'father_name', 'نام پدر' ), $this->field( 'former_names', 'هرگونه نام سابق' ),
-						$this->field( 'nationality', 'ملیت', 'select', false, array( 'options' => array( 'iranian' => 'ایرانی', 'foreign' => 'خارجی' ) ) ),
+						$this->field( 'nationality', 'ملیت', 'select', false, array( 'options' => $country_lists['traveler_evaluation'], 'legacy_options' => array( 'iranian' => 'ایرانی', 'foreign' => 'خارجی' ), 'archived_options' => $country_archived_options, 'allow_legacy' => true, 'searchable' => true ) ),
 						$this->field( 'birth_date', 'تاریخ تولد', 'date' ), $this->field( 'birth_place', 'محل تولد' ),
 						$this->field( 'gender', 'جنسیت', 'select', false, array( 'options' => array( 'male' => 'مرد', 'female' => 'زن' ) ) ),
 						$this->field( 'marital_status', 'وضعیت تاهل', 'select', false, array( 'options' => array( 'single' => 'مجرد', 'married' => 'متاهل', 'divorced' => 'مطلقه', 'widowed' => 'بیوه' ) ) ),
@@ -247,7 +250,7 @@ class Didar_Form_Registry {
 					) ),
 					'passport' => $this->section( 'اطلاعات پاسپورت', array(
 						$this->field( 'passport_type', 'نوع پاسپورت', 'select', false, array( 'options' => array( 'ordinary' => 'معمولی', 'diplomatic' => 'دیپلمات', 'service' => 'پاسپورت خدمت', 'official' => 'پاسپورت اداری', 'special' => 'پاسپورت مخصوص', 'other' => 'پاسپورت‌های دیگر' ) ) ),
-						$this->passport_number_field(), $this->field( 'passport_issue_date', 'تاریخ صدور پاسپورت', 'date' ), $this->field( 'passport_expiry_date', 'تاریخ انقضا پاسپورت', 'date' ), $this->field( 'passport_issuer_country', 'کشور صادر کننده', 'select', false, array( 'options' => $country_lists['traveler_evaluation'], 'allow_legacy' => true, 'searchable' => true ) ),
+						$this->passport_number_field(), $this->field( 'passport_issue_date', 'تاریخ صدور پاسپورت', 'date' ), $this->field( 'passport_expiry_date', 'تاریخ انقضا پاسپورت', 'date' ), $this->field( 'passport_issuer_country', 'کشور صادر کننده', 'select', false, array( 'options' => $country_lists['traveler_evaluation'], 'archived_options' => $country_archived_options, 'allow_legacy' => true, 'searchable' => true ) ),
 					) ),
 					'family_address' => $this->section( 'روابط خانوادگی و آدرس', array(
 						$this->field( 'eu_family_relation', 'روابط خانوادگی با یک شهروند اتحادیه اروپا، سوئیس یا بریتانیا', 'select', false, array( 'options' => array( 'spouse' => 'همسر', 'child' => 'فرزند', 'grandchild' => 'نوه', 'relative' => 'عضو فامیل', 'in_law' => 'وابسته سببی', 'other' => 'سایر' ) ) ),
@@ -259,7 +262,7 @@ class Didar_Form_Registry {
 					) ),
 					'travel_purpose' => $this->section( 'هدف سفر', array(
 						$this->field( 'travel_purpose', 'هدف از سفر', 'checkbox', false, array( 'multiple' => true, 'options' => array( 'tourism' => 'توریستی', 'business' => 'تجاری', 'family_friends' => 'بازدید از خانواده و دوستان', 'historical' => 'تاریخی', 'sports' => 'ورزشی', 'official' => 'ملاقات رسمی', 'medical' => 'دلیل پزشکی', 'study' => 'تحصیلی', 'airport_transit' => 'ترانزیت فرودگاهی', 'other' => 'موارد دیگر' ) ) ),
-						$this->field( 'travel_purpose_details', 'اطلاعات تکمیلی در مورد هدف از سفر', 'textarea' ), $this->field( 'main_destination_country', 'کشور مقصد اصلی', 'select', false, array( 'options' => $country_lists['traveler_evaluation'], 'allow_legacy' => true, 'searchable' => true ) ), $this->field( 'first_entry_country', 'کشور اولین ورود', 'select', false, array( 'options' => $country_lists['traveler_evaluation'], 'allow_legacy' => true, 'searchable' => true ) ),
+						$this->field( 'travel_purpose_details', 'اطلاعات تکمیلی در مورد هدف از سفر', 'textarea' ), $this->field( 'main_destination_country', 'کشور مقصد اصلی', 'select', false, array( 'options' => $country_lists['traveler_evaluation'], 'archived_options' => $country_archived_options, 'allow_legacy' => true, 'searchable' => true ) ), $this->field( 'first_entry_country', 'کشور اولین ورود', 'select', false, array( 'options' => $country_lists['traveler_evaluation'], 'archived_options' => $country_archived_options, 'allow_legacy' => true, 'searchable' => true ) ),
 						$this->field( 'requested_entries', 'تعداد ورودهای درخواستی', 'checkbox', false, array( 'multiple' => true, 'options' => array( 'single' => 'یکبار ورود', 'double' => 'دوبار ورود', 'multiple' => 'چند بار ورود (مولتیپل)' ) ) ),
 					) ),
 					'schengen' => $this->section( 'سابقه شنگن و ویزا', array(
@@ -298,7 +301,7 @@ class Didar_Form_Registry {
 				'default_status' => 'pending_review',
 				'sections'       => array(
 					'identity' => $this->section( 'اطلاعات هویتی و تماسی', array(
-						$this->field( 'request_for', 'ثبت درخواست برای خود یا شخص دیگر', 'radio', false, array( 'default' => 'self', 'options' => $request_for, 'default_value_options' => true ) ), $this->field( 'first_name', 'نام', 'text', false, array( 'autocomplete' => 'given-name', 'profile_autofill' => 'first_name' ) ), $this->field( 'last_name', 'نام خانوادگی', 'text', false, array( 'autocomplete' => 'family-name', 'profile_autofill' => 'last_name' ) ), $this->field( 'birth_surname', 'نام خانوادگی زمان تولد' ), $this->field( 'birth_date', 'تاریخ تولد', 'date', false, array( 'profile_autofill' => 'birth_date' ) ), $this->field( 'birth_province', 'استان محل تولد', 'select', false, array( 'options' => $provinces, 'searchable' => true, 'dependent_on' => 'birth_country', 'dependent_value' => 'iran', 'option_source' => 'iran_provinces' ) ), $this->field( 'birth_city', 'شهر محل تولد', 'select', false, array( 'options' => $cities, 'searchable' => true, 'allow_legacy' => true, 'dependent_on' => 'birth_province', 'dependent_country' => 'birth_country', 'dependent_value' => 'iran', 'option_source' => 'iran_cities', 'option_provinces' => $city_provinces ) ), $this->field( 'birth_place', 'شهر یا محل تولد خارج از ایران', 'text', false, array( 'foreign_birth_location' => true ) ), $this->field( 'birth_country', 'کشور محل تولد', 'select', false, array( 'default' => 'iran', 'default_value_options' => true, 'options' => $country_lists['visa_request'], 'searchable' => true, 'allow_legacy' => true ) ),
+						$this->field( 'request_for', 'ثبت درخواست برای خود یا شخص دیگر', 'radio', false, array( 'default' => 'self', 'options' => $request_for, 'default_value_options' => true ) ), $this->field( 'first_name', 'نام', 'text', false, array( 'autocomplete' => 'given-name', 'profile_autofill' => 'first_name' ) ), $this->field( 'last_name', 'نام خانوادگی', 'text', false, array( 'autocomplete' => 'family-name', 'profile_autofill' => 'last_name' ) ), $this->field( 'birth_surname', 'نام خانوادگی زمان تولد' ), $this->field( 'birth_date', 'تاریخ تولد', 'date', false, array( 'profile_autofill' => 'birth_date' ) ), $this->field( 'birth_province', 'استان محل تولد', 'select', false, array( 'options' => $provinces, 'searchable' => true, 'dependent_on' => 'birth_country', 'dependent_value' => 'iran', 'option_source' => 'iran_provinces' ) ), $this->field( 'birth_city', 'شهر محل تولد', 'select', false, array( 'options' => $cities, 'searchable' => true, 'allow_legacy' => true, 'dependent_on' => 'birth_province', 'dependent_country' => 'birth_country', 'dependent_value' => 'iran', 'option_source' => 'iran_cities', 'option_provinces' => $city_provinces ) ), $this->field( 'birth_place', 'شهر یا محل تولد خارج از ایران', 'text', false, array( 'foreign_birth_location' => true ) ), $this->field( 'birth_country', 'کشور محل تولد', 'select', false, array( 'default' => 'iran', 'default_value_options' => true, 'options' => $country_lists['visa_request'], 'archived_options' => $country_archived_options, 'searchable' => true, 'allow_legacy' => true ) ),
 						$this->field( 'current_nationality', 'تابعیت فعلی' ), $this->field( 'birth_nationality', 'تابعیت زمان تولد' ), $this->national_id_field( 'national_id', array( 'profile_autofill' => 'national_id' ) ), $this->field( 'marital_status', 'وضعیت تاهل', 'select', false, array( 'options' => array( 'single' => 'مجرد', 'married' => 'متاهل' ) ) ),
 						$this->field( 'mobile', 'موبایل', 'text', false, array( 'inputmode' => 'tel', 'autocomplete' => 'tel', 'profile_autofill' => 'mobile' ) ), $this->field( 'email', 'ایمیل', 'email', false, array( 'autocomplete' => 'email', 'profile_autofill' => 'email' ) ), $this->field( 'residential_address', 'آدرس کامل مسکونی', 'textarea' ), $this->field( 'postal_code', 'کد پستی', 'text', false, array( 'inputmode' => 'numeric' ) ),
 					) ),
@@ -307,7 +310,7 @@ class Didar_Form_Registry {
 						$this->field( 'invitation_type', 'نوع دعوت‌نامه', 'select', false, array( 'options' => array( 'family' => 'دیدار خانواده', 'friend' => 'دیدار دوست', 'spouse_family' => 'دیدار همسر', 'business' => 'سفر تجاری', 'conference' => 'کنفرانس', 'academic_research' => 'سفر علمی/تحقیقاتی', 'cultural_sports' => 'فرهنگی/ورزشی', 'medical' => 'درمان', 'tourism' => 'توریسم (بدون دعوت‌نامه شخصی)' ) ) ),
 					) ),
 					'travel_documents' => $this->section( 'مدارک سفر', array(
-						$this->passport_number_field(), $this->field( 'passport_expiry', 'تاریخ انقضای گذرنامه', 'date' ), $this->field( 'passport_issuer_country', 'کشور صادرکننده پاسپورت', 'select', false, array( 'options' => $country_lists['visa_request'], 'allow_legacy' => true, 'searchable' => true ) ), $this->field( 'travel_destination', 'مقصد سفر', 'select', false, array( 'options' => $country_lists['visa_request'], 'allow_legacy' => true, 'searchable' => true ) ),
+						$this->passport_number_field(), $this->field( 'passport_expiry', 'تاریخ انقضای گذرنامه', 'date' ), $this->field( 'passport_issuer_country', 'کشور صادرکننده پاسپورت', 'select', false, array( 'options' => $country_lists['visa_request'], 'archived_options' => $country_archived_options, 'allow_legacy' => true, 'searchable' => true ) ), $this->field( 'travel_destination', 'مقصد سفر', 'select', false, array( 'options' => $country_lists['visa_request'], 'archived_options' => $country_archived_options, 'allow_legacy' => true, 'searchable' => true ) ),
 					) ),
 					'documents' => $this->section( 'مدارک', array(
 						$this->field( 'personal_photo', 'عکس شخصی', 'file', false, array_merge( $visa_document_upload, array( 'profile_autofill' => 'personal_photo' ) ) ),
@@ -326,10 +329,10 @@ class Didar_Form_Registry {
 					) ),
 					'history' => $this->section( 'سابقه ویزا و سفر', array(
 						$this->field( 'has_rejection', 'سابقه ریجکتی', 'radio', false, array( 'options' => $yes_no ) ),
-						$this->field( 'rejection_embassy', 'کشورهای سفارت ریجکت‌کننده', 'select', false, array( 'options' => $country_lists['visa_request'], 'multiple' => true, 'half_width' => true, 'allow_legacy' => true, 'searchable' => true, 'conditional_on' => 'has_rejection', 'conditional_value' => 'yes' ) ),
+						$this->field( 'rejection_embassy', 'کشورهای سفارت ریجکت‌کننده', 'select', false, array( 'options' => $country_lists['visa_request'], 'archived_options' => $country_archived_options, 'multiple' => true, 'half_width' => true, 'allow_legacy' => true, 'searchable' => true, 'conditional_on' => 'has_rejection', 'conditional_value' => 'yes' ) ),
 						$this->field( 'rejection_date', 'تاریخ ریجکتی', 'date', false, array( 'conditional_on' => 'has_rejection', 'conditional_value' => 'yes' ) ),
 						$this->field( 'has_previous_schengen', 'سابقه ویزای شنگن قبلی', 'radio', false, array( 'options' => $yes_no ) ),
-						$this->field( 'previous_schengen_country', 'کشورهای ویزای شنگن قبلی', 'select', false, array( 'options' => $country_lists['visa_request'], 'multiple' => true, 'half_width' => true, 'allow_legacy' => true, 'searchable' => true, 'conditional_on' => 'has_previous_schengen', 'conditional_value' => 'yes' ) ),
+						$this->field( 'previous_schengen_country', 'کشورهای ویزای شنگن قبلی', 'select', false, array( 'options' => $country_lists['visa_request'], 'archived_options' => $country_archived_options, 'multiple' => true, 'half_width' => true, 'allow_legacy' => true, 'searchable' => true, 'conditional_on' => 'has_previous_schengen', 'conditional_value' => 'yes' ) ),
 						$this->field( 'previous_schengen_date', 'تاریخ ویزای شنگن قبلی', 'date', false, array( 'conditional_on' => 'has_previous_schengen', 'conditional_value' => 'yes' ) ),
 						$this->field( 'estimated_travel_date', 'از تاریخ', 'date', false, array( 'conditional_on' => 'has_previous_schengen', 'conditional_value' => 'yes' ) ),
 						$this->field( 'estimated_travel_end_date', 'تا تاریخ', 'date', false, array( 'conditional_on' => 'has_previous_schengen', 'conditional_value' => 'yes', 'date_range_start' => 'estimated_travel_date' ) ),

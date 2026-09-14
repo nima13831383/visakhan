@@ -12,6 +12,8 @@
 
 فیلدهای «تاریخ تولد» و «کد ملی» از متاهای `_didar_birth_date` و `_didar_national_id` خوانده می‌شوند و فقط در صورت تنظیم Custom Field به Person ارسال می‌گردند. این نگاشت از نگاشت فیلدهای فرم به Deal مستقل است.
 
+پنج مدرک تصویری پروفایل (`national_card_front`، `national_card_back`، `passport_main_page`، `personal_photo` و `birth_certificate_first_page`) نیز فقط از WordPress User/Profile به Person نگاشت می‌شوند. مدیر باید Field Key واقعی Custom Field متنی Person را در تنظیمات وارد کند. مقدار outbound، URL نهایی سرویس فایل در حالت مستقیم است؛ مسیر filesystem، شناسهٔ داخلی فایل، metadata و binary وارد payload نمی‌شوند. در حالت secure، چون URL پروکسی به نشست WordPress و مجوز کاربر نیاز دارد، افزونه آن را به Didar نمی‌فرستد. جایگزینی و حذف از همان Person پایدار کاربر sync می‌شوند و reverse sync فایل از Didar فعال نیست.
+
 هویت محلی WordPress User است و شناسهٔ خارجی در user meta `_didar_person_id` پایدار می‌ماند. sync به owner پیش‌فرض Didar و موبایل نیاز دارد. lookup دقیق موبایل و بررسی شناسهٔ ذخیره‌شده پیش از create/update انجام می‌شود؛ ابهام Person، ایجاد Deal را متوقف می‌کند.
 
 ## Deal

@@ -5,7 +5,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class Didar_Reference_Data {
-	public static function countries() {
+	/**
+	 * The original built-in catalog used to seed managed country storage.
+	 *
+	 * Keep this method separate from countries() so a first-run migration can
+	 * recover the canonical keys without recursively reading managed storage.
+	 */
+	public static function default_countries() {
 		return array(
 			'iran' => 'ایران',
 			'china' => 'چین', 'thailand' => 'تایلند', 'japan' => 'ژاپن', 'south_korea' => 'کره جنوبی',
@@ -25,6 +31,11 @@ class Didar_Reference_Data {
 			'argentina' => 'آرژانتین', 'dominica' => 'دومینیکا', 'south_africa' => 'آفریقای جنوبی', 'tunisia' => 'تونس',
 			'egypt' => 'مصر', 'morocco' => 'مراکش', 'ivory_coast' => 'ساحل عاج', 'australia' => 'استرالیا',
 		);
+	}
+
+	/** Return the active managed country catalog used by all form consumers. */
+	public static function countries() {
+		return class_exists( 'Didar_Country_Catalog' ) ? Didar_Country_Catalog::get_countries() : self::default_countries();
 	}
 
 	public static function countries_for_form( $form_type ) {

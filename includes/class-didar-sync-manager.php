@@ -19,6 +19,7 @@ class Didar_Sync_Manager {
 	const META_COMPANION_CASES = '_didar_companion_cases';
 	const META_MAIN_APPLICANT_CASE = '_didar_main_applicant_case';
 	const META_CASE_STATE = '_didar_case_sync_state';
+	const META_PERSON_STATE = '_didar_person_sync_state';
 	const USER_PERSON_META = '_didar_person_id';
 
 	private static $suppress = false;
@@ -54,9 +55,9 @@ class Didar_Sync_Manager {
 		add_action( 'didar_submission_created', array( $this, 'queue_submission' ), 20, 1 );
 		add_action( 'didar_submission_updated', array( $this, 'queue_submission' ), 20, 1 );
 		add_action( 'didar_submission_workflow_changed', array( $this, 'queue_submission' ), 20, 1 );
-		add_action( self::CRON_HOOK, array( $this, 'process_submission' ), 10, 1 );
+		add_action( self::CRON_HOOK, array( $this, 'process_scheduled_submission' ), 10, 1 );
 		add_filter( 'cron_schedules', array( $this, 'register_cron_schedule' ) );
-		add_action( self::USER_HOOK, array( $this, 'process_user' ), 10, 1 );
+		add_action( self::USER_HOOK, array( $this, 'process_scheduled_user' ), 10, 1 );
 		add_action( 'rest_api_init', array( $this, 'register_webhook_route' ) );
 		add_filter( 'pre_delete_post', array( $this, 'guard_submission_delete' ), 10, 3 );
 		add_filter( 'pre_trash_post', array( $this, 'guard_submission_delete' ), 10, 3 );
@@ -178,10 +179,13 @@ class Didar_Sync_Manager {
 	}
 
 	/** Public entry point for the frontend profile module; the actual Person logic remains centralized here. */
-	public function sync_user_now( $user_id, $source = 'profile_form' ) {
-		$result = $this->process_user( absint( $user_id ), $source );
+	public function sync_user_now( $user_id, $source = 'profile_form', $options = array() ) {
+		$user_id = absint( $user_id );
+		$options = $this->normalize_user_sync_options( $options );
+		$this->remember_user_sync_options( $user_id, $options );
+		$result = $this->process_user( $user_id, $source, $options );
 		if ( is_wp_error( $result ) ) {
-			$this->queue_user_retry( absint( $user_id ) );
+			$this->queue_user_retry( $user_id );
 		}
 		return $result;
 	}
@@ -233,21 +237,519 @@ class Didar_Sync_Manager {
 		return $this->process_submission( $post_id );
 	}
 
-	public function process_user( $user_id = 0, $source = 'wp_cron' ) {
+	public function process_user( $user_id = 0, $source = 'wp_cron', $options = array() ) {
 		if ( ! absint( $user_id ) ) {
 			return $this->process_pending_users();
 		}
-		$user = get_user_by( 'id', absint( $user_id ) );
+		$user_id = absint( $user_id );
+		$options = $this->normalize_user_sync_options( $options );
+		$this->remember_user_sync_options( $user_id, $options );
+		$options = $this->stored_user_sync_options( $user_id, $options );
+		$user = get_user_by( 'id', $user_id );
 		if ( ! $user || ! $this->enabled() ) { return new WP_Error( 'didar_user_sync_unavailable', 'User or Didar configuration is unavailable.' ); }
 		$settings = $this->settings->all();
 		if ( empty( $settings['didar_default_owner_id'] ) ) { $this->log_user_state( $user->ID, 'pending', 'didar_default_owner_missing' ); $this->queue_user_retry( $user->ID ); return new WP_Error( 'didar_default_owner_missing', 'Didar default owner is missing.' ); }
 		if ( ! $this->mapper->wordpress_user_profile( $user )['mobile'] ) { $this->log_user_state( $user->ID, 'pending', 'didar_mobile_missing' ); $this->queue_user_retry( $user->ID ); return new WP_Error( 'didar_mobile_missing', 'Digits mobile is not available yet.' ); }
 		$trace = Didar_Logger::trace_id( '' ); $this->api->set_trace_id( $trace );
-		$result = $this->resolve_and_sync_person( $user, array(), '', 0, $trace );
+		$result = $this->resolve_and_sync_person( $user, array(), '', 0, $trace, $options );
 		if ( is_wp_error( $result ) ) { $status = 'didar_person_conflict' === $result->get_error_code() ? 'conflict' : 'pending'; $this->log_user_state( $user->ID, $status, $result->get_error_code() ); if ( 'conflict' !== $status ) { $this->queue_user_retry( $user->ID ); } return $result; }
 		$this->log_user_state( $user->ID, 'synced', '' );
+		$this->clear_user_sync_options( $user->ID );
 		$this->clear_user_retries( $user->ID );
 		return $result;
+	}
+
+	/** Return the current durable queue counts without executing any work. */
+	public function queue_status() {
+		$submission_ids = $this->queued_submission_ids();
+		$case_ids       = $this->queued_case_ids();
+		$user_ids       = $this->queued_user_ids();
+		$events         = $this->item_scheduled_events();
+		$stale_locks    = $this->stale_submission_lock_names();
+		$active_locks   = $this->active_submission_lock_names();
+		$eligible       = count( $submission_ids ) + count( $case_ids ) + count( $user_ids ) + count( $events );
+
+		return array(
+			'submissions'       => count( $submission_ids ),
+			'cases'             => count( $case_ids ),
+			'persons'           => count( $user_ids ),
+			'scheduled_events'  => count( $events ),
+			'stale_locks'       => count( $stale_locks ),
+			'active_locks'      => count( $active_locks ),
+			'eligible'          => $eligible,
+			'total'             => $eligible + count( $stale_locks ),
+		);
+	}
+
+	/**
+	 * Return the local, normalized durable sync queue without executing work.
+	 * A scheduled event decorates its durable item when possible, preventing a
+	 * cron callback and its post/user state from being shown twice.
+	 */
+	public function queue_inventory() {
+		$scheduled = $this->scheduled_events_by_object();
+		$items     = array();
+
+		foreach ( $this->queued_submission_ids() as $post_id ) {
+			$items[] = $this->submission_queue_item( $post_id, get_post_meta( $post_id, self::META_STATE, true ), $scheduled['submission'][ $post_id ] ?? array() );
+			unset( $scheduled['submission'][ $post_id ] );
+		}
+		foreach ( $this->queued_user_ids() as $user_id ) {
+			$items[] = $this->person_queue_item( $user_id, get_user_meta( $user_id, self::META_PERSON_STATE, true ), $scheduled['person'][ $user_id ] ?? array() );
+			unset( $scheduled['person'][ $user_id ] );
+		}
+		foreach ( $this->queued_case_ids() as $post_id ) {
+			$items[] = $this->case_queue_item( $post_id );
+		}
+
+		foreach ( $scheduled['submission'] as $post_id => $events ) {
+			$items[] = $this->scheduled_queue_item( 'submission', $post_id, $events );
+		}
+		foreach ( $scheduled['person'] as $user_id => $events ) {
+			$items[] = $this->scheduled_queue_item( 'person', $user_id, $events );
+		}
+
+		usort(
+			$items,
+			function ( $left, $right ) {
+				$order = array( 'submission' => 1, 'person' => 2, 'case' => 3, 'scheduled_submission' => 4, 'scheduled_person' => 5 );
+				$left_order = $order[ $left['queue_type'] ] ?? 99;
+				$right_order = $order[ $right['queue_type'] ] ?? 99;
+				return $left_order === $right_order ? (int) $left['object_id'] <=> (int) $right['object_id'] : $left_order <=> $right_order;
+			}
+		);
+
+		return $items;
+	}
+
+	/** Execute one validated durable item using its existing cron entry point. */
+	public function run_queue_item( $item_key ) {
+		$item = $this->queue_item_by_key( $item_key );
+		if ( ! $item ) {
+			return new WP_Error( 'didar_queue_item_not_found', 'Queue item is no longer available.' );
+		}
+		if ( empty( $item['executable'] ) ) {
+			return new WP_Error( 'didar_queue_item_not_executable', 'Queue item has no independent worker.' );
+		}
+		if ( 'submission' === $item['queue_type'] && $this->submission_has_active_lock( $item['object_id'] ) ) {
+			return new WP_Error( 'didar_sync_locked', 'Submission sync is already in progress.' );
+		}
+
+		$this->logger->log( 'INFO', 'queue_item_run_manual', 'A single durable Didar queue item was manually dispatched.', array(
+			'actor_user_id' => get_current_user_id(),
+			'entity_type'   => $item['object_type'],
+			'local_id'      => $item['object_id'],
+			'queue_type'    => $item['queue_type'],
+		) );
+		$result = 'submission' === $item['queue_type'] ? $this->process_scheduled_submission( $item['object_id'] ) : $this->process_scheduled_user( $item['object_id'] );
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return array(
+			'item'      => $item,
+			'remaining' => (bool) $this->queue_item_by_key( $item['item_key'] ),
+		);
+	}
+
+	/** Discard one validated local item without invoking a worker or Didar. */
+	public function discard_queue_item( $item_key ) {
+		$item = $this->queue_item_by_key( $item_key );
+		if ( ! $item || empty( $item['discardable'] ) ) {
+			return new WP_Error( 'didar_queue_item_not_found', 'Queue item is no longer available.' );
+		}
+		if ( 'submission' === $item['queue_type'] && $this->submission_has_active_lock( $item['object_id'] ) ) {
+			return new WP_Error( 'didar_sync_locked', 'Submission sync is already in progress.' );
+		}
+
+		$scheduled_removed = 0;
+		if ( 'submission' === $item['queue_type'] ) {
+			delete_post_meta( $item['object_id'], self::META_STATE );
+			$scheduled_removed = $this->unschedule_item_events( self::CRON_HOOK, $item['object_id'] );
+		} elseif ( 'person' === $item['queue_type'] ) {
+			delete_user_meta( $item['object_id'], self::META_PERSON_STATE );
+			$scheduled_removed = $this->unschedule_item_events( self::USER_HOOK, $item['object_id'] );
+		} elseif ( 'case' === $item['queue_type'] ) {
+			// Cases have no independent cron callback; the parent submission worker owns retries.
+			$this->discard_case_queue_state( $item['object_id'] );
+		} elseif ( 'scheduled_submission' === $item['queue_type'] ) {
+			$scheduled_removed = $this->unschedule_item_events( self::CRON_HOOK, $item['object_id'] );
+		} elseif ( 'scheduled_person' === $item['queue_type'] ) {
+			$scheduled_removed = $this->unschedule_item_events( self::USER_HOOK, $item['object_id'] );
+		}
+
+		$this->logger->log( 'INFO', 'queue_item_discarded', 'A single durable Didar queue item was discarded without execution.', array(
+			'actor_user_id'       => get_current_user_id(),
+			'entity_type'         => $item['object_type'],
+			'local_id'            => $item['object_id'],
+			'queue_type'          => $item['queue_type'],
+			'scheduled_removed'   => $scheduled_removed,
+		) );
+
+		return array( 'item' => $item, 'scheduled_removed' => $scheduled_removed );
+	}
+
+	private function queue_item_by_key( $item_key ) {
+		$item_key = sanitize_text_field( (string) $item_key );
+		foreach ( $this->queue_inventory() as $item ) {
+			if ( isset( $item['item_key'] ) && hash_equals( (string) $item['item_key'], $item_key ) ) {
+				return $item;
+			}
+		}
+		return array();
+	}
+
+	private function submission_queue_item( $post_id, $state, $events ) {
+		$post_id   = absint( $post_id );
+		$form_type = sanitize_key( (string) get_post_meta( $post_id, '_didar_form_type', true ) );
+		$form      = $this->registry->get( $form_type );
+		$owner     = get_user_by( 'id', $this->service->get_owner_user_id( $post_id ) );
+		return $this->queue_item(
+			'submission',
+			'submission',
+			$post_id,
+			$form_type,
+			$state,
+			$events,
+			true,
+			array(
+				'form_label' => $form['label'] ?? $form_type,
+				'owner_name' => $owner ? $owner->display_name : '',
+				'deal_id'    => sanitize_text_field( (string) get_post_meta( $post_id, self::META_DEAL_ID, true ) ),
+			)
+		);
+	}
+
+	private function person_queue_item( $user_id, $state, $events ) {
+		$user_id = absint( $user_id );
+		$user    = get_user_by( 'id', $user_id );
+		return $this->queue_item(
+			'person',
+			'person',
+			$user_id,
+			'',
+			$state,
+			$events,
+			true,
+			array(
+				'user_name'  => $user ? $user->display_name : '',
+				'user_login' => $user ? $user->user_login : '',
+				'person_id'  => sanitize_text_field( (string) get_user_meta( $user_id, self::USER_PERSON_META, true ) ),
+			)
+		);
+	}
+
+	private function case_queue_item( $post_id ) {
+		$post_id    = absint( $post_id );
+		$form_type  = sanitize_key( (string) get_post_meta( $post_id, '_didar_form_type', true ) );
+		$form       = $this->registry->get( $form_type );
+		$case_state = get_post_meta( $post_id, self::META_CASE_STATE, true );
+		$main       = get_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, true );
+		$links      = get_post_meta( $post_id, self::META_COMPANION_CASES, true );
+		$case_ids   = array();
+		$errors     = array();
+		$attempts   = 0;
+		foreach ( array_merge( array( $case_state, $main ), is_array( $links ) ? array_values( $links ) : array() ) as $state ) {
+			if ( ! is_array( $state ) ) { continue; }
+			if ( ! empty( $state['case_id'] ) ) { $case_ids[] = sanitize_text_field( (string) $state['case_id'] ); }
+			if ( ! empty( $state['last_error'] ) ) { $errors[] = sanitize_key( (string) $state['last_error'] ); }
+			$attempts = max( $attempts, absint( $state['attempts'] ?? 0 ) );
+		}
+		$state = is_array( $case_state ) ? $case_state : array();
+		$state['attempts'] = $attempts;
+		$state['last_error'] = $errors ? reset( $errors ) : '';
+		return $this->queue_item( 'case', 'case', $post_id, $form_type, $state, array(), false, array( 'form_label' => $form['label'] ?? $form_type, 'case_ids' => array_values( array_unique( array_filter( $case_ids ) ) ) ) );
+	}
+
+	private function scheduled_queue_item( $object_type, $object_id, $events ) {
+		$object_type = 'person' === $object_type ? 'person' : 'submission';
+		$queue_type  = 'scheduled_' . $object_type;
+		$state       = array( 'status' => 'scheduled' );
+		$object_id   = absint( $object_id );
+		if ( 'submission' === $object_type ) {
+			$form_type = sanitize_key( (string) get_post_meta( $object_id, '_didar_form_type', true ) );
+			$form      = $this->registry->get( $form_type );
+			$owner     = get_user_by( 'id', $this->service->get_owner_user_id( $object_id ) );
+			return $this->queue_item( $queue_type, $object_type, $object_id, $form_type, $state, $events, false, array(
+				'form_label' => $form['label'] ?? $form_type,
+				'owner_name' => $owner ? $owner->display_name : '',
+				'deal_id'    => sanitize_text_field( (string) get_post_meta( $object_id, self::META_DEAL_ID, true ) ),
+			) );
+		}
+
+		$user = get_user_by( 'id', $object_id );
+		return $this->queue_item( $queue_type, $object_type, $object_id, '', $state, $events, false, array(
+			'user_name'  => $user ? $user->display_name : '',
+			'user_login' => $user ? $user->user_login : '',
+			'person_id'  => sanitize_text_field( (string) get_user_meta( $object_id, self::USER_PERSON_META, true ) ),
+		) );
+	}
+
+	private function queue_item( $queue_type, $object_type, $object_id, $form_type, $state, $events, $executable, $identity ) {
+		$state = is_array( $state ) ? $state : array();
+		$events = is_array( $events ) ? $events : array();
+		$scheduled_at = 0;
+		foreach ( $events as $event ) { $timestamp = absint( $event['timestamp'] ?? 0 ); if ( $timestamp && ( ! $scheduled_at || $timestamp < $scheduled_at ) ) { $scheduled_at = $timestamp; } }
+		return array(
+			'item_key'              => $queue_type . ':' . absint( $object_id ),
+			'queue_type'            => $queue_type,
+			'object_type'           => $object_type,
+			'object_id'             => absint( $object_id ),
+			'form_type'             => sanitize_key( (string) $form_type ),
+			'current_state'         => sanitize_key( (string) ( $state['status'] ?? '' ) ),
+			'attempt_count'         => absint( $state['attempts'] ?? 0 ),
+			'last_error'            => ! empty( $state['last_error'] ) ? sanitize_key( (string) $state['last_error'] ) : ( ! empty( $state['error'] ) ? sanitize_key( (string) $state['error'] ) : '' ),
+			'scheduled_at'          => $scheduled_at,
+			'scheduled_event_count' => count( $events ),
+			'executable'            => (bool) $executable,
+			'discardable'           => true,
+			'locked'                => 'submission' === $queue_type && $this->submission_has_active_lock( $object_id ),
+			'identity'              => is_array( $identity ) ? $identity : array(),
+		);
+	}
+
+	private function scheduled_events_by_object() {
+		$grouped = array( 'submission' => array(), 'person' => array() );
+		foreach ( $this->item_scheduled_events() as $event ) {
+			$object_type = self::USER_HOOK === $event['hook'] ? 'person' : 'submission';
+			$object_id   = absint( $event['args'][0] ?? 0 );
+			if ( ! $object_id ) { continue; }
+			if ( ! isset( $grouped[ $object_type ][ $object_id ] ) ) { $grouped[ $object_type ][ $object_id ] = array(); }
+			$grouped[ $object_type ][ $object_id ][] = $event;
+		}
+		return $grouped;
+	}
+
+	private function unschedule_item_events( $hook, $object_id ) {
+		$removed = 0;
+		foreach ( $this->item_scheduled_events() as $event ) {
+			if ( $hook !== $event['hook'] || absint( $object_id ) !== absint( $event['args'][0] ?? 0 ) ) { continue; }
+			if ( wp_unschedule_event( $event['timestamp'], $event['hook'], $event['args'] ) ) { $removed++; }
+		}
+		return $removed;
+	}
+
+	private function submission_has_active_lock( $post_id ) {
+		$lock = get_option( self::LOCK_PREFIX . absint( $post_id ), array() );
+		return is_array( $lock ) && absint( $lock['expires_at'] ?? 0 ) > time();
+	}
+
+	/** Discard current queue work without invoking a sync callback or the Didar API. */
+	public function purge_queue() {
+		$submission_ids = $this->queued_submission_ids();
+		$case_ids       = $this->queued_case_ids();
+		$user_ids       = $this->queued_user_ids();
+		$events         = $this->item_scheduled_events();
+		$stale_locks    = $this->stale_submission_lock_names();
+		$removed = $this->remove_queue_records( $submission_ids, $case_ids, $user_ids, $events, $stale_locks );
+
+		$after = $this->queue_status();
+		$result = array(
+			'submissions'      => count( $submission_ids ),
+			'cases'            => count( $case_ids ),
+			'persons'          => count( $user_ids ),
+			'scheduled_events' => $removed['scheduled_events'],
+			'stale_locks'      => count( $stale_locks ),
+			'after'            => $after,
+		);
+		$this->logger->log( 'INFO', 'queue_purged', 'Current Didar sync queue items were discarded without execution.', array(
+			'actor_user_id'    => get_current_user_id(),
+			'submission_count'  => $result['submissions'],
+			'case_count'        => $result['cases'],
+			'person_count'      => $result['persons'],
+			'scheduled_count'   => $result['scheduled_events'],
+			'stale_lock_count'  => $result['stale_locks'],
+			'remaining_eligible'=> $after['eligible'],
+		) );
+
+		return $result;
+	}
+
+	/** Remove a supplied set of queue records; the admin path supplies the complete discovered queue. */
+	private function remove_queue_records( $submission_ids, $case_ids, $user_ids, $events, $stale_locks ) {
+		$scheduled_removed = 0;
+		foreach ( (array) $events as $event ) {
+			if ( wp_unschedule_event( $event['timestamp'], $event['hook'], $event['args'] ) ) {
+				$scheduled_removed++;
+			}
+		}
+
+		foreach ( (array) $submission_ids as $post_id ) {
+			delete_post_meta( absint( $post_id ), self::META_STATE );
+		}
+		foreach ( (array) $case_ids as $post_id ) {
+			$this->discard_case_queue_state( absint( $post_id ) );
+		}
+		foreach ( (array) $user_ids as $user_id ) {
+			delete_user_meta( absint( $user_id ), self::META_PERSON_STATE );
+		}
+		foreach ( (array) $stale_locks as $lock_name ) {
+			delete_option( $lock_name );
+		}
+
+		return array( 'scheduled_events' => $scheduled_removed );
+	}
+
+	private function is_queue_state( $state ) {
+		if ( ! is_array( $state ) ) {
+			return false;
+		}
+		return in_array( sanitize_key( (string) ( $state['status'] ?? '' ) ), array( 'queued', 'pending', 'retry', 'retrying', 'failed' ), true );
+	}
+
+	private function queued_submission_ids() {
+		$query = new WP_Query( array(
+			'post_type'      => Didar_Post_Type::POST_TYPE,
+			'post_status'    => 'any',
+			'fields'         => 'ids',
+			'posts_per_page' => -1,
+			'no_found_rows'  => true,
+			'meta_key'       => self::META_STATE,
+		) );
+		$ids = array();
+		foreach ( (array) $query->posts as $post_id ) {
+			if ( $this->is_queue_state( get_post_meta( absint( $post_id ), self::META_STATE, true ) ) ) {
+				$ids[] = absint( $post_id );
+			}
+		}
+		return array_values( array_unique( array_filter( $ids ) ) );
+	}
+
+	/** Cron entry point: a discarded item must be a no-op if a stale callback still fires. */
+	public function process_scheduled_submission( $post_id = 0 ) {
+		if ( absint( $post_id ) && ! $this->is_queue_state( get_post_meta( absint( $post_id ), self::META_STATE, true ) ) ) {
+			return true;
+		}
+		return $this->process_submission( absint( $post_id ) );
+	}
+
+	private function queued_user_ids() {
+		$query = new WP_User_Query( array( 'fields' => 'ID', 'number' => -1, 'meta_key' => self::META_PERSON_STATE ) );
+		$ids = array();
+		foreach ( (array) $query->get_results() as $user_id ) {
+			if ( $this->is_queue_state( get_user_meta( absint( $user_id ), self::META_PERSON_STATE, true ) ) ) {
+				$ids[] = absint( $user_id );
+			}
+		}
+		return array_values( array_unique( array_filter( $ids ) ) );
+	}
+
+	/** Cron entry point: a discarded Person item must be a no-op if a stale callback still fires. */
+	public function process_scheduled_user( $user_id = 0 ) {
+		if ( absint( $user_id ) && ! $this->is_queue_state( get_user_meta( absint( $user_id ), self::META_PERSON_STATE, true ) ) ) {
+			return true;
+		}
+		return $this->process_user( absint( $user_id ) );
+	}
+
+	private function queued_case_ids() {
+		$query = new WP_Query( array(
+			'post_type'      => Didar_Post_Type::POST_TYPE,
+			'post_status'    => 'any',
+			'fields'         => 'ids',
+			'posts_per_page' => -1,
+			'no_found_rows'  => true,
+			'meta_query'     => array(
+				'relation' => 'OR',
+				array( 'key' => self::META_CASE_STATE ),
+				array( 'key' => self::META_COMPANION_CASES ),
+				array( 'key' => self::META_MAIN_APPLICANT_CASE ),
+			),
+		) );
+		$ids = array();
+		foreach ( (array) $query->posts as $post_id ) {
+			$post_id = absint( $post_id );
+			$case_state = get_post_meta( $post_id, self::META_CASE_STATE, true );
+			$main       = get_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, true );
+			$links      = get_post_meta( $post_id, self::META_COMPANION_CASES, true );
+			$queued     = $this->is_queue_state( $case_state ) || $this->is_queue_state( $main );
+			foreach ( (array) $links as $link ) {
+				if ( $this->is_queue_state( $link ) ) {
+					$queued = true;
+					break;
+				}
+			}
+			if ( $queued ) {
+				$ids[] = $post_id;
+			}
+		}
+		return array_values( array_unique( array_filter( $ids ) ) );
+	}
+
+	private function item_scheduled_events() {
+		$events = array();
+		foreach ( (array) _get_cron_array() as $timestamp => $hooks ) {
+			foreach ( (array) $hooks as $hook => $items ) {
+				if ( ! in_array( $hook, array( self::CRON_HOOK, self::USER_HOOK ), true ) ) {
+					continue;
+				}
+				foreach ( (array) $items as $item ) {
+					$args = isset( $item['args'] ) && is_array( $item['args'] ) ? $item['args'] : array();
+					if ( empty( $args ) ) {
+						continue;
+					}
+					$events[] = array( 'timestamp' => (int) $timestamp, 'hook' => $hook, 'args' => $args );
+				}
+			}
+		}
+		return $events;
+	}
+
+	private function submission_lock_names() {
+		global $wpdb;
+		$like = $wpdb->esc_like( self::LOCK_PREFIX ) . '%';
+		return (array) $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s", $like ) );
+	}
+
+	private function stale_submission_lock_names() {
+		$stale = array();
+		$now = time();
+		foreach ( $this->submission_lock_names() as $name ) {
+			$lock = get_option( $name, array() );
+			if ( ! is_array( $lock ) || absint( $lock['expires_at'] ?? 0 ) <= $now ) {
+				$stale[] = $name;
+			}
+		}
+		return $stale;
+	}
+
+	private function active_submission_lock_names() {
+		$active = array();
+		$now = time();
+		foreach ( $this->submission_lock_names() as $name ) {
+			$lock = get_option( $name, array() );
+			if ( is_array( $lock ) && absint( $lock['expires_at'] ?? 0 ) > $now ) {
+				$active[] = $name;
+			}
+		}
+		return $active;
+	}
+
+	private function discard_case_queue_state( $post_id ) {
+		$links = get_post_meta( $post_id, self::META_COMPANION_CASES, true );
+		if ( is_array( $links ) ) {
+			$changed = false;
+			foreach ( $links as &$link ) {
+				if ( ! $this->is_queue_state( $link ) ) {
+					continue;
+				}
+				$link['status'] = 'discarded';
+				unset( $link['last_error'], $link['updated_at'] );
+				$changed = true;
+			}
+			unset( $link );
+			if ( $changed ) {
+				update_post_meta( $post_id, self::META_COMPANION_CASES, $links );
+			}
+		}
+
+		$main = get_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, true );
+		if ( $this->is_queue_state( $main ) ) {
+			$main['status'] = 'discarded';
+			unset( $main['last_error'], $main['updated_at'] );
+			update_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, $main );
+		}
+		delete_post_meta( $post_id, self::META_CASE_STATE );
 	}
 
 	/** Sweep durable pending submissions in bounded batches; individual events remain faster-path dispatch. */
@@ -748,8 +1250,8 @@ class Didar_Sync_Manager {
 	}
 
 	/** Registration/profile flow: resolve one Person deterministically and sync account data. */
-	private function resolve_and_sync_person( $user, $fields, $form_type, $submission_id, $trace ) {
-		$payload = $this->mapper->person_payload( $user, $fields, $form_type );
+	private function resolve_and_sync_person( $user, $fields, $form_type, $submission_id, $trace, $options = array() ) {
+		$payload = $this->mapper->person_payload( $user, $fields, $form_type, $options );
 		$stored_id = sanitize_text_field( (string) get_user_meta( $user->ID, self::USER_PERSON_META, true ) );
 		if ( $stored_id ) {
 			$detail = $this->api->person_by_id( $stored_id );
@@ -966,6 +1468,47 @@ class Didar_Sync_Manager {
 	private function release_submission_lock( $post_id, $token ) { $key = self::LOCK_PREFIX . absint( $post_id ); $existing = get_option( $key, array() ); if ( is_array( $existing ) && hash_equals( (string) ( $existing['token'] ?? '' ), (string) $token ) ) { delete_option( $key ); } }
 	private function fail( $post_id, $error, $pending = false ) { $state = $this->state( $post_id ); $state['status'] = $pending ? 'pending' : 'failed'; $state['last_error'] = sanitize_key( $error ); $state['attempts'] = absint( $state['attempts'] ?? 0 ) + 1; $state['updated_at'] = time(); update_post_meta( $post_id, self::META_STATE, $state ); $this->events->add( $post_id, 'didar_sync_failed', null, null, array( 'source' => 'Didar', 'error' => sanitize_key( $error ), 'attempt' => $state['attempts'] ) ); $retry = $pending && $state['attempts'] < 10; $operation = $retry ? 'sync_worker_item_failed' : ( $pending ? 'sync_retry_exhausted' : 'sync_permanent_failure' ); $message = $retry ? 'Sync failed; durable retry remains pending.' : ( $pending ? 'Sync retry limit was exhausted.' : 'Sync stopped on a permanent validation or identity error.' ); $this->logger->log( $retry ? 'WARNING' : 'ERROR', $operation, $message, $this->sync_context( $post_id, $state ) + array( 'retry_count' => $state['attempts'], 'error_code' => $error ) ); if ( $retry ) { $when = time() + min( HOUR_IN_SECONDS, 60 * max( 1, $state['attempts'] ) ); if ( $this->schedule_submission( $post_id, $when, 'retry' ) ) { $this->logger->log( 'INFO', 'sync_retry_scheduled', 'Didar sync retry scheduled; durable worker sweep is also available.', $this->sync_context( $post_id, $state ) + array( 'retry_count' => $state['attempts'], 'retry_delay' => $when - time(), 'scheduled_at' => Didar_Logger::display_timestamp( $when, DATE_ATOM ) ) ); } } return new WP_Error( sanitize_key( $error ), 'Didar synchronization failed.', array( 'trace_id' => $state['trace_id'] ?? '', 'retry_scheduled' => $retry ) ); }
 	private function success( $post_id, $deal_id, $internal_status = '' ) { $state = $this->state( $post_id ); $state['status'] = 'synced'; $state['last_error'] = ''; $state['last_synced_at'] = time(); $state['deal_id'] = $deal_id; $state['last_synced_internal_status'] = sanitize_key( (string) $internal_status ); update_post_meta( $post_id, self::META_STATE, $state ); return true; }
+	private function normalize_user_sync_options( $options ) {
+		$keys = array();
+		foreach ( (array) ( $options['clear_profile_documents'] ?? array() ) as $key ) {
+			$key = sanitize_key( (string) $key );
+			if ( $key && Didar_Profile_Document_Catalog::definition( $key ) ) {
+				$keys[] = $key;
+			}
+		}
+		return $keys ? array( 'clear_profile_documents' => array_values( array_unique( $keys ) ) ) : array();
+	}
+
+	private function stored_user_sync_options( $user_id, $options = array() ) {
+		$options = $this->normalize_user_sync_options( $options );
+		$state = get_user_meta( absint( $user_id ), '_didar_person_sync_state', true );
+		$stored = is_array( $state ) ? $this->normalize_user_sync_options( $state ) : array();
+		$keys = array_merge( $stored['clear_profile_documents'] ?? array(), $options['clear_profile_documents'] ?? array() );
+		return $keys ? array( 'clear_profile_documents' => array_values( array_unique( $keys ) ) ) : array();
+	}
+
+	private function remember_user_sync_options( $user_id, $options ) {
+		$user_id = absint( $user_id );
+		$options = $this->normalize_user_sync_options( $options );
+		if ( ! $user_id || empty( $options['clear_profile_documents'] ) ) {
+			return;
+		}
+		$state = get_user_meta( $user_id, '_didar_person_sync_state', true );
+		$state = is_array( $state ) ? $state : array();
+		$existing = $this->normalize_user_sync_options( $state );
+		$state['clear_profile_documents'] = array_values( array_unique( array_merge( $existing['clear_profile_documents'] ?? array(), $options['clear_profile_documents'] ) ) );
+		update_user_meta( $user_id, '_didar_person_sync_state', $state );
+	}
+
+	private function clear_user_sync_options( $user_id ) {
+		$state = get_user_meta( absint( $user_id ), '_didar_person_sync_state', true );
+		if ( ! is_array( $state ) || ! array_key_exists( 'clear_profile_documents', $state ) ) {
+			return;
+		}
+		unset( $state['clear_profile_documents'] );
+		update_user_meta( absint( $user_id ), '_didar_person_sync_state', $state );
+	}
+
 	private function log_user_state( $user_id, $status, $error ) { $state = get_user_meta( $user_id, '_didar_person_sync_state', true ); $state = is_array( $state ) ? $state : array(); $state['status'] = $status; $state['error'] = sanitize_key( $error ); $state['attempts'] = absint( $state['attempts'] ?? 0 ) + 1; $state['updated_at'] = time(); update_user_meta( $user_id, '_didar_person_sync_state', $state ); }
 	private function queue_user_retry( $user_id ) { $state = get_user_meta( $user_id, '_didar_person_sync_state', true ); if ( is_array( $state ) && absint( $state['attempts'] ?? 0 ) < 10 && ! wp_next_scheduled( self::USER_HOOK, array( absint( $user_id ) ) ) ) { $result = wp_schedule_single_event( time() + min( HOUR_IN_SECONDS, 60 * max( 1, absint( $state['attempts'] ) ) ), self::USER_HOOK, array( absint( $user_id ) ), true ); if ( is_wp_error( $result ) || false === $result ) { $this->logger->log( 'ERROR', 'sync_schedule_failed', 'Didar Person retry dispatch could not be scheduled; the durable worker sweep will retry it.', array( 'entity_type' => 'user', 'local_id' => absint( $user_id ), 'error_code' => is_wp_error( $result ) ? $result->get_error_code() : 'schedule_failed' ) ); } } }
 	private function clear_user_retries( $user_id ) { while ( $when = wp_next_scheduled( self::USER_HOOK, array( absint( $user_id ) ) ) ) { wp_unschedule_event( $when, self::USER_HOOK, array( absint( $user_id ) ) ); } }

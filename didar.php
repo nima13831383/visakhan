@@ -24,6 +24,7 @@ require_once DIDAR_PATH . 'includes/class-didar-access-control.php';
 require_once DIDAR_PATH . 'includes/class-didar-user-identity.php';
 require_once DIDAR_PATH . 'includes/class-didar-event-log.php';
 require_once DIDAR_PATH . 'includes/class-didar-logger.php';
+require_once DIDAR_PATH . 'includes/class-didar-country-catalog.php';
 require_once DIDAR_PATH . 'includes/class-didar-reference-data.php';
 require_once DIDAR_PATH . 'includes/class-didar-form-access.php';
 require_once DIDAR_PATH . 'includes/class-didar-companion-model.php';

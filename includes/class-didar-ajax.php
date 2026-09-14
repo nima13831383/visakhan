@@ -9,12 +9,14 @@ class Didar_Ajax {
 	private $renderer;
 	private $service;
 	private $files;
+	private $sync;
 
-	public function __construct( Didar_Form_Registry $registry, Didar_Field_Renderer $renderer, Didar_Submission_Service $service = null, Didar_File_Service $files = null ) {
+	public function __construct( Didar_Form_Registry $registry, Didar_Field_Renderer $renderer, Didar_Submission_Service $service = null, Didar_File_Service $files = null, Didar_Sync_Manager $sync = null ) {
 		$this->registry = $registry;
 		$this->renderer = $renderer;
 		$this->service  = $service ? $service : new Didar_Submission_Service( $registry, new Didar_Event_Log() );
 		$this->files    = $files ? $files : new Didar_File_Service( $registry, new Didar_Settings(), new Didar_Event_Log() );
+		$this->sync     = $sync;
 		$this->files->set_submission_service( $this->service );
 
 		add_action( 'wp_ajax_didar_upload_file', array( $this, 'upload_file' ) );
@@ -100,6 +102,7 @@ class Didar_Ajax {
 		$old = Didar_Profile_Document_Catalog::get_user_documents( get_current_user_id() )[ $key ] ?? 0;
 		Didar_Profile_Document_Catalog::set_user_document( get_current_user_id(), $key, $result['file_id'] );
 		if ( $old && absint( $old ) !== absint( $result['file_id'] ) ) { $this->files->delete_profile_file( $old, get_current_user_id() ); }
+		if ( $this->sync ) { $this->sync->sync_user_now( get_current_user_id(), 'profile_document' ); }
 		$result['download_url'] = $this->files->get_download_url( $result['file_id'] );
 		wp_send_json_success( $result );
 	}
@@ -111,6 +114,7 @@ class Didar_Ajax {
 		$file_id = absint( Didar_Profile_Document_Catalog::get_user_documents( get_current_user_id() )[ $key ] ?? 0 );
 		Didar_Profile_Document_Catalog::remove_user_document( get_current_user_id(), $key );
 		if ( $file_id ) { $this->files->delete_profile_file( $file_id, get_current_user_id() ); }
+		if ( $this->sync ) { $this->sync->sync_user_now( get_current_user_id(), 'profile_document_removed', array( 'clear_profile_documents' => array( $key ) ) ); }
 		wp_send_json_success( array( 'file_id' => $file_id, 'message' => 'فایل حذف شد.' ) );
 	}
 }

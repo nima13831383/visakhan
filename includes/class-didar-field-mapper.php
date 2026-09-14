@@ -35,7 +35,7 @@ class Didar_Field_Mapper {
 	}
 
 	/** Build the Person payload exclusively from the WordPress account/profile. */
-	public function person_payload( $user, $fields = array(), $form_type = '' ) {
+	public function person_payload( $user, $fields = array(), $form_type = '', $options = array() ) {
 		$profile = $this->wordpress_user_profile( $user );
 		$settings = $this->settings->all();
 		$owner_id = isset( $settings['didar_default_owner_id'] ) ? sanitize_text_field( (string) $settings['didar_default_owner_id'] ) : '';
@@ -51,7 +51,7 @@ class Didar_Field_Mapper {
 			'OwnerId'     => $owner_id,
 		);
 
-		$custom = $this->person_profile_custom_fields( $profile, $settings );
+		$custom = $this->person_profile_custom_fields( $profile, $settings, $user->ID, $options );
 		if ( $custom ) {
 			$payload['Fields'] = $custom;
 		}
@@ -187,7 +187,7 @@ class Didar_Field_Mapper {
 		return esc_url_raw( (string) $value );
 	}
 
-	private function person_profile_custom_fields( $profile, $settings ) {
+	private function person_profile_custom_fields( $profile, $settings, $user_id = 0, $options = array() ) {
 		$mapping = isset( $settings['didar_user_person_mappings'] ) && is_array( $settings['didar_user_person_mappings'] ) ? $settings['didar_user_person_mappings'] : array();
 		$values  = array(
 			'gender'            => $profile['gender'],
@@ -210,6 +210,24 @@ class Didar_Field_Mapper {
 				}
 			}
 		}
+
+		$clear_documents = isset( $options['clear_profile_documents'] ) && is_array( $options['clear_profile_documents'] ) ? $options['clear_profile_documents'] : array();
+		foreach ( Didar_Profile_Document_Catalog::keys() as $property ) {
+			$key = isset( $mapping[ $property ] ) && is_scalar( $mapping[ $property ] ) ? sanitize_text_field( (string) $mapping[ $property ] ) : '';
+			if ( ! $key ) {
+				continue;
+			}
+
+			$file_ids = isset( $profile[ $property ] ) && is_array( $profile[ $property ] ) ? $profile[ $property ] : array();
+			$file_id  = ! empty( $file_ids ) ? absint( reset( $file_ids ) ) : 0;
+			$url      = $file_id && $this->files ? $this->files->get_profile_sync_url( $file_id, $user_id, $property ) : '';
+			if ( $url ) {
+				$out[ $key ] = $url;
+			} elseif ( in_array( $property, $clear_documents, true ) ) {
+				$out[ $key ] = '';
+			}
+		}
+
 		return $out;
 	}
 

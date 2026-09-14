@@ -50,6 +50,7 @@ class Didar_Readable_Value_Serializer {
 	private function label( $key, $definition ) {
 		$options = isset( $definition['options'] ) && is_array( $definition['options'] ) ? $definition['options'] : array();
 		if ( ! empty( $definition['legacy_options'] ) && is_array( $definition['legacy_options'] ) ) { $options = $options + $definition['legacy_options']; }
+		if ( ! empty( $definition['archived_options'] ) && is_array( $definition['archived_options'] ) ) { $options = $options + $definition['archived_options']; }
 		if ( array_key_exists( $key, $options ) && is_scalar( $options[ $key ] ) ) { return (string) $options[ $key ]; }
 		return is_scalar( $key ) ? (string) $key : '';
 	}

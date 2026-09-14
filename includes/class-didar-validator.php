@@ -220,6 +220,9 @@ class Didar_Validator {
 					if ( ! empty( $field['legacy_options'] ) ) {
 						$allowed_options = $allowed_options + $field['legacy_options'];
 					}
+					if ( ! empty( $field['archived_options'] ) && ( 'admin' === $context || $submission_id ) ) {
+						$allowed_options = $allowed_options + $field['archived_options'];
+					}
 					foreach ( $raw as $item ) {
 						if ( is_array( $item ) || is_object( $item ) ) {
 							return new WP_Error( 'invalid_option', sprintf( __( 'گزینه انتخاب‌شده برای «%s» معتبر نیست.', 'didar' ), $label ) );
@@ -249,6 +252,9 @@ class Didar_Validator {
 				$allowed_options = $field['options'];
 				if ( ! empty( $field['legacy_options'] ) ) {
 					$allowed_options = $allowed_options + $field['legacy_options'];
+				}
+				if ( ! empty( $field['archived_options'] ) && ( 'admin' === $context || $submission_id ) ) {
+					$allowed_options = $allowed_options + $field['archived_options'];
 				}
 				if ( '' === $value || ! array_key_exists( $value, $allowed_options ) ) {
 					if ( ! empty( $field['allow_legacy'] ) && ( 'admin' === $context || $submission_id ) ) {

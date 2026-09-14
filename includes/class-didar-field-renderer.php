@@ -326,10 +326,15 @@ class Didar_Field_Renderer {
 			if ( '' === $selected_value || array_key_exists( $selected_value, $options ) ) {
 				continue;
 			}
+			if ( isset( $field['archived_options'][ $selected_value ] ) ) {
+				$options = array( $selected_value => $field['archived_options'][ $selected_value ] . ' — ' . __( 'مقدار آرشیوی', 'didar' ) ) + $options;
+				continue;
+			}
 			if ( isset( $field['legacy_options'][ $selected_value ] ) ) {
 				$options = array( $selected_value => $field['legacy_options'][ $selected_value ] . ' — ' . __( 'مقدار قدیمی', 'didar' ) ) + $options;
 			} elseif ( ! empty( $field['allow_legacy'] ) ) {
-				$options = array( $selected_value => sprintf( __( '%s — مقدار ذخیره‌شده قدیمی', 'didar' ), $selected_value ) ) + $options;
+				$legacy_label = class_exists( 'Didar_Country_Catalog' ) ? Didar_Country_Catalog::get_country_label( $selected_value, $selected_value ) : $selected_value;
+				$options = array( $selected_value => sprintf( __( '%s — مقدار ذخیره‌شده قدیمی', 'didar' ), $legacy_label ) ) + $options;
 			}
 		}
 

@@ -231,7 +231,7 @@ class Didar_Access_Control {
 		}
 
 		$admin_post_action = isset( $_REQUEST['action'] ) && ! is_array( $_REQUEST['action'] ) ? sanitize_key( wp_unslash( $_REQUEST['action'] ) ) : '';
-		if ( 'admin-post.php' === $pagenow && in_array( $admin_post_action, array( 'didar_download_file', 'didar_download_pdf', 'didar_download_pdf_file' ), true ) ) {
+		if ( 'admin-post.php' === $pagenow && in_array( $admin_post_action, array( 'didar_download_file', 'didar_download_pdf', 'didar_download_pdf_file', 'didar_country_save', 'didar_country_toggle' ), true ) ) {
 			return;
 		}
 

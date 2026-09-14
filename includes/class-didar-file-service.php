@@ -600,6 +600,28 @@ class Didar_File_Service {
 		return $this->direct_url( $record );
 	}
 
+	/** Resolve a final profile document to a direct URL for the Person payload. */
+	public function get_profile_sync_url( $file_id, $user_id, $field_key ) {
+		if ( 'direct' !== $this->settings->file_download_mode() ) {
+			return '';
+		}
+
+		$file_id   = absint( $file_id );
+		$user_id   = absint( $user_id );
+		$field_key = self::normalize_field_key( $field_key );
+		$record    = $this->get( $file_id );
+		if ( ! $file_id || ! $user_id || ! $field_key || ! $record || 'profile' !== $record['form_type'] || 'final' !== $record['file_status'] || $user_id !== (int) $record['owner_user_id'] || $field_key !== (string) $record['field_key'] ) {
+			return '';
+		}
+
+		$path = $this->absolute_path( $record );
+		if ( is_wp_error( $path ) || ! is_readable( $path ) ) {
+			return '';
+		}
+
+		return $this->direct_url( $record );
+	}
+
 	public function handle_secure_download() {
 		$file_id = isset( $_GET['file_id'] ) && ! is_array( $_GET['file_id'] ) ? absint( wp_unslash( $_GET['file_id'] ) ) : 0;
 		$nonce   = isset( $_GET['_wpnonce'] ) && ! is_array( $_GET['_wpnonce'] ) ? sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ) : '';

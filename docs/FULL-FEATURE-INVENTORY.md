@@ -538,7 +538,7 @@ Public status, public note, internal status, internal note, and assignee can be 
 
 `Didar_Workflow_Manager` supports per-form pipeline/workflow configuration, ordered statuses, labels, stage IDs, exactly one default status, reverse mapping, pipeline lookup, stale metadata indicators, and configuration validation. It falls back to legacy default-pipeline/status-stage settings only when permitted by the current code.
 
-Stage-progress UI uses the configured internal workflow for authorized operator views. It treats `cancelled`, `canceled`, `rejected`, `failed`, and `closed_lost` as terminal codes if encountered, even though they are not current reference-status keys.
+The request-details main status/progress UI uses the resolved public status for every viewer. The separate internal-workflow section remains capability-protected and uses the configured internal workflow. It treats `cancelled`, `canceled`, `rejected`, `failed`, and `closed_lost` as terminal codes if encountered, even though they are not current reference-status keys.
 
 ### 12.3 Append-only event log
 

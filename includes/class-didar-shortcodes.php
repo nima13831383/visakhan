@@ -464,7 +464,7 @@ class Didar_Shortcodes {
 		echo '<div class="didar-app" dir="rtl"><article class="didar-submission-details">';
 		echo '<header class="didar-list-header didar-details-header"><div><p class="didar-eyebrow">' . esc_html__( 'جزئیات درخواست', 'didar' ) . '</p><h2>' . esc_html( $form['label'] ) . ' <span class="didar-heading-id">#' . esc_html( $submission_id ) . '</span></h2></div><span class="didar-status didar-status--' . esc_attr( sanitize_html_class( $status ) ) . '">' . esc_html( $this->service->get_status_label( $status ) ) . '</span></header>';
 		$this->render_owner_identity( $submission_id );
-		$this->render_workflow_progress( $submission_id, $form_type, $status );
+		$this->render_workflow_progress( $submission_id, $status );
 		if ( $updated ) {
 			echo '<div class="didar-notice didar-notice--success" role="status">' . esc_html__( 'تغییرات درخواست با موفقیت ذخیره شد.', 'didar' ) . '</div>';
 		}
@@ -478,7 +478,7 @@ class Didar_Shortcodes {
 		if ( $this->service->can_view_internal( $submission_id ) ) {
 			$internal_status = $this->service->get_internal_status( $submission_id );
 			$internal_note   = $this->service->get_internal_note( $submission_id );
-			echo '<section class="didar-detail-section didar-internal-workflow"><h3>' . esc_html__( 'گردش کار داخلی', 'didar' ) . '</h3><dl class="didar-detail-grid"><div class="didar-detail-item"><dt>' . esc_html__( 'وضعیت داخلی', 'didar' ) . '</dt><dd>' . esc_html( $this->service->get_status_label( $internal_status ) ) . '</dd></div><div class="didar-detail-item"><dt>' . esc_html__( 'یادداشت داخلی', 'didar' ) . '</dt><dd>' . ( '' !== $internal_note ? nl2br( esc_html( $internal_note ) ) : '—' ) . '</dd></div></dl></section>';
+			echo '<section class="didar-detail-section didar-internal-workflow"><h3>' . esc_html__( 'گردش کار داخلی', 'didar' ) . '</h3><dl class="didar-detail-grid"><div class="didar-detail-item"><dt>' . esc_html__( 'وضعیت داخلی', 'didar' ) . '</dt><dd>' . esc_html( $this->workflow->status_label( $form_type, $internal_status ) ) . '</dd></div><div class="didar-detail-item"><dt>' . esc_html__( 'یادداشت داخلی', 'didar' ) . '</dt><dd>' . ( '' !== $internal_note ? nl2br( esc_html( $internal_note ) ) : '—' ) . '</dd></div></dl></section>';
 		}
 		if ( $this->service->can_view_history( $submission_id ) ) {
 			$this->render_activity_timeline( $this->service->get_events( $submission_id ) );
@@ -542,47 +542,35 @@ class Didar_Shortcodes {
 		echo '<div class="didar-details-owner"><span class="didar-request-owner__label">' . esc_html__( 'ثبت‌کننده درخواست', 'didar' ) . '</span><span class="didar-request-owner"><strong class="didar-request-owner__name">' . esc_html( $owner['name'] ) . '</strong><span class="didar-role-badge">' . esc_html( $owner['role_label'] ) . '</span></span></div>';
 	}
 
-	private function render_workflow_progress( $submission_id, $form_type, $public_status ) {
-		$viewer_role       = Didar_User_Identity::for_user( wp_get_current_user() )['role_key'];
-		$can_view_internal = in_array( $viewer_role, array( Didar_User_Identity::ROLE_ADMIN, Didar_User_Identity::ROLE_AGENT ), true ) && $this->service->can_view_internal( $submission_id );
-		$current_status    = $can_view_internal ? $this->service->get_internal_status( $submission_id ) : $public_status;
-		$current_label     = $can_view_internal ? $this->workflow->status_label( $form_type, $current_status ) : $this->service->get_status_label( $current_status );
-		$workflow          = $this->workflow->workflow( $form_type );
-		$pipeline          = ! empty( $workflow['pipeline_id'] ) ? $this->workflow->pipeline( $workflow['pipeline_id'] ) : array();
-		$stages            = isset( $pipeline['stages'] ) && is_array( $pipeline['stages'] ) ? $pipeline['stages'] : array();
-		$mapping           = $this->workflow->mapping( $form_type, $current_status );
-		$current_stage_id  = isset( $mapping['stage_id'] ) ? (string) $mapping['stage_id'] : '';
-		$state             = get_post_meta( $submission_id, Didar_Sync_Manager::META_STATE, true );
-		if ( ! $current_stage_id && is_array( $state ) ) {
-			$current_stage_id = sanitize_text_field( (string) ( $state['pipeline_stage_id'] ?? $state['stage_id'] ?? '' ) );
-		}
-
-		$current_index = -1;
-		if ( $can_view_internal && $current_stage_id && $stages ) {
-			foreach ( $stages as $index => $stage ) {
-				if ( (string) ( $stage['id'] ?? '' ) === $current_stage_id ) {
-					$current_index = (int) $index;
-					break;
-				}
-			}
-		}
-
-		if ( $current_index < 0 ) {
-			echo '<section class="didar-stage-progress didar-stage-progress--compact" role="status" aria-label="' . esc_attr__( 'وضعیت درخواست', 'didar' ) . '"><span class="didar-stage-progress__title">' . esc_html__( 'وضعیت درخواست', 'didar' ) . '</span><strong class="didar-stage-progress__current">' . esc_html( $current_label ) . '</strong></section>';
-			return;
-		}
-
-		$terminal = in_array( $current_status, array( 'cancelled', 'canceled', 'rejected', 'failed', 'closed_lost' ), true );
+	private function render_workflow_progress( $submission_id, $public_status ) {
+		$steps = $this->public_progress_steps();
+		$step_keys = array_keys( $steps );
+		$current_index = array_search( $public_status, $step_keys, true );
+		$current_index = false === $current_index ? 0 : (int) $current_index;
+		$terminal      = in_array( $public_status, array( 'cancelled', 'canceled', 'rejected', 'failed', 'closed_lost' ), true );
 		echo '<section class="didar-stage-progress" aria-labelledby="didar-stage-progress-title-' . esc_attr( $submission_id ) . '"><h3 id="didar-stage-progress-title-' . esc_attr( $submission_id ) . '" class="screen-reader-text">' . esc_html__( 'روند رسیدگی به درخواست', 'didar' ) . '</h3><ol class="didar-stage-progress__list">';
-		foreach ( $stages as $index => $stage ) {
+		foreach ( $steps as $status_key => $title ) {
+			$index = array_search( $status_key, $step_keys, true );
 			$index = (int) $index;
 			$is_current = $index === $current_index;
 			$class = $is_current ? ( $terminal ? 'is-current is-terminal' : 'is-current' ) : ( $index < $current_index ? 'is-completed' : 'is-future' );
 			$marker = $is_current && $terminal ? '×' : ( $index < $current_index ? '✓' : ( $index === $current_index ? '●' : '○' ) );
-			$title  = isset( $stage['title'] ) && is_scalar( $stage['title'] ) ? (string) $stage['title'] : __( 'مرحله', 'didar' );
 			echo '<li class="didar-stage-progress__item ' . esc_attr( $class ) . '"' . ( $is_current ? ' aria-current="step"' : '' ) . '><span class="didar-stage-progress__marker" aria-hidden="true">' . esc_html( $marker ) . '</span><span class="didar-stage-progress__label">' . esc_html( $title ) . '</span></li>';
 		}
 		echo '</ol></section>';
+	}
+
+	/** Canonical public presentation order; it is independent of CRM/internal workflow keys. */
+	private function public_progress_steps() {
+		$labels = Didar_Reference_Data::statuses();
+		$order  = array( 'pending_review', 'needs_correction', 'initial_approval', 'completed' );
+		$steps  = array();
+		foreach ( $order as $status_key ) {
+			if ( isset( $labels[ $status_key ] ) ) {
+				$steps[ $status_key ] = $labels[ $status_key ];
+			}
+		}
+		return $steps;
 	}
 
 	private function render_submission_edit( $submission_id ) {

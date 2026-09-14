@@ -368,7 +368,7 @@ class Didar_Settings_Transfer {
 				$out = Didar_Settings::PROFILE_FIELD_STATES; foreach ( (array) $value as $field => $state ) { $field = sanitize_key( (string) $field ); $state = sanitize_key( (string) $state ); if ( isset( $out[ $field ] ) && in_array( $state, array( 'editable', 'readonly', 'disabled' ), true ) ) { $out[ $field ] = $state; } } return $this->sort_associative( $out );
 
 			case 'didar_user_person_mappings':
-				$out = array(); foreach ( (array) $value as $property => $field_key ) { $property = sanitize_key( (string) $property ); $field_key = is_scalar( $field_key ) ? sanitize_text_field( (string) $field_key ) : ''; if ( in_array( $property, array( 'gender', 'display_name', 'profile_image_url' ), true ) && $field_key ) { $out[ $property ] = $field_key; } } return $this->sort_associative( $out );
+				$out = array(); foreach ( (array) $value as $property => $field_key ) { $property = sanitize_key( (string) $property ); $field_key = is_scalar( $field_key ) ? sanitize_text_field( (string) $field_key ) : ''; if ( in_array( $property, array( 'gender', 'display_name', 'profile_image_url', 'birth_date', 'national_id', 'national_card_front', 'national_card_back', 'passport_main_page', 'personal_photo', 'birth_certificate_first_page' ), true ) && $field_key ) { $out[ $property ] = $field_key; } } return $this->sort_associative( $out );
 
 			case 'colleague_can_view_internal_history': return ! empty( $value ) ? 1 : 0;
 			case 'frontend_requests_per_page': return min( Didar_Settings::MAX_REQUESTS_PER_PAGE, max( Didar_Settings::MIN_REQUESTS_PER_PAGE, absint( $value ) ) );

@@ -69,8 +69,20 @@ class Didar_Case_Service {
 		$pipeline = $pipeline_id ? $this->pipeline( $pipeline_id ) : array();
 		if ( ! $pipeline_id ) $issues[] = 'pipeline_missing'; elseif ( ! $pipeline ) $issues[] = 'pipeline_stale';
 		if ( ! $stage_id ) $issues[] = 'stage_missing'; elseif ( $pipeline && ! $this->valid_stage( $pipeline_id, $stage_id ) ) $issues[] = 'stage_not_in_pipeline';
-		$mapped_keys = array(); foreach ( array( 'field_mappings', 'main_field_mappings' ) as $mapping_group ) { foreach ( (array) ( $config[ $mapping_group ] ?? array() ) as $source => $target ) { $target = sanitize_text_field( (string) $target ); if ( ! $target ) continue; if ( in_array( $target, $mapped_keys, true ) ) $issues[] = 'duplicate_field_mapping'; $mapped_keys[] = $target; if ( ! self::is_case_field( $this->case_field( $target ) ) ) $issues[] = 'case_field_stale'; } }
 		$system_keys = array(); foreach ( (array) ( $config['system_fields'] ?? array() ) as $purpose => $target ) { $target = sanitize_text_field( (string) $target ); if ( ! $target ) continue; if ( in_array( $target, $system_keys, true ) ) $issues[] = 'duplicate_system_mapping'; $system_keys[] = $target; if ( ! self::is_case_field( $this->case_field( $target ) ) ) $issues[] = 'system_field_stale'; }
+		foreach ( array( 'field_mappings', 'main_field_mappings' ) as $mapping_group ) {
+			$mapped_keys = array();
+			foreach ( (array) ( $config[ $mapping_group ] ?? array() ) as $source => $target ) {
+				$target = sanitize_text_field( (string) $target );
+				if ( ! $target ) continue;
+				if ( in_array( $target, $mapped_keys, true ) ) $issues[] = 'duplicate_field_mapping';
+				$mapped_keys[] = $target;
+				if ( ! self::is_case_field( $this->case_field( $target ) ) ) $issues[] = 'case_field_stale';
+			}
+			foreach ( $system_keys as $target ) {
+				if ( in_array( $target, $mapped_keys, true ) ) $issues[] = 'duplicate_field_mapping';
+			}
+		}
 		$issues = array_values( array_unique( $issues ) ); $stale_codes = array( 'pipeline_stale', 'stage_not_in_pipeline', 'case_field_stale', 'system_field_stale' ); $status = array_intersect( $stale_codes, $issues ) ? 'stale' : ( $issues ? 'incomplete' : 'ready' ); return array( 'status' => $status, 'ready' => 'ready' === $status, 'issues' => $issues );
 	}
 

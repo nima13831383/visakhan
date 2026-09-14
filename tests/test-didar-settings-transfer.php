@@ -44,6 +44,36 @@ class Test_Didar_Settings_Transfer extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( 'didar_companion_runtime', $json );
 	}
 
+	public function test_profile_document_person_mappings_survive_export_import_round_trip() {
+		$mapping = array(
+			'gender'                       => 'Field_Profile_Gender',
+			'display_name'                 => 'Field_Profile_Display',
+			'profile_image_url'            => 'Field_Profile_Image',
+			'birth_date'                   => 'Field_Profile_BirthDate',
+			'national_id'                  => 'Field_Profile_NationalId',
+			'national_card_front'          => 'Field_Profile_NationalCardFront',
+			'national_card_back'           => 'Field_Profile_NationalCardBack',
+			'passport_main_page'           => 'Field_Profile_PassportMain',
+			'personal_photo'               => 'Field_Profile_PersonalPhoto',
+			'birth_certificate_first_page' => 'Field_ProfileBirthCertificate',
+		);
+		$case_settings = array( 'pipeline_id' => 'pipeline-1', 'initial_stage_id' => 'stage-1', 'field_mappings' => array( 'full_name' => 'Case_Name' ), 'system_fields' => array( 'submission_id' => 'Case_Submission' ) );
+		$source = array( 'didar_user_person_mappings' => $mapping, 'visa_companion_case_settings' => $case_settings, 'didar_profile_documents' => array( 'user' => 12, 'file_id' => 101, 'url' => 'https://private.example.test/file.jpg' ), 'didar_person_id' => 'person-1' );
+		update_option( Didar_Settings::OPTION_NAME, $source, false );
+		$export = $this->transfer->export_payload();
+		$this->assertSame( $mapping, $export['settings']['didar_user_person_mappings'] );
+		$this->assertStringNotContainsString( 'private.example.test', $this->transfer->export_json() );
+		$this->assertStringNotContainsString( 'person-1', $this->transfer->export_json() );
+		$this->assertArrayNotHasKey( 'didar_profile_documents', $export['settings'] );
+		delete_option( Didar_Settings::OPTION_NAME );
+		$preview = $this->transfer->preview( $export, 'replace' );
+		$this->assertEmpty( $preview['errors'] );
+		$this->assertSame( $mapping, $preview['incoming']['didar_user_person_mappings'] );
+		$result = $this->transfer->apply( $preview );
+		$this->assertNotWPError( $result );
+		$this->assertSame( $mapping, get_option( Didar_Settings::OPTION_NAME, array() )['didar_user_person_mappings'] );
+	}
+
 	public function test_all_form_applicant_note_mappings_survive_export_import_round_trip() {
 		$maps = array(
 			'consultation'         => array( 'applicant_note' => array( 'target' => 'deal_custom', 'field' => 'Field_Consultation_Note' ) ),
@@ -77,6 +107,7 @@ class Test_Didar_Settings_Transfer extends WP_UnitTestCase {
 		$portable = $this->transfer->portable_settings( $source );
 		$this->assertSame( $maps, $portable['didar_field_mappings'] );
 		$this->assertSame( $case_settings, $portable['visa_companion_case_settings'] );
+		$this->assertSame( $case_settings, $portable['case_form_settings']['visa_request'] );
 		$this->assertSame( $case_settings, $portable['case_form_settings']['embassy_appointment'] );
 		$this->assertArrayNotHasKey( 'didar_companion_runtime', $portable );
 		$this->assertArrayNotHasKey( 'didar_case_pipeline_cache', $portable );
@@ -91,6 +122,7 @@ class Test_Didar_Settings_Transfer extends WP_UnitTestCase {
 		$saved = get_option( Didar_Settings::OPTION_NAME, array() );
 		$this->assertSame( $maps, $saved['didar_field_mappings'] );
 		$this->assertSame( $case_settings, $saved['visa_companion_case_settings'] );
+		$this->assertSame( $case_settings, $saved['case_form_settings']['visa_request'] );
 		$this->assertSame( $case_settings, $saved['case_form_settings']['embassy_appointment'] );
 		$this->assertArrayNotHasKey( 'didar_companion_runtime', $saved );
 		$this->assertArrayNotHasKey( 'didar_case_pipeline_cache', $saved );
