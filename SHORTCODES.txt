@@ -2,7 +2,7 @@ ns-didar Shortcode Reference
 ============================
 
 Last verified: 2026-09-14
-Plugin version: 1.7.4 (`DIDAR_VERSION` in current runtime source; the plugin file header currently declares 1.7.3)
+Plugin version: 1.7.4 (`DIDAR_VERSION` and the plugin file header)
 
 این فایل مرجع کدهای کوتاه ثبت‌شده در نسخه فعلی افزونه `ns-didar` است. منبع اصلی این مرجع، کد PHP فعلی است؛ تنظیمات سایت فقط مقدارهای قابل تنظیم مانند URL فرم و متن چاپ را تعیین می‌کنند.
 

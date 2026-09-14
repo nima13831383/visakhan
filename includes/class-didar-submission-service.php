@@ -36,7 +36,6 @@ class Didar_Submission_Service {
 		if ( ! $default_status ) {
 			return new WP_Error( 'workflow_default_missing', __( 'وضعیت پیش‌فرض گردش کار این فرم مشخص نیست.', 'didar' ) );
 		}
-		$data = $this->normalize_companion_data( $form_type, $data );
 		$post_id        = wp_insert_post(
 			array(
 				'post_type'   => Didar_Post_Type::POST_TYPE,
@@ -85,7 +84,6 @@ class Didar_Submission_Service {
 		}
 		$default_status = $this->workflow->default_status( $form_type, $form['default_status'] );
 		if ( ! $default_status ) { return new WP_Error( 'workflow_default_missing', __( 'وضعیت پیش‌فرض گردش کار این فرم مشخص نیست.', 'didar' ) ); }
-		$data = $this->normalize_companion_data( $form_type, $data );
 		$post_id = wp_insert_post( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'publish', 'post_author' => $author_id, 'post_title' => sprintf( '%s — %s', $form['label'], current_time( 'Y-m-d H:i' ) ), 'meta_input' => array( '_didar_form_type' => $form_type, '_didar_created_by_user_id' => 0, '_didar_status' => $default_status, '_didar_public_status' => $default_status, '_didar_public_note' => '', '_didar_internal_status' => $default_status, '_didar_internal_note' => '', '_didar_assigned_user_id' => '', '_didar_fields' => (array) $data, '_didar_shared_note' => $this->registry->supports_applicant_note( $form_type ) ? sanitize_textarea_field( $shared_note ) : '' ) ), true );
 		if ( is_wp_error( $post_id ) ) { return $post_id; }
 		$this->events->add( $post_id, 'request_created', null, array( 'form_type' => $form_type, 'owner_user_id' => $author_id, 'source' => 'Didar' ) );
@@ -116,7 +114,6 @@ class Didar_Submission_Service {
 		$old_fields  = $this->get_fields( $post_id );
 		$old_owner   = (int) $post->post_author;
 		$data        = $this->preserve_inactive_fields( $form_type, $old_fields, $data );
-		$data        = $this->normalize_companion_data( $form_type, $data );
 
 		update_post_meta( $post_id, '_didar_form_type', $form_type );
 		update_post_meta( $post_id, '_didar_fields', $data );
@@ -270,7 +267,6 @@ class Didar_Submission_Service {
 		$old_note   = $this->get_shared_note( $post_id );
 		$new_note   = $this->registry->supports_applicant_note( $form_type ) ? sanitize_textarea_field( $shared_note ) : $old_note;
 		$data       = $this->preserve_inactive_fields( $form_type, $old_fields, $data );
-		$data       = $this->normalize_companion_data( $form_type, $data );
 		update_post_meta( $post_id, '_didar_fields', $data );
 		update_post_meta( $post_id, '_didar_shared_note', $new_note );
 		$this->record_data_changes( $post_id, $form_type, $old_fields, $data );
@@ -662,6 +658,10 @@ class Didar_Submission_Service {
 			$display = ( new Didar_Date_Service() )->format_for_display( $value );
 			return $display ? $display : (string) $value;
 		}
+		if ( 'time' === ( $field['type'] ?? '' ) && is_scalar( $value ) ) {
+			$display = Didar_Date_Service::format_time_for_display( $value );
+			return $display ? $display : (string) $value;
+		}
 		if ( 'select' === $field['type'] && ! empty( $field['multiple'] ) && is_array( $value ) ) {
 			$options = $field['options'];
 			if ( ! empty( $field['legacy_options'] ) ) {
@@ -731,14 +731,6 @@ class Didar_Submission_Service {
 		$active_definitions = $this->registry->fields( $form_type );
 		$inactive_data      = array_diff_key( (array) $stored_fields, $active_definitions );
 		return array_merge( $inactive_data, (array) $active_data );
-	}
-
-	private function normalize_companion_data( $form_type, $data ) {
-		if ( ! Didar_Companion_Model::supports_form( $form_type ) ) { return (array) $data; }
-		$data = (array) $data;
-		$data['companions'] = Didar_Companion_Model::normalize_rows( $data['companions'] ?? array() );
-		$data['companions_count'] = (string) Didar_Companion_Model::active_count( $data['companions'] );
-		return $data;
 	}
 
 	private function ensure_workflow_defaults( $post_id, $default_status ) {

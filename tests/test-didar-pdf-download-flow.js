@@ -147,6 +147,7 @@ async function completeNextResponse(response) {
   assert.strictEqual(withFiles.disabled, true, 'The clicked button must stay disabled during fetch.');
   assert.strictEqual(new NativeURL(fetches[0].url).searchParams.get('include_files'), '1');
   assert.strictEqual(fetches[0].options.credentials, 'same-origin');
+  assert.strictEqual(fetches[0].options.cache, 'no-store', 'PDF responses must bypass stale empty browser cache entries.');
   await completeNextFetch('with-files.pdf');
   assert.strictEqual(downloads.length, 1, 'With-files click must create one browser download.');
   assert.strictEqual(downloads[0].filename, 'with-files.pdf');

@@ -174,7 +174,7 @@ class Didar_Form_Registry {
 					) ),
 					'preferred_time' => $this->section( 'تایم پیشنهادی', array(
 						$this->field( 'preferred_date', 'تاریخ پیشنهادی', 'date', false, array( 'display_format' => 'روز/ماه/سال' ) ),
-						$this->field( 'preferred_time', 'ساعت پیشنهادی', 'time', false, array( 'inputmode' => 'numeric', 'step' => '60' ) ),
+						$this->field( 'preferred_time', 'ساعت پیشنهادی', 'time', false, array( 'inputmode' => 'numeric', 'step' => '60', 'custom_time_picker' => true ) ),
 					) ),
 				),
 				'legacy_fields'  => array(
@@ -223,7 +223,7 @@ class Didar_Form_Registry {
 						$this->field( 'passport_main_page', 'صفحه اصلی گذرنامه', 'file', false, array_merge( $visa_document_upload, array( 'profile_autofill' => 'passport_main_page' ) ) ),
 					) ),
 					'companions' => $this->section( 'همراهان', array(
-						$this->field( 'companions_count', 'تعداد همراهان', 'number', false, array( 'derived' => true, 'derived_from' => 'companions', 'readonly' => true, 'min' => 0, 'max' => 20 ) ),
+						$this->field( 'companions_count', 'تعداد همراهان', 'number', false, array( 'min' => 0, 'max' => 20 ) ),
 						$this->field( 'companions', 'لیست همراهان', 'repeater', false, array( 'max_items' => 20, 'columns' => $companion_columns['embassy_appointment'] ) ),
 					) ),
 				),
@@ -336,7 +336,7 @@ class Didar_Form_Registry {
 						$this->field( 'schengen_exit_place', 'محل خروج از شنگن (کشور/شهر)', 'text', false, array( 'conditional_on' => 'has_previous_schengen', 'conditional_value' => 'yes' ) ),
 					) ),
 					'companions' => $this->section( 'همراهان', array(
-						$this->field( 'companions_count', 'تعداد همراهان', 'number', false, array( 'derived' => true, 'derived_from' => 'companions', 'readonly' => true, 'min' => 0, 'max' => 20 ) ),
+						$this->field( 'companions_count', 'تعداد همراهان', 'number', false, array( 'min' => 0, 'max' => 20 ) ),
 						$this->field( 'companions', 'لیست همراهان', 'repeater', false, array( 'max_items' => 20, 'columns' => $companion_columns['visa_request'] ) ),
 					) ),
 				),

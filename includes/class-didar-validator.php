@@ -43,10 +43,6 @@ class Didar_Validator {
 			if ( ! empty( $field['internal'] ) ) {
 				continue;
 			}
-			if ( ! empty( $field['derived'] ) ) {
-				continue;
-			}
-
 			$result = $this->validate_field( $field, $raw, $context, $submission_id );
 			if ( is_wp_error( $result ) ) {
 				$errors[ $name ] = $result->get_error_message();
@@ -55,10 +51,6 @@ class Didar_Validator {
 			$data[ $name ] = $result;
 		}
 		$this->preserve_inactive_conditional_values( $form_type, $submitted, $data, $submission_id );
-		if ( Didar_Companion_Model::supports_form( $form_type ) ) {
-			$data['companions'] = Didar_Companion_Model::normalize_rows( $data['companions'] ?? array() );
-			$data['companions_count'] = (string) Didar_Companion_Model::active_count( $data['companions'] );
-		}
 		$this->validate_birth_geography( $data, $errors );
 		$this->validate_date_ranges( $form_type, $data, $errors );
 

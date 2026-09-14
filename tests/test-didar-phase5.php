@@ -24,6 +24,7 @@ class Test_Didar_Phase5 extends WP_UnitTestCase {
 		$registry = new Didar_Form_Registry();
 		$this->assertSame( 'date', $registry->fields( 'consultation' )['preferred_date']['type'] );
 		$this->assertSame( 'time', $registry->fields( 'consultation' )['preferred_time']['type'] );
+		$this->assertTrue( $registry->fields( 'consultation' )['preferred_time']['custom_time_picker'] );
 		foreach ( array( 'consultation', 'embassy_appointment', 'traveler_evaluation', 'complaint_suggestion', 'visa_request' ) as $type ) {
 			$this->assertTrue( $registry->supports_applicant_note( $type ) );
 			$this->assertArrayHasKey( 'applicant_note', $registry->didar_mapping_fields( $type ) );
@@ -32,8 +33,21 @@ class Test_Didar_Phase5 extends WP_UnitTestCase {
 		$valid = $validator->validate( 'consultation', array( 'first_name' => 'A', 'last_name' => 'B', 'input_3' => '0912', 'input_5' => 'visa', 'preferred_date' => '1405/01/01', 'preferred_time' => '09:30' ) );
 		$this->assertTrue( $valid['valid'] );
 		$this->assertSame( '09:30', $valid['data']['preferred_time'] );
+		$persian = $validator->validate( 'consultation', array( 'first_name' => 'A', 'last_name' => 'B', 'input_3' => '0912', 'input_5' => 'visa', 'preferred_time' => '۱۴:۳۰' ) );
+		$this->assertTrue( $persian['valid'] );
+		$this->assertSame( '14:30', $persian['data']['preferred_time'] );
+		ob_start();
+		( new Didar_Field_Renderer( new Didar_Settings() ) )->render_sections( $registry->get( 'consultation' ), array( 'preferred_time' => '18:45' ), array(), 'frontend' );
+		$html = ob_get_clean();
+		$this->assertStringContainsString( 'data-didar-time-picker', $html );
+		$this->assertStringContainsString( 'name="didar_fields[preferred_time]" value="18:45"', $html );
+		$this->assertStringContainsString( '۱۸:۴۵', $html );
+		$this->assertStringContainsString( 'aria-haspopup="dialog"', $html );
+		$this->assertStringNotContainsString( 'type="time" value="18:45"', $html );
+		$this->assertSame( '۱۴:۳۰', Didar_Date_Service::format_time_for_display( '14:30' ) );
 		$serializer = new Didar_Readable_Value_Serializer();
 		$this->assertSame( '1403/01/01', $serializer->serialize( 'consultation', 'preferred_date', $registry->fields( 'consultation' )['preferred_date'], '2024-03-20' ) );
+		$this->assertSame( '14:30', $serializer->serialize( 'consultation', 'preferred_time', $registry->fields( 'consultation' )['preferred_time'], '14:30' ) );
 		$invalid = $validator->validate( 'consultation', array( 'first_name' => 'A', 'last_name' => 'B', 'input_3' => '0912', 'input_5' => 'visa', 'preferred_time' => '25:90' ) );
 		$this->assertArrayHasKey( 'preferred_time', $invalid['errors'] );
 	}

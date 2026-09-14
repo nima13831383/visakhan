@@ -260,13 +260,12 @@ class Didar_Pdf_Service {
 		$fields = $this->registry->fields( $form_type );
 		$columns = isset( $fields['companions']['columns'] ) && is_array( $fields['companions']['columns'] ) ? $fields['companions']['columns'] : array();
 		$rows = array();
-		foreach ( Didar_Companion_Model::normalize_rows( $values['companions'] ?? array() ) as $index => $row ) {
+		foreach ( Didar_Companion_Model::rows( $values['companions'] ?? array() ) as $index => $row ) {
 			$items = array();
 			foreach ( $columns as $key => $column ) {
 				if ( ! is_array( $column ) || ! empty( $column['internal'] ) || 'hidden' === ( $column['type'] ?? '' ) ) { continue; }
 				if ( 'file' === ( $column['type'] ?? '' ) && ! $include_files ) { continue; }
 				$value = array_key_exists( $key, $row ) ? $row[ $key ] : '';
-				if ( 'age_group' === $key && ! $this->is_meaningful( $value ) ) { $value = Didar_Companion_Model::age_group( $row['age'] ?? '' ); }
 				$file_view = 'file' === ( $column['type'] ?? '' ) ? $this->file_view( $value, $post_id, 'companions.' . $index . '.' . $key ) : array( 'value' => '', 'links' => array(), 'unavailable' => array() );
 				$readable = $this->is_meaningful( $value ) ? ( 'file' === ( $column['type'] ?? '' ) ? $file_view['value'] : $this->readable_value( $serializer, $form_type, 'companions.' . $index . '.' . $key, $column, $value, $post_id ) ) : '';
 				$file_output = 'file' === ( $column['type'] ?? '' ) && ( ! empty( $file_view['links'] ) || ! empty( $file_view['unavailable'] ) );
@@ -280,9 +279,8 @@ class Didar_Pdf_Service {
 			unset( $business_row['companion_uid'], $business_row['age_group'] );
 			if ( $items && $this->is_meaningful( $business_row ) ) { $rows[] = array( 'number' => count( $rows ) + 1, 'items' => $items ); }
 		}
-		$count_value = array_key_exists( 'companions_count', (array) $values ) && $this->is_meaningful( $values['companions_count'] ) ? $values['companions_count'] : Didar_Companion_Model::active_count( $values['companions'] ?? array() );
-		$count = is_scalar( $count_value ) ? (string) $count_value : '0';
-		if ( '' === trim( $count ) ) { $count = '0'; }
+		$count_value = array_key_exists( 'companions_count', (array) $values ) ? $values['companions_count'] : '';
+		$count = is_scalar( $count_value ) ? (string) $count_value : '';
 		return array( 'count' => $count, 'rows' => $rows );
 	}
 
@@ -324,6 +322,10 @@ class Didar_Pdf_Service {
 	}
 
 	private function readable_value( $serializer, $form_type, $field_key, $definition, $value, $post_id ) {
+		if ( 'time' === ( $definition['type'] ?? '' ) && is_scalar( $value ) ) {
+			$display = Didar_Date_Service::format_time_for_display( $value );
+			if ( $display ) { return $display; }
+		}
 		$readable = $serializer->serialize( $form_type, $field_key, is_array( $definition ) ? $definition : array(), $value, $post_id );
 		if ( is_scalar( $readable ) && '' !== trim( (string) $readable ) && '—' !== trim( (string) $readable ) ) { return (string) $readable; }
 		return $this->fallback_value( $value );

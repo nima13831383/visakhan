@@ -429,7 +429,7 @@ class Didar_Sync_Manager {
 			$this->logger->log( 'WARNING', 'case_sync_skipped', 'Companion and main applicant Case sync skipped because this form has no valid Case configuration; the parent Deal remains synchronized.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'form_type' => $form_type, 'trace_id' => $trace, 'skip_reason' => 'case_configuration_' . $validation['status'], 'configuration_issues' => $validation['issues'] ) );
 			return true;
 		}
-		$rows = isset( $fields['companions'] ) && is_array( $fields['companions'] ) ? Didar_Companion_Model::normalize_rows( $fields['companions'] ) : array();
+		$rows = isset( $fields['companions'] ) && is_array( $fields['companions'] ) ? Didar_Companion_Model::rows( $fields['companions'] ) : array();
 		$links = get_post_meta( $post_id, self::META_COMPANION_CASES, true ); $links = is_array( $links ) ? $links : array();
 		$system = isset( $config['system_fields'] ) && is_array( $config['system_fields'] ) ? $config['system_fields'] : array(); $active_uids = array();
 		$this->sync_main_applicant_case( $post_id, $form_type, $fields, $deal_id, $trace, $config, $system );
@@ -459,7 +459,6 @@ class Didar_Sync_Manager {
 		unset( $row );
 		// The working rows array is a copy; persist generated stable UIDs back into the submission fields.
 		$fields['companions'] = $rows;
-		$fields['companions_count'] = (string) Didar_Companion_Model::active_count( $rows );
 		foreach ( $links as $known_uid => &$known_link ) { if ( ! isset( $active_uids[ $known_uid ] ) && is_array( $known_link ) && 'removed' !== ( $known_link['status'] ?? '' ) ) { $known_link['status'] = 'removed'; $known_link['removed_at'] = time(); $this->logger->log( 'WARNING', 'case_removed_remote_untouched', 'A companion was removed locally; the remote Case was left untouched because no official delete/archive endpoint is confirmed.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'external_id' => $known_link['case_id'] ?? '', 'companion_uid' => sanitize_text_field( $known_uid ), 'trace_id' => $trace, 'official_support' => 'not_confirmed' ) ); } } unset( $known_link );
 		update_post_meta( $post_id, '_didar_fields', $fields ); update_post_meta( $post_id, self::META_COMPANION_CASES, $links );
 		$pending_cases = false; foreach ( $links as $uid => $link ) { if ( is_array( $link ) && 'removed' === ( $link['status'] ?? '' ) ) continue; if ( ! isset( $link['status'] ) || 'synced' !== $link['status'] ) { $pending_cases = true; $this->logger->log( 'WARNING', 'case_retry_scheduled', 'A companion Case remains pending for the next canonical submission sync.', array( 'entity_type' => 'case', 'local_id' => absint( $post_id ), 'companion_uid' => sanitize_text_field( $uid ), 'trace_id' => $trace ) ); } }
@@ -473,7 +472,7 @@ class Didar_Sync_Manager {
 	private function companion_case_title( $row, $post_id ) { $name = isset( $row['full_name'] ) && is_scalar( $row['full_name'] ) ? trim( sanitize_text_field( (string) $row['full_name'] ) ) : ''; return $name ? 'همراه - ' . $name : 'همراه درخواست #' . absint( $post_id ); }
 
 	private function persist_pending_case_state( $post_id, $form_type, &$fields, $issues ) {
-		$rows = isset( $fields['companions'] ) && is_array( $fields['companions'] ) ? Didar_Companion_Model::normalize_rows( $fields['companions'] ) : array();
+		$rows = isset( $fields['companions'] ) && is_array( $fields['companions'] ) ? Didar_Companion_Model::rows( $fields['companions'] ) : array();
 		$links = get_post_meta( $post_id, self::META_COMPANION_CASES, true );
 		$links = is_array( $links ) ? $links : array();
 		$active = array();
@@ -494,7 +493,6 @@ class Didar_Sync_Manager {
 		}
 		unset( $link );
 		$fields['companions'] = $rows;
-		$fields['companions_count'] = (string) Didar_Companion_Model::active_count( $rows );
 		update_post_meta( $post_id, '_didar_fields', $fields );
 		update_post_meta( $post_id, self::META_COMPANION_CASES, $links );
 		$main = get_post_meta( $post_id, self::META_MAIN_APPLICANT_CASE, true );

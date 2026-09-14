@@ -2,7 +2,7 @@
 /*
 Plugin Name: Didar
 Description: مدیریت امن درخواست‌ها و فرم‌های فارسی دیدار.
-Version: 1.7.3
+Version: 1.7.4
 Requires at least: 6.4
 Requires PHP: 7.4
 Author: Didar

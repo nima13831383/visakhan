@@ -78,37 +78,6 @@
     reindexRepeater(container);
   }
 
-  function companionAgeGroup(age) {
-    if (age === '') return '';
-    age = Number(String(age).replace(/[۰-۹]/g, function (digit) { return String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)); }));
-    if (!isFinite(age) || Math.floor(age) !== age || age < 0 || age > 130) return '';
-    if (age <= 1) return 'infant';
-    if (age <= 12) return 'child';
-    if (age <= 17) return 'teenager';
-    if (age <= 64) return 'adult';
-    return 'elderly';
-  }
-
-  function updateDerivedCompanionFields(form) {
-    if (!form) return;
-    form.querySelectorAll('[data-didar-repeater][data-derived-count-field]').forEach(function (container) {
-      var count = 0;
-      container.querySelectorAll('.didar-repeater-row').forEach(function (row) {
-        var active = !!row.querySelector('[data-didar-file]');
-        row.querySelectorAll('input,select,textarea').forEach(function (control) {
-          if (control.name.indexOf('[companion_uid]') !== -1 || control.type === 'file' || control.getAttribute('data-didar-derived') === '1') return;
-          if (control.value) active = true;
-        });
-        if (active) count += 1;
-        var age = row.querySelector('[data-didar-age-source="1"]');
-        var group = row.querySelector('select[data-didar-derived="1"]');
-        if (age && group) group.value = companionAgeGroup(age.value);
-      });
-      var countField = form.querySelector('input[name="didar_fields[' + container.getAttribute('data-derived-count-field') + ']"]');
-      if (countField) countField.value = String(count);
-    });
-  }
-
   function focusableModalElements(dialog) {
     return Array.prototype.slice.call(dialog.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter(function (element) { return !element.disabled && element.offsetParent !== null; });
   }
@@ -172,7 +141,7 @@
     button.disabled = true;
     button.setAttribute('data-didar-pdf-busy', '1');
     setPdfStatus(modal, 'در حال آماده‌سازی فایل...', false);
-    window.fetch(url.toString(), { credentials: 'same-origin' })
+    window.fetch(url.toString(), { credentials: 'same-origin', cache: 'no-store' })
       .then(function (response) {
         var contentType = response.headers.get('Content-Type') || '';
         if (!response.ok || !/^application\/pdf(?:;|$)/i.test(contentType)) throw new Error('invalid_pdf_response');
@@ -282,19 +251,15 @@
     var pdfClose = event.target.closest('[data-didar-pdf-close]');
     if (pdfClose) { event.preventDefault(); closePdfModal(pdfClose.closest('[data-didar-pdf-modal]')); return; }
     var add = event.target.closest('.didar-add-row');
-    if (add) { event.preventDefault(); var addContainer = add.closest('[data-didar-repeater], [data-didar-times]'); addRow(addContainer); updateDerivedCompanionFields(addContainer && addContainer.closest('[data-didar-form],#post')); return; }
+    if (add) { event.preventDefault(); var addContainer = add.closest('[data-didar-repeater], [data-didar-times]'); addRow(addContainer); return; }
     var remove = event.target.closest('.didar-remove-row');
-    if (remove) { event.preventDefault(); removeRow(remove); updateDerivedCompanionFields(remove.closest('[data-didar-form],#post')); return; }
+    if (remove) { event.preventDefault(); removeRow(remove); return; }
     var retry = event.target.closest('[data-didar-upload] .didar-retry-upload');
     if (retry && !retry.closest('[data-didar-profile-upload]')) { event.preventDefault(); retryUpload(retry); return; }
     var removeUpload = event.target.closest('.didar-remove-upload');
     if (removeUpload) { event.preventDefault(); removeUploadedFile(removeUpload); }
   });
 
-  document.addEventListener('input', function (event) {
-    var form = event.target.closest && event.target.closest('[data-didar-form],#post');
-    if (form) updateDerivedCompanionFields(form);
-  });
   document.addEventListener('change', function (event) {
     var fileInput = event.target.matches && event.target.matches('input[type="file"]') ? event.target : null;
     var uploadWrapper = fileInput && fileInput.closest('[data-didar-upload]');
@@ -302,8 +267,6 @@
       uploadWrapper._didarUploadChangeQueued = true;
       window.setTimeout(function () { uploadWrapper._didarUploadChangeQueued = false; uploadSelectedFiles(uploadWrapper); }, 0);
     }
-    var form = event.target.closest && event.target.closest('[data-didar-form],#post');
-    if (form) updateDerivedCompanionFields(form);
   });
 
   document.addEventListener('keydown', function (event) {
@@ -325,7 +288,6 @@
     if (summary) summary.focus();
 
     document.querySelectorAll('[data-didar-form]').forEach(function (form) {
-      updateDerivedCompanionFields(form);
       form.addEventListener('submit', function (event) {
         if (form.querySelector('[data-didar-upload-state="uploading"]')) {
           event.preventDefault();

@@ -185,6 +185,29 @@
 .didar-field input[type="file"] { padding: 8px 10px; }
 .didar-field textarea { min-height: 138px; resize: vertical; }
 
+.didar-time-picker { position: relative; }
+.didar-form.didar-time-picker-open { overflow: visible; }
+.didar-app .didar-time-picker__trigger { align-items: center; background: #fff; border: 1px solid var(--didar-border-strong); border-radius: 8px; color: var(--didar-text); cursor: pointer; display: flex; font: inherit; justify-content: space-between; min-height: 50px; padding: 11px 14px; text-align: right; transition: border-color .18s ease, box-shadow .18s ease; width: 100%; }
+.didar-app .didar-time-picker__trigger:hover,
+.didar-app .didar-time-picker__trigger:active,
+.didar-app .didar-time-picker.is-open .didar-time-picker__trigger { background: var(--didar-accent); border-color: var(--didar-accent-hover); color: #1c1c1c; }
+.didar-app .didar-time-picker__trigger:focus-visible { background: #fff; border-color: var(--didar-primary); box-shadow: 0 0 0 4px rgba(255, 193, 0, .3); outline: 2px solid var(--didar-primary); outline-offset: 1px; }
+.didar-time-picker__value { direction: ltr; font-variant-numeric: tabular-nums; letter-spacing: .03em; }
+.didar-time-picker__value.is-placeholder { color: var(--didar-muted); direction: rtl; letter-spacing: 0; }
+.didar-time-picker__icon { flex: 0 0 22px; height: 22px; margin-inline-start: 12px; width: 22px; }
+.didar-time-picker__popover { background: #fff; border: 1px solid var(--didar-border-strong); border-radius: 10px; box-shadow: 0 14px 30px rgba(28, 28, 28, .16); inset-inline: 0; margin-top: 6px; max-height: min(360px, 60vh); overflow: auto; padding: 10px; position: absolute; top: 100%; z-index: 30; }
+.didar-time-picker__header { align-items: center; display: flex; justify-content: space-between; margin-bottom: 9px; padding: 0 4px; }
+.didar-time-picker__close, .didar-time-picker__back { background: transparent; border: 0; color: var(--didar-muted); cursor: pointer; font: inherit; min-height: 36px; padding: 5px 8px; }
+.didar-time-picker__close { font-size: 1.45rem; line-height: 1; }
+.didar-time-picker__close:hover, .didar-time-picker__close:focus-visible, .didar-time-picker__back:hover, .didar-time-picker__back:focus-visible { color: var(--didar-primary); }
+.didar-time-picker__options { direction: ltr; display: grid; gap: 6px; grid-template-columns: repeat(4, minmax(44px, 1fr)); }
+.didar-time-picker__options.is-minutes { grid-template-columns: repeat(5, minmax(44px, 1fr)); }
+.didar-time-picker__back { grid-column: 1 / -1; justify-self: start; }
+.didar-app .didar-time-picker__option { background: #fff; border: 1px solid var(--didar-border); border-radius: 7px; color: var(--didar-text); cursor: pointer; font: inherit; font-variant-numeric: tabular-nums; min-height: 44px; padding: 7px; transition: border-color .14s ease; }
+.didar-app .didar-time-picker__option:hover, .didar-app .didar-time-picker__option:active { background: var(--didar-accent); border-color: var(--didar-accent-hover); color: #1c1c1c; outline: none; }
+.didar-app .didar-time-picker__option:focus-visible { background: var(--didar-accent); border-color: var(--didar-primary); box-shadow: 0 0 0 2px rgba(255, 193, 0, .3); color: #1c1c1c; outline: 2px solid var(--didar-primary); outline-offset: 1px; }
+.didar-app .didar-time-picker__option.is-selected { background: var(--didar-accent); border-color: var(--didar-accent-hover); color: #1c1c1c; font-weight: 750; }
+
 .didar-app .didar-field input::placeholder,
 .didar-app .didar-field textarea::placeholder {
   color: #8c8c8c;
@@ -863,6 +886,7 @@ body.didar-pdf-modal-open { overflow: hidden; }
   .didar-section { margin: 16px 12px; padding: 17px; }
   .didar-grid { grid-template-columns: 1fr; }
   .didar-field--wide { grid-column: auto; }
+	.didar-time-picker__options.is-minutes { grid-template-columns: repeat(4, minmax(44px, 1fr)); }
   .didar-actions { align-items: stretch; flex-direction: column; margin: 22px 12px 0; padding-bottom: 20px; }
   .didar-submit { width: 100%; }
   .didar-list-header { align-items: flex-start; gap: 16px; }

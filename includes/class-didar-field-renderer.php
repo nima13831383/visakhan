@@ -58,7 +58,6 @@ class Didar_Field_Renderer {
 				$default   = isset( $field['default'] ) ? $field['default'] : '';
 				if ( ! empty( $field['default_value_options'] ) ) { $default = $this->settings->field_default_value( $form_type, $field['name'], $default, $field['options'] ?? array() ); }
 				$value     = $has_value ? $values[ $field['name'] ] : $default;
-				if ( ! $has_value && 'companions_count' === ( $field['name'] ?? '' ) ) { $value = (string) Didar_Companion_Model::active_count( $values['companions'] ?? array() ); }
 				$profile_source = $this->profile_source_for_field( $form_type, $field );
 				$profile_value  = $this->profile_value_for_field( $field, $profile_source, $profile );
 				$profile_ready  = $profile_form && '' !== $profile_source && $this->profile_value_present( $profile_value );
@@ -212,6 +211,8 @@ class Didar_Field_Renderer {
 				case 'time':
 					if ( ! empty( $field['multiple'] ) ) {
 						$this->render_multiple_time( $field, $value, $id, $input_name, $described, $error );
+					} elseif ( 'frontend' === $context && ! empty( $field['custom_time_picker'] ) ) {
+						$this->render_custom_time_picker( $field, $value, $id, $input_name, $described, $error );
 					} else {
 						echo '<input type="time" value="' . esc_attr( (string) $value ) . '" ' . $this->attributes( $field, $id, $input_name, $described, $error ) . '>';
 					}
@@ -251,6 +252,27 @@ class Didar_Field_Renderer {
 		echo '<input type="hidden" id="' . esc_attr( $id . '-canonical' ) . '" name="' . esc_attr( $name ) . '" value="' . esc_attr( $value ) . '"' . $profile_attributes . '>';
 	}
 
+	/** Consultation's accessible Persian time-picker UI; the hidden value remains canonical ASCII HH:MM. */
+	private function render_custom_time_picker( $field, $value, $id, $name, $described, $error ) {
+		$canonical   = Didar_Date_Service::ascii_digits( trim( (string) $value ) );
+		$display     = Didar_Date_Service::format_time_for_display( $canonical );
+		$placeholder = trim( (string) ( $field['placeholder'] ?? '' ) );
+		$placeholder = '' !== $placeholder ? $placeholder : __( 'انتخاب ساعت', 'didar' );
+		$popover_id  = $id . '-time-picker';
+		$label       = (string) ( $field['label'] ?? __( 'ساعت', 'didar' ) );
+
+		echo '<div class="didar-time-picker" data-didar-time-picker data-didar-time-step="' . esc_attr( (string) ( $field['step'] ?? '60' ) ) . '" data-didar-time-placeholder="' . esc_attr( $placeholder ) . '">';
+		echo '<input type="hidden" id="' . esc_attr( $id . '-canonical' ) . '" name="' . esc_attr( $name ) . '" value="' . esc_attr( $canonical ) . '" data-didar-time-canonical="1">';
+		echo '<button type="button" id="' . esc_attr( $id ) . '" class="didar-time-picker__trigger" data-didar-time-trigger aria-haspopup="dialog" aria-expanded="false" aria-controls="' . esc_attr( $popover_id ) . '" aria-label="' . esc_attr( $label ) . '"' . ( $described ? ' aria-describedby="' . esc_attr( implode( ' ', $described ) ) . '"' : '' ) . '>';
+		echo '<span class="didar-time-picker__value' . ( '' === $display ? ' is-placeholder' : '' ) . '" data-didar-time-display dir="ltr">' . esc_html( '' !== $display ? $display : $placeholder ) . '</span>';
+		echo '<svg class="didar-time-picker__icon" aria-hidden="true" viewBox="0 0 24 24" focusable="false"><path d="M12 6v6l4 2m5-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"/></svg>';
+		echo '</button>';
+		echo '<div id="' . esc_attr( $popover_id ) . '" class="didar-time-picker__popover" data-didar-time-popover role="dialog" aria-label="' . esc_attr( sprintf( __( 'انتخاب %s', 'didar' ), $label ) ) . '" hidden>';
+		echo '<div class="didar-time-picker__header"><strong data-didar-time-title>' . esc_html__( 'انتخاب ساعت', 'didar' ) . '</strong><button type="button" class="didar-time-picker__close" data-didar-time-close aria-label="' . esc_attr__( 'بستن انتخاب ساعت', 'didar' ) . '">&times;</button></div>';
+		echo '<div class="didar-time-picker__options" data-didar-time-options></div>';
+		echo '</div></div>';
+	}
+
 	private function attributes( $field, $id, $name, $described, $error ) {
 		$attributes = array(
 			'id'   => $id,
@@ -266,8 +288,6 @@ class Didar_Field_Renderer {
 		if ( ! empty( $field['date_range_start'] ) ) { $attributes['data-didar-date-range-start'] = sanitize_key( $field['date_range_start'] ); }
 		if ( ! empty( $field['option_source'] ) ) { $attributes['data-didar-option-source'] = sanitize_key( $field['option_source'] ); }
 		if ( ! empty( $field['foreign_birth_location'] ) ) { $attributes['data-didar-foreign-birth-location'] = '1'; }
-		if ( ! empty( $field['derived'] ) ) { $attributes['data-didar-derived'] = '1'; }
-		if ( ! empty( $field['derived_from'] ) ) { $attributes['data-didar-derived-from'] = sanitize_key( $field['derived_from'] ); }
 		if ( ! empty( $field['_profile_source'] ) ) { $attributes['data-didar-profile-source'] = sanitize_key( $field['_profile_source'] ); }
 		if ( array_key_exists( '_profile_value', $field ) && is_scalar( $field['_profile_value'] ) && '' !== (string) $field['_profile_value'] ) { $attributes['data-didar-profile-value'] = (string) $field['_profile_value']; }
 		if ( ! empty( $field['_profile_display_value'] ) ) { $attributes['data-didar-profile-display'] = (string) $field['_profile_display_value']; }
@@ -370,7 +390,7 @@ class Didar_Field_Renderer {
 
 	private function render_repeater( $field, $value, $id, $submission_id = 0 ) {
 		$rows = is_array( $value ) && $value ? array_values( $value ) : array( array() );
-		echo '<div id="' . esc_attr( $id ) . '" class="didar-repeater" data-didar-repeater data-field="' . esc_attr( $field['name'] ) . '" data-derived-count-field="companions_count" data-max-items="' . esc_attr( isset( $field['max_items'] ) ? $field['max_items'] : 20 ) . '">';
+		echo '<div id="' . esc_attr( $id ) . '" class="didar-repeater" data-didar-repeater data-field="' . esc_attr( $field['name'] ) . '" data-max-items="' . esc_attr( isset( $field['max_items'] ) ? $field['max_items'] : 20 ) . '">';
 		foreach ( $rows as $row_index => $row ) {
 			echo '<div class="didar-repeater-row" data-row-index="' . esc_attr( absint( $row_index ) ) . '">';
 			foreach ( $field['columns'] as $column => $column_definition ) {
@@ -386,7 +406,7 @@ class Didar_Field_Renderer {
 				echo '<label for="' . esc_attr( $cell_id ) . '"><span>' . esc_html( $label ) . '</span>';
 				if ( 'select' === $column_type && ! empty( $column_definition['options'] ) ) {
 					$searchable = ! empty( $column_definition['searchable'] ) || count( $column_definition['options'] ) > 6;
-					echo '<select id="' . esc_attr( $cell_id ) . '" name="didar_fields[' . esc_attr( $field['name'] ) . '][' . esc_attr( $row_index ) . '][' . esc_attr( $column ) . ']"' . ( $searchable ? ' data-didar-searchable="1"' : '' ) . ( ! empty( $column_definition['derived'] ) ? ' data-didar-derived="1" disabled' : '' ) . '><option value="">' . esc_html__( '— انتخاب کنید —', 'didar' ) . '</option>';
+					echo '<select id="' . esc_attr( $cell_id ) . '" name="didar_fields[' . esc_attr( $field['name'] ) . '][' . esc_attr( $row_index ) . '][' . esc_attr( $column ) . ']"' . ( $searchable ? ' data-didar-searchable="1"' : '' ) . '><option value="">' . esc_html__( '— انتخاب کنید —', 'didar' ) . '</option>';
 					foreach ( $column_definition['options'] as $option_value => $option_label ) {
 						echo '<option value="' . esc_attr( $option_value ) . '" ' . selected( (string) $cell_value, (string) $option_value, false ) . '>' . esc_html( $option_label ) . '</option>';
 					}
@@ -398,7 +418,7 @@ class Didar_Field_Renderer {
 					$this->render_file( $file_field, $cell_value, $cell_id, 'didar_fields[' . $field['name'] . '][' . absint( $row_index ) . '][' . $column . ']', $submission_id );
 				} else {
 					$html_type = in_array( $column_type, array( 'text', 'email', 'number' ), true ) ? $column_type : 'text';
-					echo '<input type="' . esc_attr( $html_type ) . '" id="' . esc_attr( $cell_id ) . '" name="didar_fields[' . esc_attr( $field['name'] ) . '][' . esc_attr( $row_index ) . '][' . esc_attr( $column ) . ']" value="' . esc_attr( $cell_value ) . '"' . ( $is_structured && ! empty( $column_definition['semantic'] ) ? ' data-didar-semantic="' . esc_attr( sanitize_key( $column_definition['semantic'] ) ) . '"' : '' ) . ( 'age' === $column && isset( $field['columns']['age_group'] ) ? ' data-didar-age-source="1"' : '' );
+					echo '<input type="' . esc_attr( $html_type ) . '" id="' . esc_attr( $cell_id ) . '" name="didar_fields[' . esc_attr( $field['name'] ) . '][' . esc_attr( $row_index ) . '][' . esc_attr( $column ) . ']" value="' . esc_attr( $cell_value ) . '"' . ( $is_structured && ! empty( $column_definition['semantic'] ) ? ' data-didar-semantic="' . esc_attr( sanitize_key( $column_definition['semantic'] ) ) . '"' : '' );
 					foreach ( array( 'placeholder', 'inputmode', 'autocomplete', 'autocapitalize', 'min', 'max', 'step', 'pattern', 'maxlength' ) as $attribute ) {
 						if ( $is_structured && isset( $column_definition[ $attribute ] ) && '' !== $column_definition[ $attribute ] ) {
 							echo ' ' . esc_attr( $attribute ) . '="' . esc_attr( $column_definition[ $attribute ] ) . '"';

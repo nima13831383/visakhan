@@ -741,6 +741,75 @@
 		});
 	}
 
+	function toPersianDigits(value) {
+		return String(value || '').replace(/[0-9]/g, function (digit) { return '۰۱۲۳۴۵۶۷۸۹'.charAt(Number(digit)); });
+	}
+
+	function canonicalTime(value) {
+		value = normalizeDigitsSafe(String(value || '').trim());
+		return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : '';
+	}
+
+	function enhanceTimePicker(picker) {
+		if (!picker || picker._didarTimePickerReady) return;
+		var canonical = picker.querySelector('[data-didar-time-canonical]');
+		var trigger = picker.querySelector('[data-didar-time-trigger]');
+		var popover = picker.querySelector('[data-didar-time-popover]');
+		var options = picker.querySelector('[data-didar-time-options]');
+		var title = picker.querySelector('[data-didar-time-title]');
+		var display = picker.querySelector('[data-didar-time-display]');
+		if (!canonical || !trigger || !popover || !options || !title || !display) return;
+		picker._didarTimePickerReady = true;
+		picker.setAttribute('data-didar-time-picker-initialized', '1');
+		var form = picker.closest && picker.closest('[data-didar-form],#post');
+
+		function selectedParts() { var value = canonicalTime(canonical.value); return value ? value.split(':') : ['', '']; }
+		function updateDisplay() {
+			var value = canonicalTime(canonical.value);
+			display.textContent = value ? toPersianDigits(value) : (picker.getAttribute('data-didar-time-placeholder') || 'انتخاب ساعت');
+			display.classList.toggle('is-placeholder', !value);
+		}
+		function close(restoreFocus) {
+			popover.hidden = true; trigger.setAttribute('aria-expanded', 'false'); picker.classList.remove('is-open');
+			if (form) form.classList.remove('didar-time-picker-open');
+			if (restoreFocus) trigger.focus();
+		}
+		function optionButton(value, selected, attribute, displayValue) {
+			var button = document.createElement('button');
+			button.type = 'button'; button.className = 'didar-time-picker__option' + (selected ? ' is-selected' : '');
+			button.textContent = toPersianDigits(undefined === displayValue ? value : displayValue); button.setAttribute(attribute, value); button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+			return button;
+		}
+		function renderHours() {
+			var selected = selectedParts()[0]; title.textContent = 'انتخاب ساعت'; options.textContent = ''; options.classList.remove('is-minutes');
+			for (var hour = 0; hour < 24; hour += 1) { var value = String(hour).padStart(2, '0'); options.appendChild(optionButton(value, value === selected, 'data-didar-time-hour', String(hour))); }
+		}
+		function renderMinutes(hour) {
+			var selected = selectedParts()[1]; title.textContent = 'انتخاب دقیقه'; options.textContent = ''; options.classList.add('is-minutes');
+			var back = document.createElement('button'); back.type = 'button'; back.className = 'didar-time-picker__back'; back.textContent = 'بازگشت'; back.setAttribute('data-didar-time-back', '1'); options.appendChild(back);
+			var step = Math.max(1, Math.floor(Number(picker.getAttribute('data-didar-time-step') || '60') / 60));
+			for (var minute = 0; minute < 60; minute += step) { var value = String(minute).padStart(2, '0'); options.appendChild(optionButton(value, value === selected, 'data-didar-time-minute')); }
+			options.setAttribute('data-didar-time-selected-hour', hour);
+		}
+		function open() {
+			document.querySelectorAll('[data-didar-time-picker].is-open').forEach(function (other) { if (other !== picker && other._didarCloseTimePicker) other._didarCloseTimePicker(false); });
+			popover.hidden = false; trigger.setAttribute('aria-expanded', 'true'); picker.classList.add('is-open'); if (form) form.classList.add('didar-time-picker-open'); renderHours();
+			var selected = options.querySelector('.is-selected') || options.querySelector('[data-didar-time-hour]'); if (selected) selected.focus();
+		}
+		picker._didarCloseTimePicker = close; updateDisplay();
+		trigger.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); if (popover.hidden) open(); else close(false); });
+		picker.addEventListener('click', function (event) {
+			event.stopPropagation();
+			var closeButton = event.target.closest && event.target.closest('[data-didar-time-close]'); if (closeButton) { event.preventDefault(); close(true); return; }
+			var back = event.target.closest && event.target.closest('[data-didar-time-back]'); if (back) { event.preventDefault(); renderHours(); var firstHour = options.querySelector('[data-didar-time-hour]'); if (firstHour) firstHour.focus(); return; }
+			var hour = event.target.closest && event.target.closest('[data-didar-time-hour]'); if (hour) { event.preventDefault(); renderMinutes(hour.getAttribute('data-didar-time-hour')); var firstMinute = options.querySelector('.is-selected') || options.querySelector('[data-didar-time-minute]'); if (firstMinute) firstMinute.focus(); return; }
+			var minute = event.target.closest && event.target.closest('[data-didar-time-minute]');
+			if (minute) { event.preventDefault(); canonical.value = (options.getAttribute('data-didar-time-selected-hour') || '00') + ':' + minute.getAttribute('data-didar-time-minute'); updateDisplay(); canonical.dispatchEvent(new Event('input', { bubbles: true })); canonical.dispatchEvent(new Event('change', { bubbles: true })); close(false); }
+		});
+		picker.addEventListener('keydown', function (event) { if ('Escape' === event.key) { event.preventDefault(); close(true); } });
+		document.addEventListener('click', function (event) { if (picker.classList.contains('is-open') && !picker.contains(event.target)) close(false); });
+	}
+
 	function syncConditionalHistory(form, changedFieldName) {
 		if (!form) return;
 		form.querySelectorAll('[data-didar-field][data-didar-conditional-on]').forEach(function (field) {
@@ -798,6 +867,8 @@
 
   function enhanceFormControls(root) {
     if (!root || !root.querySelectorAll) return;
+	if (root.matches && root.matches('[data-didar-time-picker]')) enhanceTimePicker(root);
+	root.querySelectorAll('[data-didar-time-picker]').forEach(enhanceTimePicker);
     if (root.matches && root.matches('select[data-didar-searchable="1"]')) enhanceSelect(root);
     root.querySelectorAll('select[data-didar-searchable="1"]').forEach(enhanceSelect);
     root.querySelectorAll('[data-didar-form],#post').forEach(function (form) { syncFormState(form, false, ''); });

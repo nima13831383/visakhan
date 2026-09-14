@@ -52,6 +52,17 @@ class Didar_Date_Service {
 
 	public function format_for_display( $canonical_date ) { return $this->to_jalali( $canonical_date ); }
 
+	/** Format an ASCII HH:MM value using Persian digits for user-facing output. */
+	public static function format_time_for_display( $time ) {
+		$time = self::ascii_digits( trim( (string) $time ) );
+		if ( ! preg_match( '/^(?:[01]\d|2[0-3]):[0-5]\d$/', $time ) ) { return ''; }
+		return self::persian_digits( $time );
+	}
+
+	public static function persian_digits( $value ) {
+		return strtr( (string) $value, array( '0'=>'۰', '1'=>'۱', '2'=>'۲', '3'=>'۳', '4'=>'۴', '5'=>'۵', '6'=>'۶', '7'=>'۷', '8'=>'۸', '9'=>'۹' ) );
+	}
+
 	public function to_jalali_with_engine( $gregorian_date, $engine ) {
 		return self::ENGINE_INTL === $engine ? $this->to_jalali_intl( $gregorian_date ) : $this->gregorian_to_jalali_fallback( $gregorian_date );
 	}
@@ -119,5 +130,5 @@ class Didar_Date_Service {
 		return $year >= 1 && $month >= 1 && $month <= 12 && $day >= 1 && $day <= ( $month <= 6 ? 31 : ( $month <= 11 ? 30 : 30 ) ) ? array( $year, $month, $day ) : array();
 	}
 
-	private function ascii_digits( $value ) { return strtr( (string) $value, array( '۰'=>'0','۱'=>'1','۲'=>'2','۳'=>'3','۴'=>'4','۵'=>'5','۶'=>'6','۷'=>'7','۸'=>'8','۹'=>'9', '٠'=>'0','١'=>'1','٢'=>'2','٣'=>'3','٤'=>'4','٥'=>'5','٦'=>'6','٧'=>'7','٨'=>'8','٩'=>'9' ) ); }
+	public static function ascii_digits( $value ) { return strtr( (string) $value, array( '۰'=>'0','۱'=>'1','۲'=>'2','۳'=>'3','۴'=>'4','۵'=>'5','۶'=>'6','۷'=>'7','۸'=>'8','۹'=>'9', '٠'=>'0','١'=>'1','٢'=>'2','٣'=>'3','٤'=>'4','٥'=>'5','٦'=>'6','٧'=>'7','٨'=>'8','٩'=>'9' ) ); }
 }
