@@ -44,6 +44,107 @@ class Test_Didar_Settings_Transfer extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( 'didar_companion_runtime', $json );
 	}
 
+	public function test_legacy_business_companion_uid_is_removed_on_export_and_import() {
+		$case = array(
+			'pipeline_id' => 'pipeline-1',
+			'field_mappings' => array( 'companion_uid' => 'Case_UID', 'family_relation' => 'Case_Relation' ),
+			'main_field_mappings' => array( 'case_role' => 'Case_Role' ),
+			'system_fields' => array( 'companion_uid' => 'Case_UID' ),
+		);
+		$source = array( 'visa_companion_case_settings' => $case, 'case_form_settings' => array( 'visa_request' => $case, 'embassy_appointment' => $case ) );
+		$portable = $this->transfer->portable_settings( $source );
+		$this->assertArrayNotHasKey( 'companion_uid', $portable['visa_companion_case_settings']['field_mappings'] );
+		$this->assertArrayNotHasKey( 'companion_uid', $portable['case_form_settings']['embassy_appointment']['field_mappings'] );
+		$this->assertSame( 'Case_UID', $portable['visa_companion_case_settings']['system_fields']['companion_uid'] );
+		$this->assertArrayNotHasKey( 'case_role', $portable['visa_companion_case_settings']['main_field_mappings'] );
+
+		$preview = $this->transfer->preview( array( 'format' => Didar_Settings_Transfer::FORMAT, 'schema_version' => 1, 'settings' => $source ), 'replace' );
+		$this->assertEmpty( $preview['errors'] );
+		$this->assertArrayNotHasKey( 'companion_uid', $preview['incoming']['case_form_settings']['visa_request']['field_mappings'] );
+		$this->assertNotWPError( $this->transfer->apply( $preview ) );
+		$saved = get_option( Didar_Settings::OPTION_NAME, array() );
+		$this->assertArrayNotHasKey( 'companion_uid', $saved['case_form_settings']['visa_request']['field_mappings'] );
+		$this->assertSame( 'Case_UID', $saved['case_form_settings']['visa_request']['system_fields']['companion_uid'] );
+	}
+
+	public function test_unmapped_case_fields_remain_unmapped_through_export_import() {
+		$case = array(
+			'pipeline_id'         => 'pipeline-1',
+			'initial_stage_id'    => 'stage-1',
+			'field_mappings'      => array(),
+			'main_field_mappings' => array(),
+			'system_fields'       => array(),
+		);
+		$source = array(
+			'visa_companion_case_settings' => $case,
+			'case_form_settings'           => array( 'visa_request' => $case, 'embassy_appointment' => $case ),
+		);
+
+		$portable = $this->transfer->portable_settings( $source );
+		$this->assertSame( array(), $portable['visa_companion_case_settings']['field_mappings'] );
+		$this->assertSame( array(), $portable['case_form_settings']['visa_request']['main_field_mappings'] );
+
+		$preview = $this->transfer->preview(
+			array( 'format' => Didar_Settings_Transfer::FORMAT, 'schema_version' => Didar_Settings_Transfer::SCHEMA_VERSION, 'settings' => $portable ),
+			'replace'
+		);
+		$this->assertEmpty( $preview['errors'] );
+		$this->assertSame( array(), $preview['incoming']['case_form_settings']['embassy_appointment']['field_mappings'] );
+		$this->assertNotWPError( $this->transfer->apply( $preview ) );
+		$saved = get_option( Didar_Settings::OPTION_NAME, array() );
+		$this->assertArrayNotHasKey( 'full_name', $saved['visa_companion_case_settings']['field_mappings'] );
+		$this->assertArrayNotHasKey( 'full_name', $saved['case_form_settings']['visa_request']['main_field_mappings'] );
+	}
+
+	public function test_explicit_case_mapping_tombstones_survive_export_import_round_trip() {
+		$visa = array(
+			'pipeline_id'         => 'pipeline-1',
+			'initial_stage_id'    => 'stage-1',
+			'field_mappings'      => array( 'family_relation' => '' ),
+			'main_field_mappings' => array( 'full_name' => '' ),
+			'system_fields'       => array( 'submission_id' => '' ),
+		);
+		$embassy = array(
+			'pipeline_id'         => 'pipeline-2',
+			'initial_stage_id'    => 'stage-2',
+			'field_mappings'      => array( 'family_relation' => '' ),
+			'main_field_mappings' => array( 'full_name' => '' ),
+			'system_fields'       => array( 'submission_id' => '' ),
+		);
+		$source = array(
+			'visa_companion_case_settings' => $visa,
+			'case_form_settings'           => array( 'visa_request' => $visa, 'embassy_appointment' => $embassy ),
+			'didar_companion_runtime'      => array( 'qa-companion' => array( 'case_id' => 'runtime-only-case' ) ),
+		);
+
+		$portable = $this->transfer->portable_settings( $source );
+		foreach ( array( 'visa_request', 'embassy_appointment' ) as $form_type ) {
+			$this->assertArrayHasKey( 'family_relation', $portable['case_form_settings'][ $form_type ]['field_mappings'] );
+			$this->assertSame( '', $portable['case_form_settings'][ $form_type ]['field_mappings']['family_relation'] );
+			$this->assertArrayHasKey( 'full_name', $portable['case_form_settings'][ $form_type ]['main_field_mappings'] );
+			$this->assertSame( '', $portable['case_form_settings'][ $form_type ]['main_field_mappings']['full_name'] );
+			$this->assertArrayHasKey( 'submission_id', $portable['case_form_settings'][ $form_type ]['system_fields'] );
+			$this->assertSame( '', $portable['case_form_settings'][ $form_type ]['system_fields']['submission_id'] );
+		}
+		$this->assertArrayNotHasKey( 'didar_companion_runtime', $portable );
+
+		$preview = $this->transfer->preview(
+			array( 'format' => Didar_Settings_Transfer::FORMAT, 'schema_version' => Didar_Settings_Transfer::SCHEMA_VERSION, 'settings' => $portable ),
+			'replace'
+		);
+		$this->assertEmpty( $preview['errors'] );
+		$this->assertSame( '', $preview['incoming']['case_form_settings']['embassy_appointment']['main_field_mappings']['full_name'] );
+		$this->assertNotWPError( $this->transfer->apply( $preview ) );
+
+		$saved = get_option( Didar_Settings::OPTION_NAME, array() );
+		foreach ( array( 'visa_request', 'embassy_appointment' ) as $form_type ) {
+			$this->assertArrayHasKey( 'full_name', $saved['case_form_settings'][ $form_type ]['main_field_mappings'] );
+			$this->assertSame( '', $saved['case_form_settings'][ $form_type ]['main_field_mappings']['full_name'] );
+		}
+		$this->assertSame( '', $saved['visa_companion_case_settings']['main_field_mappings']['full_name'] );
+		$this->assertSame( $portable, $this->transfer->portable_settings( $saved ) );
+	}
+
 	public function test_profile_document_person_mappings_survive_export_import_round_trip() {
 		$mapping = array(
 			'gender'                       => 'Field_Profile_Gender',
@@ -86,7 +187,7 @@ class Test_Didar_Settings_Transfer extends WP_UnitTestCase {
 			'pipeline_id'        => 'pipeline-1',
 			'initial_stage_id'   => 'stage-1',
 			'field_mappings'     => array( 'full_name' => 'Case_Name' ),
-			'main_field_mappings' => array( 'case_role' => 'Case_Role' ),
+			'main_field_mappings' => array(),
 			'system_fields'      => array( 'submission_id' => 'Case_Submission', 'companion_uid' => 'Case_UID', 'form_type' => 'Case_Form' ),
 		);
 		$source = array(

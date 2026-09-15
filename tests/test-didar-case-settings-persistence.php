@@ -60,7 +60,7 @@ class Test_Didar_Case_Settings_Persistence extends WP_UnitTestCase {
 		update_option( Didar_Settings::OPTION_NAME, $saved, false );
 		$reloaded = ( new Didar_Settings() )->all();
 
-		foreach ( array( 'full_name', 'occupation', 'national_id', 'passport_number', 'email', 'phone', 'case_role' ) as $key ) {
+		foreach ( array( 'full_name', 'occupation', 'national_id', 'passport_number', 'email', 'phone' ) as $key ) {
 			$this->assertSame( 'Case_' . $key, $reloaded['visa_companion_case_settings']['main_field_mappings'][ $key ] );
 		}
 		$this->assertSame( 'Case_submission_id', $reloaded['visa_companion_case_settings']['system_fields']['submission_id'] );
@@ -74,6 +74,8 @@ class Test_Didar_Case_Settings_Persistence extends WP_UnitTestCase {
 		$admin->render_case_companion_settings( 'didar_case_settings' );
 		$html = ob_get_clean();
 		$this->assertStringContainsString( 'name="didar_case_settings[case_form_settings][visa_request][main_field_mappings][full_name]"', $html );
+		$this->assertStringContainsString( 'name="didar_case_settings[case_form_settings][visa_request][_present][main_field_mappings][full_name]" value="1"', $html );
+		$this->assertSame( 1, preg_match( '/_present\]\[main_field_mappings\]\[full_name\]" value="1"><select name="didar_case_settings\[case_form_settings\]\[visa_request\]\[main_field_mappings\]\[full_name\]"/s', $html ) );
 		$this->assertSame( 1, preg_match( '/name="didar_case_settings\[case_form_settings\]\[visa_request\]\[main_field_mappings\]\[full_name\]".*?value="Case_full_name"\s+selected=/s', $html ) );
 		$this->assertSame( $reloaded['visa_companion_case_settings'], $reloaded['case_form_settings']['visa_request'] );
 		$this->assertStringContainsString( 'name="didar_case_settings[case_form_settings][embassy_appointment][main_field_mappings][full_name]"', $html );
@@ -86,7 +88,7 @@ class Test_Didar_Case_Settings_Persistence extends WP_UnitTestCase {
 
 	public function test_canonical_visa_case_form_save_persists_main_mappings_and_preserves_other_settings() {
 		$main = array();
-		foreach ( array( 'full_name', 'occupation', 'national_id', 'passport_number', 'email', 'phone', 'case_role' ) as $key ) {
+		foreach ( array( 'full_name', 'occupation', 'national_id', 'passport_number', 'email', 'phone' ) as $key ) {
 			$main[ $key ] = 'Case_' . $key;
 		}
 		$visa = array(
@@ -124,7 +126,7 @@ class Test_Didar_Case_Settings_Persistence extends WP_UnitTestCase {
 		$this->assertSame( '', $partial['settings']['case_form_settings']['visa_request']['category_id'] );
 	}
 
-	public function test_case_save_preserves_existing_duplicate_business_and_system_mapping_on_noop() {
+	public function test_case_save_removes_legacy_business_companion_uid_and_preserves_system_mapping() {
 		$visa = array(
 			'pipeline_id' => 'case-pipeline',
 			'initial_stage_id' => 'case-stage',
@@ -138,8 +140,125 @@ class Test_Didar_Case_Settings_Persistence extends WP_UnitTestCase {
 		);
 
 		$this->assertFalse( $result['invalid'] );
-		$this->assertSame( $visa['field_mappings'], $result['settings']['case_form_settings']['visa_request']['field_mappings'] );
+		$this->assertArrayNotHasKey( 'companion_uid', $result['settings']['case_form_settings']['visa_request']['field_mappings'] );
 		$this->assertSame( $visa['system_fields'], $result['settings']['case_form_settings']['visa_request']['system_fields'] );
+	}
+
+	public function test_case_mapping_presence_markers_persist_explicit_no_mapping_and_protect_invalid_values() {
+		$visa = array(
+			'pipeline_id'         => 'case-pipeline',
+			'initial_stage_id'    => 'case-stage',
+			'field_mappings'      => array( 'family_relation' => 'Case_family_relation' ),
+			'main_field_mappings' => array( 'full_name' => 'Case_full_name' ),
+			'system_fields'       => array( 'submission_id' => 'Case_submission_id' ),
+		);
+		$current = array(
+			'visa_companion_case_settings' => $visa,
+			'case_form_settings'           => array( 'visa_request' => $visa ),
+		);
+		$admin = $this->case_save_admin();
+
+		$cleared = $admin->prepare_case_settings_save_for_test(
+			$current,
+			array( 'case_form_settings' => array( 'visa_request' => array( '_present' => array( 'field_mappings' => array( 'family_relation' => '1' ), 'main_field_mappings' => array( 'full_name' => '1' ), 'system_fields' => array( 'submission_id' => '1' ) ) ) ) ),
+			'visa_request'
+		);
+		$cleared_visa = $cleared['settings']['case_form_settings']['visa_request'];
+		$this->assertArrayHasKey( 'family_relation', $cleared_visa['field_mappings'] );
+		$this->assertSame( '', $cleared_visa['field_mappings']['family_relation'] );
+		$this->assertArrayHasKey( 'full_name', $cleared_visa['main_field_mappings'] );
+		$this->assertSame( '', $cleared_visa['main_field_mappings']['full_name'] );
+		$this->assertArrayHasKey( 'submission_id', $cleared_visa['system_fields'] );
+		$this->assertSame( '', $cleared_visa['system_fields']['submission_id'] );
+
+		$mapped = $admin->prepare_case_settings_save_for_test(
+			$cleared['settings'],
+			array( 'case_form_settings' => array( 'visa_request' => array( '_present' => array( 'field_mappings' => array( 'family_relation' => '1' ) ), 'field_mappings' => array( 'family_relation' => 'Case_age_group' ) ) ) ),
+			'visa_request'
+		);
+		$this->assertSame( 'Case_age_group', $mapped['settings']['case_form_settings']['visa_request']['field_mappings']['family_relation'] );
+
+		$invalid = $admin->prepare_case_settings_save_for_test(
+			$mapped['settings'],
+			array( 'case_form_settings' => array( 'visa_request' => array( '_present' => array( 'field_mappings' => array( 'family_relation' => '1' ) ), 'field_mappings' => array( 'family_relation' => 'not_a_case_field' ) ) ) ),
+			'visa_request'
+		);
+		$this->assertSame( 'Case_age_group', $invalid['settings']['case_form_settings']['visa_request']['field_mappings']['family_relation'] );
+
+		$absent = $admin->prepare_case_settings_save_for_test( $invalid['settings'], array( 'case_form_settings' => array( 'visa_request' => array() ) ), 'visa_request' );
+		$this->assertSame( 'Case_age_group', $absent['settings']['case_form_settings']['visa_request']['field_mappings']['family_relation'] );
+	}
+
+	public function test_embassy_main_full_name_can_be_explicitly_unmapped_without_resurrection() {
+		$old_target = 'Field_8785_0_261';
+		$new_target = 'Field_8785_0_263';
+		$current = array(
+			'case_form_settings' => array(
+				'embassy_appointment' => array(
+					'pipeline_id'         => 'case-pipeline',
+					'initial_stage_id'    => 'case-stage',
+					'main_field_mappings' => array( 'full_name' => $old_target ),
+				),
+			),
+		);
+		$admin = $this->case_save_admin();
+		$clear_post = array(
+			'case_form_settings' => array(
+				'embassy_appointment' => array(
+					'_present'            => array( 'main_field_mappings' => array( 'full_name' => '1' ) ),
+					'main_field_mappings' => array( 'full_name' => '' ),
+				),
+			),
+		);
+
+		$cleared = $admin->prepare_case_settings_save_for_test( $current, $clear_post, 'embassy_appointment' );
+		$stored = $cleared['settings'];
+		$this->assertArrayHasKey( 'full_name', $stored['case_form_settings']['embassy_appointment']['main_field_mappings'] );
+		$this->assertSame( '', $stored['case_form_settings']['embassy_appointment']['main_field_mappings']['full_name'] );
+
+		update_option( Didar_Settings::OPTION_NAME, $stored, false );
+		$reloaded = ( new Didar_Settings() )->all();
+		$this->assertArrayHasKey( 'full_name', $reloaded['case_form_settings']['embassy_appointment']['main_field_mappings'] );
+		$this->assertSame( '', $reloaded['case_form_settings']['embassy_appointment']['main_field_mappings']['full_name'] );
+		$this->assertSame( '', ( new Didar_Case_Service( new Didar_Settings(), new Didar_Logger() ) )->configuration( 'embassy_appointment' )['main_field_mappings']['full_name'] );
+
+		ob_start();
+		$this->admin()->render_case_companion_settings( 'didar_case_settings' );
+		$html = ob_get_clean();
+		$this->assertSame( 1, substr_count( $html, 'name="didar_case_settings[case_form_settings][embassy_appointment][main_field_mappings][full_name]"' ) );
+		$this->assertSame( 1, preg_match( '/<select name="didar_case_settings\\[case_form_settings\\]\\[embassy_appointment\\]\\[main_field_mappings\\]\\[full_name\\]">\\s*<option value="">— بدون نگاشت —<\\/option>/u', $html ) );
+		$this->assertSame( 0, preg_match( '/<select name="didar_case_settings\\[case_form_settings\\]\\[embassy_appointment\\]\\[main_field_mappings\\]\\[full_name\\]">.*?value="' . preg_quote( $old_target, '/' ) . '"\\s+selected=/s', $html ) );
+
+		$second_save = $admin->prepare_case_settings_save_for_test( $reloaded, $clear_post, 'embassy_appointment' );
+		$this->assertArrayHasKey( 'full_name', $second_save['settings']['case_form_settings']['embassy_appointment']['main_field_mappings'] );
+		$this->assertSame( '', $second_save['settings']['case_form_settings']['embassy_appointment']['main_field_mappings']['full_name'] );
+
+		$mapped = $admin->prepare_case_settings_save_for_test( $second_save['settings'], array( 'case_form_settings' => array( 'embassy_appointment' => array( '_present' => array( 'main_field_mappings' => array( 'full_name' => '1' ) ), 'main_field_mappings' => array( 'full_name' => $old_target ) ) ) ), 'embassy_appointment' );
+		$this->assertSame( $old_target, $mapped['settings']['case_form_settings']['embassy_appointment']['main_field_mappings']['full_name'] );
+		$remapped = $admin->prepare_case_settings_save_for_test( $mapped['settings'], array( 'case_form_settings' => array( 'embassy_appointment' => array( '_present' => array( 'main_field_mappings' => array( 'full_name' => '1' ) ), 'main_field_mappings' => array( 'full_name' => $new_target ) ) ) ), 'embassy_appointment' );
+		$this->assertSame( $new_target, $remapped['settings']['case_form_settings']['embassy_appointment']['main_field_mappings']['full_name'] );
+
+		$portable = ( new Didar_Settings_Transfer( new Didar_Form_Registry(), new Didar_Settings(), new Didar_Logger() ) )->portable_settings( $stored );
+		$this->assertArrayHasKey( 'full_name', $portable['case_form_settings']['embassy_appointment']['main_field_mappings'] );
+		$this->assertSame( '', $portable['case_form_settings']['embassy_appointment']['main_field_mappings']['full_name'] );
+	}
+
+	public function test_case_renderer_hides_retired_business_and_role_mappings_but_keeps_system_uid() {
+		$visa = array(
+			'pipeline_id' => 'case-pipeline',
+			'initial_stage_id' => 'case-stage',
+			'field_mappings' => array( 'companion_uid' => 'Case_companion_uid' ),
+			'main_field_mappings' => array( 'case_role' => 'Case_case_role' ),
+			'system_fields' => array( 'companion_uid' => 'Case_companion_uid' ),
+		);
+		update_option( Didar_Settings::OPTION_NAME, array( 'visa_companion_case_settings' => $visa, 'case_form_settings' => array( 'visa_request' => $visa ) ), false );
+		ob_start();
+		$this->admin()->render_case_companion_settings( 'didar_case_settings' );
+		$html = ob_get_clean();
+
+		$this->assertStringNotContainsString( '[field_mappings][companion_uid]', $html );
+		$this->assertStringContainsString( '[system_fields][companion_uid]', $html );
+		$this->assertStringNotContainsString( '[main_field_mappings][case_role]', $html );
 	}
 
 	public function test_visa_main_and_companion_case_mappings_can_reuse_targets_across_separate_cases() {
@@ -239,6 +358,68 @@ class Test_Didar_Case_Settings_Persistence extends WP_UnitTestCase {
 
 		$cleared = $admin->sanitize_didar_settings( array( 'didar_field_mappings' => array( 'consultation' => array( 'applicant_note' => array( 'target' => 'deal_custom', 'field' => '' ) ) ) ) );
 		$this->assertArrayNotHasKey( 'applicant_note', $cleared['didar_field_mappings']['consultation'] );
+	}
+
+	public function test_tab_scoped_saves_preserve_absent_groups_and_allow_explicit_empty_values() {
+		$existing = array(
+			'didar_api_key' => 'keep-secret',
+			'didar_debug_logging' => 'verbose',
+			'didar_default_owner_id' => 'owner-old',
+			'didar_form_access' => array( 'consultation' => array( 'url' => 'https://example.test/form', 'barcode' => '' ) ),
+			'didar_form_workflows' => array( 'consultation' => array( 'pipeline_id' => 'deal-pipeline' ) ),
+			'didar_user_person_mappings' => array( 'gender' => 'Person_Gender' ),
+			'profile_field_states' => Didar_Settings::PROFILE_FIELD_STATES,
+			'visa_companion_case_settings' => array( 'pipeline_id' => 'case-pipeline', 'system_fields' => array( 'companion_uid' => 'Case_companion_uid' ) ),
+			'case_form_settings' => array( 'embassy_appointment' => array( 'pipeline_id' => 'case-pipeline' ) ),
+		);
+		update_option( Didar_Settings::OPTION_NAME, $existing, false );
+
+		$forms = $this->admin()->sanitize_didar_settings( array( '_active_tab' => 'forms', 'didar_form_access' => array( 'consultation' => array( 'url' => '', 'barcode' => '' ) ) ) );
+		$this->assertSame( '', $forms['didar_form_access']['consultation']['url'] );
+		$this->assertSame( $existing['didar_api_key'], $forms['didar_api_key'] );
+		$this->assertSame( $existing['didar_user_person_mappings'], $forms['didar_user_person_mappings'] );
+		$this->assertSame( $existing['visa_companion_case_settings'], $forms['visa_companion_case_settings'] );
+
+		update_option( Didar_Settings::OPTION_NAME, $forms, false );
+		$profile = $this->admin()->sanitize_didar_settings( array( '_active_tab' => 'profile', 'didar_user_person_mappings' => array( 'gender' => '' ), 'profile_field_states' => Didar_Settings::PROFILE_FIELD_STATES ) );
+		$this->assertArrayNotHasKey( 'gender', $profile['didar_user_person_mappings'] );
+		$this->assertSame( 'verbose', $profile['didar_debug_logging'] );
+		$this->assertSame( $forms['didar_form_access'], $profile['didar_form_access'] );
+		$this->assertSame( $existing['visa_companion_case_settings'], $profile['visa_companion_case_settings'] );
+
+		update_option( Didar_Settings::OPTION_NAME, $profile, false );
+		$general = $this->admin()->sanitize_didar_settings( array( '_active_tab' => 'general', 'didar_debug_logging' => 'errors', 'didar_default_owner_id' => '' ) );
+		$this->assertSame( 'errors', $general['didar_debug_logging'] );
+		$this->assertSame( '', $general['didar_default_owner_id'] );
+		$this->assertSame( $profile['didar_form_access'], $general['didar_form_access'] );
+		$this->assertSame( $profile['didar_user_person_mappings'], $general['didar_user_person_mappings'] );
+		$this->assertSame( $existing['visa_companion_case_settings'], $general['visa_companion_case_settings'] );
+	}
+
+	public function test_form_no_mapping_clears_legacy_target_without_resurrection() {
+		$existing = array(
+			'didar_field_mappings' => array(
+				'consultation' => array(
+					'first_name' => array( 'target' => 'person_native', 'field' => 'FirstName' ),
+				),
+			),
+		);
+		update_option( Didar_Settings::OPTION_NAME, $existing, false );
+
+		$clean = $this->admin()->sanitize_didar_settings(
+			array(
+				'_active_tab'          => 'forms',
+				'didar_field_mappings' => array(
+					'consultation' => array(
+						'first_name' => array( 'target' => 'deal_custom', 'field' => '' ),
+					),
+				),
+			)
+		);
+		update_option( Didar_Settings::OPTION_NAME, $clean, false );
+		$reloaded = get_option( Didar_Settings::OPTION_NAME, array() );
+
+		$this->assertArrayNotHasKey( 'first_name', $reloaded['didar_field_mappings']['consultation'] );
 	}
 
 	public function test_embassy_dedicated_case_save_preserves_visa_and_renders_valid_pipeline_stage_and_category() {
@@ -352,7 +533,7 @@ class Test_Didar_Case_Settings_Persistence extends WP_UnitTestCase {
 
 	private function posted_case_settings() {
 		$main = array();
-		foreach ( array( 'full_name', 'occupation', 'national_id', 'passport_number', 'email', 'phone', 'case_role' ) as $key ) {
+		foreach ( array( 'full_name', 'occupation', 'national_id', 'passport_number', 'email', 'phone' ) as $key ) {
 			$main[ $key ] = 'Case_' . $key;
 		}
 		return array(

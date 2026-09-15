@@ -27,7 +27,7 @@ class Didar_Case_Service {
 	public function configuration( $form_type ) {
 		$form_type = sanitize_key( (string) $form_type );
 		$settings = $this->settings->all();
-		if ( isset( $settings['case_form_settings'][ $form_type ] ) && is_array( $settings['case_form_settings'][ $form_type ] ) ) {
+		if ( isset( $settings['case_form_settings'] ) && is_array( $settings['case_form_settings'] ) && array_key_exists( $form_type, $settings['case_form_settings'] ) && is_array( $settings['case_form_settings'][ $form_type ] ) ) {
 			return $settings['case_form_settings'][ $form_type ];
 		}
 		if ( 'visa_request' === $form_type && isset( $settings['visa_companion_case_settings'] ) && is_array( $settings['visa_companion_case_settings'] ) ) {

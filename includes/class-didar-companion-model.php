@@ -55,7 +55,6 @@ class Didar_Companion_Model {
 			'passport_number' => sanitize_text_field( (string) ( $fields['passport_number'] ?? '' ) ),
 			'email' => sanitize_email( (string) ( $fields['email'] ?? '' ) ),
 			'phone' => sanitize_text_field( (string) ( $fields[ 'embassy_appointment' === $form_type ? 'mobile' : 'mobile' ] ?? ( $fields['phone'] ?? '' ) ) ),
-			'case_role' => 'main_applicant',
 		);
 	}
 }

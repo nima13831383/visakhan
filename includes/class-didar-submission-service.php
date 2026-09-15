@@ -114,15 +114,15 @@ class Didar_Submission_Service {
 		$old_fields  = $this->get_fields( $post_id );
 		$old_owner   = (int) $post->post_author;
 		$data        = $this->preserve_inactive_fields( $form_type, $old_fields, $data );
+		$internal_default_status = $this->workflow->default_status( $form_type, $form['default_status'] );
+		if ( ! $internal_default_status ) {
+			return new WP_Error( 'workflow_default_missing', __( 'وضعیت پیش‌فرض گردش کار این فرم مشخص نیست.', 'didar' ) );
+		}
 
 		update_post_meta( $post_id, '_didar_form_type', $form_type );
 		update_post_meta( $post_id, '_didar_fields', $data );
 		if ( ! metadata_exists( 'post', $post_id, '_didar_created_by_user_id' ) ) {
 			update_post_meta( $post_id, '_didar_created_by_user_id', get_current_user_id() );
-		}
-		$internal_default_status = $this->workflow->default_status( $form_type, $form['default_status'] );
-		if ( ! $internal_default_status ) {
-			return new WP_Error( 'workflow_default_missing', __( 'وضعیت پیش‌فرض گردش کار این فرم مشخص نیست.', 'didar' ) );
 		}
 		$this->ensure_workflow_defaults( $post_id, $internal_default_status );
 

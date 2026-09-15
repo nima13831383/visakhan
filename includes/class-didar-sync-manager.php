@@ -1048,7 +1048,9 @@ class Didar_Sync_Manager {
 		$main = is_array( $main ) ? $main : array();
 		$uid = sanitize_text_field( (string) ( $main['uid'] ?? '' ) );
 		if ( ! preg_match( '/^main_[0-9]+$/', $uid ) ) { $uid = Didar_Companion_Model::main_uid( $post_id ); }
-		$mappings = ! empty( $config['main_field_mappings'] ) && is_array( $config['main_field_mappings'] ) ? $config['main_field_mappings'] : (array) ( $config['field_mappings'] ?? array() );
+		// A canonical main-mapping group may intentionally contain only explicit
+		// empty values. Its presence still suppresses the legacy companion fallback.
+		$mappings = array_key_exists( 'main_field_mappings', $config ) && is_array( $config['main_field_mappings'] ) ? $config['main_field_mappings'] : (array) ( $config['field_mappings'] ?? array() );
 		$row = Didar_Companion_Model::main_applicant_row( $form_type, $fields );
 		$case_id = sanitize_text_field( (string) ( $main['case_id'] ?? '' ) );
 		if ( ! $case_id ) {

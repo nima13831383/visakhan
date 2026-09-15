@@ -55,15 +55,46 @@ class Didar_Settings {
 		return $secret ? rest_url( 'didar/v1/webhook/' . rawurlencode( $secret ) ) : '';
 	}
 
+	/** Remove retired Case business mappings while preserving the canonical system identity fields. */
+	public static function normalize_case_config( $config ) {
+		$config = is_array( $config ) ? $config : array();
+		if ( isset( $config['field_mappings'] ) && is_array( $config['field_mappings'] ) ) {
+			unset( $config['field_mappings']['companion_uid'] );
+		}
+		if ( isset( $config['main_field_mappings'] ) && is_array( $config['main_field_mappings'] ) ) {
+			unset( $config['main_field_mappings']['case_role'] );
+		}
+		return $config;
+	}
+
+	/** Normalize both the legacy Visa namespace and the canonical per-form Case settings. */
+	public static function normalize_case_settings( $settings ) {
+		$settings = is_array( $settings ) ? $settings : array();
+		if ( isset( $settings['visa_companion_case_settings'] ) && is_array( $settings['visa_companion_case_settings'] ) ) {
+			$settings['visa_companion_case_settings'] = self::normalize_case_config( $settings['visa_companion_case_settings'] );
+		}
+		if ( isset( $settings['case_form_settings'] ) && is_array( $settings['case_form_settings'] ) ) {
+			foreach ( $settings['case_form_settings'] as $form_type => $config ) {
+				if ( is_array( $config ) ) {
+					$settings['case_form_settings'][ $form_type ] = self::normalize_case_config( $config );
+				}
+			}
+		}
+		return $settings;
+	}
+
 	public function all() {
 		$settings = get_option( self::OPTION_NAME, array() );
 		$settings = is_array( $settings ) ? $settings : array();
+		$normalized = self::normalize_case_settings( $settings );
 		// Remove the retired webhookId allowlist from persisted settings.
-		if ( array_key_exists( 'didar_webhook_bindings', $settings ) ) {
-			unset( $settings['didar_webhook_bindings'] );
-			update_option( self::OPTION_NAME, $settings, false );
+		if ( array_key_exists( 'didar_webhook_bindings', $normalized ) ) {
+			unset( $normalized['didar_webhook_bindings'] );
 		}
-		return $settings;
+		if ( $normalized !== $settings ) {
+			update_option( self::OPTION_NAME, $normalized, false );
+		}
+		return $normalized;
 	}
 
 	public function colleague_can_view_internal_history() {

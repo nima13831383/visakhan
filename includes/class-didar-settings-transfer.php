@@ -38,6 +38,7 @@ class Didar_Settings_Transfer {
 	/** Explicit allowlist: add a key here only after deciding it is portable and non-secret. */
 	public function portable_settings( $source = null ) {
 		$source = is_array( $source ) ? $source : $this->settings->all();
+		$source = Didar_Settings::normalize_case_settings( $source );
 		$out = $this->portable_runtime_settings( $source );
 		// New installs have no persisted profile settings until an administrator
 		// saves the page. Export their safe defaults explicitly so the feature is
@@ -160,6 +161,7 @@ class Didar_Settings_Transfer {
 		if ( isset( $out['pdf_settings'] ) ) { $out['pdf_settings'] = Didar_Settings::normalize_pdf_settings( $out['pdf_settings'] ); }
 		if ( isset( $out['visa_companion_case_settings'] ) && ! is_array( $out['visa_companion_case_settings'] ) ) { $errors[] = 'Visa companion Case settings structure is invalid.'; unset( $out['visa_companion_case_settings'] ); }
 		if ( isset( $out['case_form_settings'] ) && ! is_array( $out['case_form_settings'] ) ) { $errors[] = 'Per-form Case settings structure is invalid.'; unset( $out['case_form_settings'] ); }
+		$out = Didar_Settings::normalize_case_settings( $out );
 		foreach ( array( 'didar_form_workflows', 'didar_field_mappings', 'field_required_overrides' ) as $key ) {
 			if ( empty( $out[ $key ] ) ) { continue; }
 			foreach ( $out[ $key ] as $form_type => $value ) {
@@ -199,6 +201,10 @@ class Didar_Settings_Transfer {
 	private function validate( $incoming, $proposed, &$warnings, &$errors, &$not_verified ) {
 		foreach ( (array) ( $incoming['didar_form_workflows'] ?? array() ) as $form_type => $workflow ) {
 			if ( ! $this->registry->get( $form_type ) ) { $warnings[] = 'نوع فرم ناشناخته «' . sanitize_key( $form_type ) . '» اعمال نمی‌شود.'; continue; }
+			// The settings UI deliberately stores an empty pipeline/status pair as a
+			// per-form opt-out. It must round-trip through the transfer service and
+			// must not fall back to a legacy workflow on import.
+			if ( is_array( $workflow ) && '' === sanitize_text_field( (string) ( $workflow['pipeline_id'] ?? '' ) ) && empty( $workflow['statuses'] ) ) { continue; }
 			if ( ! is_array( $workflow ) || empty( $workflow['pipeline_id'] ) || empty( $workflow['statuses'] ) || ! is_array( $workflow['statuses'] ) ) { $errors[] = 'گردش کار فرم «' . sanitize_key( $form_type ) . '» ناقص است.'; continue; }
 			$pipeline = $this->workflow->pipeline( $workflow['pipeline_id'] );
 			if ( $this->workflow->pipelines() && ! $pipeline ) { $errors[] = 'کاریز فرم «' . sanitize_key( $form_type ) . '» در اطلاعات دیدار یافت نشد.'; continue; }
@@ -298,6 +304,11 @@ class Didar_Settings_Transfer {
 	 */
 	public function canonicalize_portable_option( $option_name, $value ) {
 		 switch ( $option_name ) {
+			case 'visa_companion_case_settings':
+				return $this->sort_associative( Didar_Settings::normalize_case_config( $value ) );
+			case 'case_form_settings':
+				$normalized = Didar_Settings::normalize_case_settings( array( 'case_form_settings' => is_array( $value ) ? $value : array() ) );
+				return $this->sort_associative( $normalized['case_form_settings'] );
 			case 'didar_form_field_placeholders': return $this->normalize_placeholders( $value );
 			case 'didar_form_field_defaults':
 				$out = array(); $catalog = new Didar_User_Profile_Value_Catalog();
