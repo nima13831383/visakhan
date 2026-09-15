@@ -11,6 +11,9 @@ class Didar_Sync_Manager {
 	const CRON_HOOK = 'didar_process_sync';
 	const USER_HOOK = 'didar_process_user_sync';
 	const WORKER_SCHEDULE = 'didar_every_five_minutes';
+	// Two durable-worker intervals allow the prompt single event and normal WP-Cron
+	// dispatch to complete before the recovery sweep considers a fresh generation.
+	const WORKER_RECOVERY_GRACE = 600;
 	const LOCK_PREFIX = 'didar_submission_sync_lock_';
 	const USER_LOCK_PREFIX = 'didar_person_sync_lock_';
 	const LOCK_TTL = 120;
@@ -776,14 +779,56 @@ class Didar_Sync_Manager {
 		delete_post_meta( $post_id, self::META_CASE_STATE );
 	}
 
-	/** Sweep durable pending submissions in bounded batches; individual events remain faster-path dispatch. */
+	/**
+	 * Sweep durable submission states as a recovery net. Single events remain the
+	 * normal fast path; this only dispatches due retries or pending generations
+	 * that have outlived two worker intervals.
+	 */
 	private function process_pending_submissions() {
-		$this->logger->log( 'INFO', 'sync_worker_started', 'Durable submission sync worker started.', array( 'entity_type' => 'submission', 'source' => 'wp_cron' ) );
-		$query = new WP_Query( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => 10, 'no_found_rows' => true, 'meta_key' => self::META_STATE, 'meta_value' => 'pending', 'meta_compare' => 'LIKE', 'orderby' => 'ID', 'order' => 'ASC' ) );
-		foreach ( $query->posts as $post_id ) {
-			$this->process_submission( absint( $post_id ), 'automatic' );
+		$query = new WP_Query( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'post_status' => 'any', 'fields' => 'ids', 'posts_per_page' => -1, 'no_found_rows' => true, 'meta_key' => self::META_STATE, 'meta_value' => 'pending', 'meta_compare' => 'LIKE', 'orderby' => 'ID', 'order' => 'ASC' ) );
+		$scan = array( 'candidate_count' => 0, 'recovery_candidate_count' => 0, 'dispatched_count' => 0 );
+		foreach ( (array) $query->posts as $post_id ) {
+			$post_id = absint( $post_id );
+			$scan['candidate_count']++;
+			$candidate = $this->submission_recovery_candidate( $post_id, $this->state( $post_id ) );
+			if ( empty( $candidate['recover'] ) ) {
+				$this->logger->log( 'DEBUG', 'sync_worker_item_skipped', 'Durable submission was not eligible for this recovery sweep.', $this->sync_context( $post_id, $this->state( $post_id ) ) + array( 'source' => 'wp_cron', 'skip_reason' => $candidate['reason'], 'stale_age' => absint( $candidate['stale_age'] ) ) );
+				continue;
+			}
+			$scan['recovery_candidate_count']++;
+			$state = $this->state( $post_id ); // Re-read immediately before canonical dispatch.
+			$this->logger->log( 'INFO', 'sync_worker_recovery_dispatch', 'Durable submission recovery dispatched through the canonical cron processor.', $this->sync_context( $post_id, $state ) + array( 'source' => 'wp_cron', 'reason' => $candidate['reason'], 'stale_age' => absint( $candidate['stale_age'] ) ) );
+			$this->process_scheduled_submission( $post_id, $state['generation_id'] ?? '' );
+			$scan['dispatched_count']++;
 		}
+		$this->logger->log( 'INFO', 'sync_worker_scan', 'Durable submission recovery sweep completed.', array( 'entity_type' => 'submission', 'source' => 'wp_cron' ) + $scan );
 		return true;
+	}
+
+	/** Determine recovery eligibility without reserving an attempt or acquiring a lock. */
+	private function submission_recovery_candidate( $post_id, $state ) {
+		$state = is_array( $state ) ? $state : array();
+		if ( ! $this->generation_is_eligible( $state ) ) {
+			$status = sanitize_key( (string) ( $state['status'] ?? '' ) );
+			return array( 'recover' => false, 'reason' => in_array( $status, array( 'synced', 'exhausted' ), true ) ? $status : 'stale_generation', 'stale_age' => 0 );
+		}
+		if ( $this->submission_has_active_lock( $post_id ) ) {
+			return array( 'recover' => false, 'reason' => 'active_lock', 'stale_age' => 0 );
+		}
+		$now        = time();
+		$next_retry = absint( $state['next_retry_at'] ?? 0 );
+		if ( $next_retry > $now ) {
+			return array( 'recover' => false, 'reason' => 'retry_not_due', 'stale_age' => 0 );
+		}
+		$created_at = absint( $state['created_at'] ?? $state['updated_at'] ?? 0 );
+		$stale_age  = $created_at ? max( 0, $now - $created_at ) : 0;
+		if ( absint( $state['automatic_attempts'] ?? 0 ) > 0 ) {
+			return array( 'recover' => true, 'reason' => 'retry_due', 'stale_age' => $stale_age );
+		}
+		if ( $stale_age < self::WORKER_RECOVERY_GRACE ) {
+			return array( 'recover' => false, 'reason' => 'not_stale_yet', 'stale_age' => $stale_age );
+		}
+		return array( 'recover' => true, 'reason' => 'stale_pending', 'stale_age' => $stale_age );
 	}
 
 	/** Sweep retryable Person state too, so a missed one-off user event self-recovers. */
@@ -1610,6 +1655,7 @@ class Didar_Sync_Manager {
 		$result = wp_schedule_single_event( $when, self::CRON_HOOK, $args, true );
 		$state = $this->state( $post_id );
 		if ( is_wp_error( $result ) || false === $result ) { $this->logger->log( 'ERROR', 'sync_schedule_failed', 'Durable submission sync was persisted but its prompt dispatch could not be scheduled; the recurring worker will retry it.', $this->sync_context( $post_id, $state ) + array( 'source' => $source, 'error_code' => is_wp_error( $result ) ? $result->get_error_code() : 'schedule_failed', 'error_message' => is_wp_error( $result ) ? $result->get_error_message() : 'wp_schedule_single_event returned false' ) ); return false; }
+		if ( false === wp_next_scheduled( self::CRON_HOOK, $args ) ) { $this->logger->log( 'ERROR', 'sync_schedule_failed', 'Durable submission sync was persisted but WordPress did not retain its prompt dispatch event; the recurring worker will retry it.', $this->sync_context( $post_id, $state ) + array( 'source' => $source, 'error_code' => 'schedule_not_retained' ) ); return false; }
 		$state['next_retry_at'] = absint( $when ); update_post_meta( $post_id, self::META_STATE, $state );
 		$this->logger->log( 'INFO', 'sync_queued', 'Submission sync was durably persisted and scheduled for prompt dispatch.', $this->sync_context( $post_id, $state ) + array( 'source' => $source, 'queue_job_id' => self::CRON_HOOK, 'scheduled_at' => Didar_Logger::display_timestamp( $when, DATE_ATOM ) ) );
 		return true;
