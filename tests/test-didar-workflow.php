@@ -16,6 +16,7 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 		Didar_Access_Control::install_roles_and_capabilities();
 		Didar_Event_Log::install_schema();
 		$this->service = new Didar_Submission_Service( new Didar_Form_Registry(), new Didar_Event_Log() );
+		$this->set_test_workflow();
 	}
 
 	public function tear_down() {
@@ -100,7 +101,7 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 		$this->assertSame( $parent . '&didar_assignment=mine', $broker_submenu[1][2] );
 	}
 
-	public function test_customer_receives_public_but_not_internal_data_or_history() {
+	public function test_customer_receives_canonical_request_status_but_not_request_note_or_history() {
 		$customer_id   = self::factory()->user->create( array( 'role' => 'subscriber' ) );
 		$admin_id      = self::factory()->user->create( array( 'role' => 'administrator' ) );
 		$submission_id = $this->create_submission( $customer_id );
@@ -109,20 +110,21 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 		$result = $this->service->update_workflow(
 			$submission_id,
 			array(
-				'public_note'     => 'مدارک را ارسال کنید',
-				'internal_note'   => 'پیگیری داخلی',
-				'internal_status' => 'initial_approval',
+				'request_note'   => 'پیگیری داخلی',
+				'request_status' => 'initial_approval',
 			)
 		);
 		$this->assertTrue( $result );
 
 		wp_set_current_user( $customer_id );
-		$this->assertSame( 'pending_review', $this->service->get_public_status( $submission_id ) );
-		$this->assertSame( 'مدارک را ارسال کنید', $this->service->get_public_note( $submission_id ) );
-		$this->assertSame( '', $this->service->get_internal_status( $submission_id ) );
+		$this->assertSame( 'initial_approval', $this->service->get_request_status( $submission_id ) );
+		$this->assertSame( 'initial_approval', $this->service->get_public_status( $submission_id ) );
+		$this->assertSame( '', $this->service->get_public_note( $submission_id ) );
+		$this->assertSame( 'initial_approval', $this->service->get_internal_status( $submission_id ) );
+		$this->assertSame( '', $this->service->get_request_note( $submission_id ) );
 		$this->assertSame( '', $this->service->get_internal_note( $submission_id ) );
 		$this->assertSame( array(), $this->service->get_events( $submission_id ) );
-		$this->assertWPError( $this->service->update_workflow( $submission_id, array( 'internal_note' => 'جعلی' ) ) );
+		$this->assertWPError( $this->service->update_workflow( $submission_id, array( 'public_status' => 'completed' ) ) );
 	}
 
 	public function test_colleague_sees_only_own_internal_workflow_and_history() {
@@ -151,6 +153,7 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 		wp_set_current_user( $second_customer );
 		$this->assertNull( $this->service->get_owned_submission( $submission_id, $second_customer ) );
 		$this->assertFalse( $this->service->can_view_public( $submission_id ) );
+		$this->assertSame( '', $this->service->get_request_status( $submission_id ) );
 		$this->assertSame( '', $this->service->get_public_status( $submission_id ) );
 		$this->assertSame( '', $this->service->get_public_note( $submission_id ) );
 	}
@@ -211,6 +214,21 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 		delete_transient( 'didar_admin_errors_' . $broker_id . '_' . $submission_id );
 	}
 
+	public function test_admin_workflow_box_has_one_canonical_status_control() {
+		$admin_id      = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		$submission_id = $this->create_submission( $admin_id );
+		$admin         = new Didar_Admin( new Didar_Form_Registry(), new Didar_Field_Renderer(), new Didar_Validator( new Didar_Form_Registry() ), $this->service );
+
+		wp_set_current_user( $admin_id );
+		ob_start();
+		$admin->render_request_workflow_box( get_post( $submission_id ) );
+		$html = ob_get_clean();
+		$this->assertSame( 1, substr_count( $html, 'name="didar_request_status"' ) );
+		$this->assertStringContainsString( 'وضعیت درخواست', $html );
+		$this->assertStringNotContainsString( 'didar_public_status', $html );
+		$this->assertStringNotContainsString( 'وضعیت داخلی', $html );
+	}
+
 	public function test_assignment_is_validated_and_append_only_events_ignore_noops() {
 		$customer_id   = self::factory()->user->create( array( 'role' => 'subscriber' ) );
 		$broker_id     = self::factory()->user->create( array( 'role' => Didar_Access_Control::ROLE_BROKER ) );
@@ -226,7 +244,7 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 
 		$this->assertWPError( $this->service->update_workflow( $submission_id, array( 'assigned_user_id' => $customer_id ) ) );
 		wp_set_current_user( $broker_id );
-		$this->assertTrue( $this->service->update_workflow( $submission_id, array( 'internal_status' => 'initial_approval', 'public_note' => 'در حال بررسی' ) ) );
+		$this->assertTrue( $this->service->update_workflow( $submission_id, array( 'request_status' => 'initial_approval', 'request_note' => 'در حال بررسی' ) ) );
 		$this->assertNotEmpty( $this->service->get_events( $submission_id ) );
 		wp_set_current_user( $admin_id );
 		$this->assertTrue( $this->service->update_workflow( $submission_id, array( 'assigned_user_id' => 0 ) ) );
@@ -262,18 +280,44 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 		$submission_id = $this->create_submission( $customer_id );
 
 		wp_set_current_user( $admin_id );
-		$this->service->update_workflow( $submission_id, array( 'internal_note' => 'مدارک ناقص است' ) );
-		$this->service->update_workflow( $submission_id, array( 'internal_note' => 'مدارک تکمیل شد' ) );
-		$this->service->update_workflow( $submission_id, array( 'internal_status' => 'initial_approval' ) );
+		$this->service->update_workflow( $submission_id, array( 'request_note' => 'مدارک ناقص است' ) );
+		$this->service->update_workflow( $submission_id, array( 'request_note' => 'مدارک تکمیل شد' ) );
+		$this->service->update_workflow( $submission_id, array( 'request_status' => 'initial_approval' ) );
 		$events = $this->service->get_events( $submission_id );
 
-		$note_events = array_values( array_filter( $events, function ( $event ) { return 'internal_note_changed' === $event['event_type']; } ) );
+		$note_events = array_values( array_filter( $events, function ( $event ) { return 'request_note_changed' === $event['event_type']; } ) );
 		$this->assertCount( 2, $note_events );
 		$this->assertSame( 'مدارک ناقص است', $note_events[0]['old_value'] );
 		$this->assertSame( 'مدارک ناقص است', $note_events[1]['new_value'] );
 		$this->assertSame( $admin_id, $note_events[0]['actor_user_id'] );
 		$this->assertNotEmpty( $note_events[0]['created_at_gmt'] );
 		$this->assertNotEmpty( array_filter( $events, function ( $event ) { return 'request_created' === $event['event_type']; } ) );
+	}
+
+	public function test_request_status_wins_over_legacy_public_status_and_public_changes_are_rejected() {
+		$customer_id   = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		$admin_id      = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		$submission_id = $this->create_submission( $customer_id );
+
+		wp_set_current_user( $admin_id );
+		$this->assertTrue( $this->service->update_workflow( $submission_id, array( 'request_status' => 'initial_approval' ) ) );
+		update_post_meta( $submission_id, '_didar_public_status', 'completed' );
+		wp_set_current_user( $customer_id );
+		$this->assertSame( 'initial_approval', $this->service->get_request_status( $submission_id ) );
+		wp_set_current_user( $admin_id );
+		$this->assertWPError( $this->service->update_workflow( $submission_id, array( 'public_note' => 'legacy' ) ) );
+	}
+
+	public function test_legacy_request_status_remains_readable_without_form_override() {
+		$customer_id   = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		$submission_id = $this->create_submission( $customer_id );
+		delete_option( Didar_Settings::OPTION_NAME );
+		update_post_meta( $submission_id, '_didar_internal_status', 'initial_approval' );
+		update_post_meta( $submission_id, '_didar_status', 'pending_review' );
+		update_post_meta( $submission_id, '_didar_public_status', 'completed' );
+
+		wp_set_current_user( $customer_id );
+		$this->assertSame( 'initial_approval', $this->service->get_request_status( $submission_id ) );
 	}
 
 	private function create_submission( $owner_id, $applicant_name = 'متقاضی آزمایشی' ) {
@@ -294,5 +338,23 @@ class Test_Didar_Workflow extends WP_UnitTestCase {
 		$this->assertIsInt( $submission_id );
 		$this->submission_ids[] = $submission_id;
 		return $submission_id;
+	}
+
+	private function set_test_workflow() {
+		update_option(
+			Didar_Settings::OPTION_NAME,
+			array(
+				'didar_form_workflows' => array(
+					'consultation' => array(
+						'pipeline_id' => 'pipeline-workflow-test',
+						'statuses'   => array(
+							'pending_review'   => array( 'label' => 'در انتظار بررسی', 'stage_id' => 'stage-one', 'is_default' => true, 'order' => 10 ),
+							'initial_approval' => array( 'label' => 'تایید اولیه', 'stage_id' => 'stage-two', 'order' => 20 ),
+							'completed'        => array( 'label' => 'تکمیل شده', 'stage_id' => 'stage-three', 'order' => 30 ),
+						),
+					),
+				),
+			)
+		);
 	}
 }

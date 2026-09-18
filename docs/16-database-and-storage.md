@@ -14,7 +14,9 @@
 | `_didar_deal_id` | post meta | شناسهٔ Deal |
 | `_didar_sync_state` | post meta | state، trace، attempts و زمان‌ها |
 | `_didar_assigned_user_id` | post meta | مسئول |
-| `_didar_internal_status` / `_didar_public_status` | post meta | وضعیت‌ها |
+| `_didar_internal_status` | post meta | وضعیت canonical درخواست؛ `_didar_status` آینهٔ سازگاری است |
+| `_didar_public_status` / `_didar_public_note` | post meta | دادهٔ قدیمی؛ منبع فعال نیست |
+| `_didar_internal_note` / `_didar_admin_note` | post meta | یادداشت workflow درخواست و fallback قدیمی |
 | `_didar_person_id` | user meta | شناسهٔ Person |
 | `_didar_person_sync_state` | user meta | وضعیت Person sync |
 | `didar_settings` | option | تنظیمات |

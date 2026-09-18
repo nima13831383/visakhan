@@ -174,9 +174,8 @@ class Didar_Pdf_Service {
 		$form_type = sanitize_key( (string) get_post_meta( $post->ID, '_didar_form_type', true ) );
 		$form      = $this->registry->get( $form_type );
 		$values    = $this->service->get_fields( $post->ID );
-		$internal  = $this->service->can_view_internal( $post->ID );
-		$status    = $internal ? $this->service->get_internal_status( $post->ID ) : $this->service->get_public_status( $post->ID );
-		$status    = $internal ? $this->workflow->status_label( $form_type, $status ) : $this->service->get_status_label( $status );
+		$status    = $this->service->get_request_status( $post->ID );
+		$status    = $this->workflow->status_label( $form_type, $status );
 		$sections  = array();
 		$serializer = new Didar_Readable_Value_Serializer( $this->files, $this->logger );
 

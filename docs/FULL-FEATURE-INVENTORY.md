@@ -24,7 +24,7 @@ The current source contains:
 - One private `didar_submission` custom post type; companions are rows inside a parent submission, not separate submissions.
 - 34 PHP class files under `includes/`, 8 plugin assets, and 20 PHP/JavaScript test files.
 - 6 plugin shortcodes, 5 authenticated AJAX actions, 2 custom REST webhook routes, and 2 plugin-owned admin pages.
-- Four public/reference statuses and configurable per-form internal CRM workflows.
+- One canonical Request Status workflow with reference fallback values and configurable per-form CRM stages.
 - Person, Deal, and optional companion/main-applicant Case synchronization with exact-match safeguards and durable retries.
 - Append-only submission events plus a separate redacted diagnostic log table.
 
@@ -124,11 +124,11 @@ Operational workflow capabilities include:
 - `can_edit_request()` requires the submission capability checks and WordPress `edit_post()` success.
 - `can_access_didar_admin()` is based on `didar_view_requests`, not merely a role name.
 - Users without `didar_view_all_requests` are scoped to submissions authored by the current user.
-- Customers can view their own published submissions and public workflow data; they cannot view internal workflow or internal notes.
-- Colleagues can view own internal workflow/history only when the relevant capability and `colleague_can_view_internal_history` setting allow it.
+- Customers can view their own published submissions and the canonical Request Status; request notes remain staff-capability protected.
+- Colleagues can view their own Request Status/history only when the relevant capability and `colleague_can_view_internal_history` setting allow it.
 - Operators with the necessary caps can view/edit according to request scope and `edit_post()`.
 - Owner changes require `didar_change_request_owner`.
-- Frontend customers, colleagues, and owners may edit until the public status is `completed`; operators require the operational edit capabilities.
+- Frontend customers, colleagues, and owners may edit until the Request Status is `completed`; operators require the operational edit capabilities.
 - Admin request routes and admin menu pages are restricted. AJAX requests are handled separately so legitimate plugin AJAX is not redirected by the general admin gate.
 - A Nader theme admin gate is removed for users with valid Didar admin access; non-Didar admin pages and WooCommerce admin surfaces are restricted for the plugin’s operator users.
 
@@ -318,7 +318,7 @@ Evidence: `includes/class-didar-submission-service.php`; `includes/class-didar-a
 
 1. Validates the form type and submitted data.
 2. Enforces the requested owner unless the actor has owner-change capability.
-3. Computes public/internal defaults from registry and workflow configuration.
+3. Computes the Request Status default from the Registry and workflow configuration.
 4. Inserts a published `didar_submission` post.
 5. Stores canonical form and workflow metadata.
 6. Finalizes temporary file records.
@@ -335,9 +335,10 @@ The submission’s key post meta includes:
 - `_didar_created_by_user_id` — creating user.
 - `_didar_fields` — sanitized canonical field data.
 - `_didar_shared_note` — applicant note where supported.
-- `_didar_status` — compatibility/public status alias.
-- `_didar_public_status`, `_didar_public_note` — customer-visible workflow snapshot.
-- `_didar_internal_status`, `_didar_internal_note` — operator-only workflow snapshot.
+- `_didar_status` — compatibility mirror for the canonical Request Status.
+- `_didar_internal_status` — canonical Request Status storage, retained as the stable legacy key.
+- `_didar_public_status`, `_didar_public_note` — historical workflow metadata; no longer active.
+- `_didar_internal_note` / `_didar_admin_note` — canonical request workflow note and legacy fallback.
 - `_didar_assigned_user_id` — WordPress assignee.
 - `_didar_last_updated_at` — event-derived meaningful update timestamp.
 - `_didar_deal_id`, `_didar_person_id`, `_didar_sync_state` — Didar synchronization state.
@@ -347,7 +348,7 @@ The submission’s key post meta includes:
 
 - Form type cannot be changed after creation.
 - Existing inactive fields are preserved during edits when the service’s historical-preservation path applies.
-- Form data, note, public status/note, internal status/note, assignee, owner, and files are updated through separate capability-checked paths.
+- Form data, applicant note, Request Status/request note, assignee, owner, and files are updated through separate capability-checked paths.
 - Changes create typed events and trigger centralized synchronization after canonical local persistence.
 - Invalid frontend values are preserved for redisplay by the edit shortcode; only validated data reaches the canonical update path.
 - WordPress trash/delete is guarded and audited. Remote deletion is not attempted.
@@ -521,24 +522,24 @@ Current code caveat: `Didar_Pdf_Service::file_view()` calls `Didar_File_Service:
 
 Evidence: `includes/class-didar-reference-data.php`; `includes/class-didar-submission-service.php`; `includes/class-didar-workflow-manager.php`; `includes/class-didar-event-log.php`.
 
-### 12.1 Public status
+### 12.1 Request Status
 
-The current public/reference status allowlist is:
+The active Request Status values are resolved from each form’s configured workflow. When a form has no per-form override, the existing reference/default status keys remain the compatibility fallback:
 
 | Key | Meaning |
 |---|---|
 | `pending_review` | Request is awaiting review. |
 | `initial_approval` | Initial approval state. |
 | `needs_correction` | Customer correction is required. |
-| `completed` | Public workflow is complete and frontend editing is disabled. |
+| `completed` | Request workflow is complete and frontend editing is disabled. |
 
-Public status, public note, internal status, internal note, and assignee can be changed independently with capability checks. `_didar_status` and `_didar_admin_note` remain compatibility aliases.
+Request Status, request note, and assignee are changed through the capability-checked workflow path. `_didar_internal_status` remains the stable canonical storage key, `_didar_status` is its compatibility mirror, and `_didar_internal_note` / `_didar_admin_note` hold the consolidated request note. Historical Public Status/Public Note metadata is retained but no longer active.
 
 ### 12.2 Internal workflow
 
 `Didar_Workflow_Manager` supports per-form pipeline/workflow configuration, ordered statuses, labels, stage IDs, exactly one default status, reverse mapping, pipeline lookup, stale metadata indicators, and configuration validation. It falls back to legacy default-pipeline/status-stage settings only when permitted by the current code.
 
-The request-details main status/progress UI uses the resolved public status for every viewer. The separate internal-workflow section remains capability-protected and uses the configured internal workflow. It treats `cancelled`, `canceled`, `rejected`, `failed`, and `closed_lost` as terminal codes if encountered, even though they are not current reference-status keys.
+The request-details main status/progress UI uses the resolved Request Status for every viewer. The former separate public/internal workflow sections are consolidated into one Request Status section; request-note visibility remains capability-protected. The progress renderer uses the active per-form workflow order and treats `cancelled`, `canceled`, `rejected`, `failed`, and `closed_lost` as terminal codes if encountered, even though they are not current reference-status keys.
 
 ### 12.3 Append-only event log
 
@@ -546,7 +547,7 @@ The request-details main status/progress UI uses the resolved public status for 
 
 Current event types include:
 
-`request_created`, public/internal status changes, public/internal note changes, assigned/reassigned/removed, submission data updated, applicant note, file add/replace/remove, owner changed, trashed/deleted, webhook received, and Didar sync failure.
+`request_created`, Request Status/request-note changes, historical public/internal status/note changes, assigned/reassigned/removed, submission data updated, applicant note, file add/replace/remove, owner changed, trashed/deleted, webhook received, and Didar sync failure.
 
 Meaningful request events update `_didar_last_updated_at`; diagnostic and sync-failure events are intentionally excluded unless a webhook records a meaningful request change. A batched `didar_backfill_last_updated` worker fills missing timestamps. Event history is read newest-first, capped by a default limit of 100, and is not purged or rewritten by the plugin.
 
@@ -598,7 +599,7 @@ The client exposes these distinct API paths:
 - Multiple matches stop with a conflict; title, phone, user, or fuzzy inference is not used.
 - A Deal is created with native fields first; the returned Deal ID is persisted before custom fields are updated.
 - Updates reuse the same Deal.
-- The payload can include form type, WordPress submission ID, WordPress user ID, configured custom fields, public status, and mapped owner.
+- The payload can include form type, WordPress submission ID, WordPress user ID, configured custom fields, the Pipeline/Stage-resolved Request Status, and mapped owner.
 - Owner selection uses the assigned WordPress user’s configured Didar UserId when available, otherwise the configured default owner.
 - Structured values are serialized as bounded readable text; date values are represented in the Didar-readable Jalali form.
 
@@ -682,7 +683,7 @@ Only a linked WordPress user’s explicitly mapped `birth_date` is updated. The 
 - A remote deletion flag is logged as unsupported; the local submission is not deleted.
 - Inbound Deal creation requires action type 1 plus mapped valid form type and WordPress user ID.
 - Created Deals can create a local submission and link Deal/Person IDs.
-- Updates can apply local snapshots for mapped scalar fields, public/internal workflow state, assignment, and event history under sync suppression.
+- Updates can apply local snapshots for mapped scalar fields, Pipeline/Stage-resolved Request Status, assignment, and event history under sync suppression.
 - Structured field text is not parsed back into local structured arrays.
 - Inbound Deal updates do not overwrite the WordPress profile.
 
@@ -721,7 +722,7 @@ The settings page exposes:
 - Form-to-CRM field mappings.
 - API key, default owner, default pipeline, and debug logging.
 - Webhook secret, rotation, and legacy-header toggle.
-- System custom-field IDs for form type, WordPress submission ID, WordPress user ID, and public status.
+- System custom-field IDs for form type, WordPress submission ID, and WordPress user ID. The former Public Status mapping is transfer-compatible only.
 - Per-form Deal workflow status/stage mappings.
 - WordPress-to-Didar user mappings.
 - Per-form default assignees.
@@ -755,13 +756,12 @@ Meta boxes include:
 - Form type.
 - Form fields.
 - Applicant note where supported.
-- Customer/public workflow.
-- Internal workflow.
+- Canonical Request Status and request note.
 - Activity/history.
 - Ownership.
 - Didar sync status.
 
-The list screen adds submission ID, form type, user, public status, internal status, assignee, date, and last-updated columns, plus form/status/assignment filters, search, ordering, and manual sync row actions.
+The list screen adds submission ID, form type, user, Request Status, assignee, date, and last-updated columns, plus form/status/assignment filters, search, ordering, and manual sync row actions.
 
 ### 16.5 Diagnostics
 
@@ -896,7 +896,7 @@ Evidence: `includes/class-didar-request-search.php`; `includes/class-didar-short
 
 ### 20.3 Admin list filters
 
-The CPT list supports form type, public status, internal status/assignment states, assigned-to-me, unassigned, search, custom columns, last-updated ordering, and request row actions.
+The CPT list supports form type, Request Status/assignment states, assigned-to-me, unassigned, search, custom columns, last-updated ordering, and request row actions.
 
 ## 21. Configuration, options, metadata, and persistence index
 
@@ -919,7 +919,7 @@ This is an index of notable plugin-owned persistence keys. It is not a dump of l
 - `didar_broker_user_map` — local eligible operator → Didar UserId mapping.
 - `didar_form_default_assignees` — per-form default WordPress assignee mapping.
 - `didar_default_owner_id`, `didar_default_pipeline_id` — default CRM owner/pipeline settings.
-- `didar_system_form_type_field_id`, `didar_system_submission_id_field_id`, `didar_system_user_id_field_id`, `didar_public_status_field_id` — configured CRM system custom-field keys.
+- `didar_system_form_type_field_id`, `didar_system_submission_id_field_id`, `didar_system_user_id_field_id` — configured CRM system custom-field keys. The deprecated `didar_public_status_field_id` is retained only for compatible settings import/export and is not used for active sync.
 - `colleague_can_view_internal_history` — colleague history policy.
 - `frontend_requests_per_page` — frontend page size, bounded 1–100.
 - `file_download_mode` — `secure` or `direct`, default `secure`.
@@ -1071,8 +1071,7 @@ Evidence: plugin Git history and dated documentation in `docs/changed/`.
 | File storage | Private DB-backed records and references | `Didar_File_Service` |
 | File security | MIME/size/nonce/capability/finalization/cleanup | `Didar_File_Service` |
 | PDF | RTL Persian A4 PDF with optional file view | `Didar_Pdf_Service` |
-| Public workflow | Four reference statuses | Registry/reference/service |
-| Internal workflow | Per-form CRM pipeline/stage/status mappings | `Didar_Workflow_Manager` |
+| Request Status | Per-form CRM pipeline/stage/status mappings with reference fallback | `Didar_Workflow_Manager` / `Didar_Submission_Service` |
 | Event history | Append-only audit/event table | `Didar_Event_Log` |
 | Diagnostics | Redacted levels, filters, trace IDs | `Didar_Logger` |
 | Person sync | Exact identity mapping and queued user sync | `Didar_Sync_Manager`; `Didar_Field_Mapper` |
@@ -1098,7 +1097,7 @@ Evidence: plugin Git history and dated documentation in `docs/changed/`.
 | Conditional Visa fields | 7 |
 | Derived companion-count fields | 2 |
 | Companion model columns | 14 |
-| Reference public statuses | 4 |
+| Reference Request Status fallback values | 4 |
 | PHP class files under `includes/` | 34 |
 | Plugin assets | 8 (5 JS, 3 CSS) |
 | PHP/JavaScript test files | 20 |

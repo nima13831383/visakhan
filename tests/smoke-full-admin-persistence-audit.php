@@ -305,18 +305,18 @@ try {
 
 	$workflow_update = $plugin->service->update_workflow(
 		$submission_id,
-		array( 'public_status' => 'initial_approval', 'public_note' => 'public audit note', 'internal_status' => 'initial_approval', 'internal_note' => 'internal audit note', 'assigned_user_id' => $audit_user_id )
+		array( 'request_status' => 'initial_approval', 'request_note' => 'workflow audit note', 'assigned_user_id' => $audit_user_id )
 	);
-	$assert( true === $workflow_update, 'workflow status, notes and assignment save locally' );
+	$assert( true === $workflow_update, 'request status, request note and assignment save locally' );
 	$workflow_reload = array(
-		'public_status' => get_post_meta( $submission_id, '_didar_public_status', true ),
-		'public_note' => get_post_meta( $submission_id, '_didar_public_note', true ),
+		'request_status' => get_post_meta( $submission_id, '_didar_status', true ),
+		'request_note' => get_post_meta( $submission_id, '_didar_internal_note', true ),
 		'internal_status' => get_post_meta( $submission_id, '_didar_internal_status', true ),
 		'internal_note' => get_post_meta( $submission_id, '_didar_internal_note', true ),
 		'assigned' => absint( get_post_meta( $submission_id, '_didar_assigned_user_id', true ) ),
 	);
-	$assert( 'initial_approval' === $workflow_reload['public_status'] && 'initial_approval' === $workflow_reload['internal_status'], 'public and internal status persist after reload' );
-	$assert( 'public audit note' === $workflow_reload['public_note'] && 'internal audit note' === $workflow_reload['internal_note'], 'public and internal notes persist after reload' );
+	$assert( 'initial_approval' === $workflow_reload['request_status'] && 'initial_approval' === $workflow_reload['internal_status'], 'request status persists in canonical and compatibility metadata' );
+	$assert( 'workflow audit note' === $workflow_reload['request_note'] && 'workflow audit note' === $workflow_reload['internal_note'], 'request note persists in canonical workflow storage' );
 	$assert( $audit_user_id === $workflow_reload['assigned'], 'request assignment persists after reload' );
 	$assert( true === $plugin->service->update_workflow( $submission_id, array( 'assigned_user_id' => 0 ) ), 'request assignment can be explicitly cleared' );
 	$assert( 0 === absint( get_post_meta( $submission_id, '_didar_assigned_user_id', true ) ), 'request unassignment persists after reload' );
@@ -327,7 +327,7 @@ try {
 		return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$event_table} WHERE submission_id = %d", $submission_id ) );
 	};
 	$event_count_before_repeat = $count_events();
-	$repeat = $plugin->service->update_workflow( $submission_id, array( 'public_status' => 'initial_approval', 'internal_status' => 'initial_approval', 'assigned_user_id' => 0 ) );
+	$repeat = $plugin->service->update_workflow( $submission_id, array( 'request_status' => 'initial_approval', 'request_note' => 'workflow audit note', 'assigned_user_id' => 0 ) );
 	$assert( true === $repeat && $event_count_before_repeat === $count_events(), 'unchanged workflow save creates no duplicate event' );
 
 	$frontend_save = $plugin->service->update_from_frontend(

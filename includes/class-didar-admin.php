@@ -310,7 +310,6 @@ class Didar_Admin {
 		add_settings_field( 'didar_broker_user_map', __( 'کاربر WordPress ← User دیدار', 'didar' ), array( $this, 'render_broker_map' ), $forms_page, 'didar_crm_workflow' );
 		add_settings_section( 'didar_form_default_assignees_section', __( 'مسئول پیش‌فرض فرم‌ها', 'didar' ), '__return_false', $forms_page );
 		add_settings_field( 'didar_form_default_assignees', __( 'مسئول پیش‌فرض فرم‌ها', 'didar' ), array( $this, 'render_form_default_assignees' ), $forms_page, 'didar_form_default_assignees_section' );
-		add_settings_field( 'didar_public_status_field_id', __( 'Custom Field وضعیت عمومی Deal', 'didar' ), array( $this, 'render_didar_text_setting' ), $forms_page, 'didar_crm_workflow', array( 'key' => 'didar_public_status_field_id', 'description' => 'اختیاری؛ برای Public Status است، نه Pipeline Stage.' ) );
 	}
 
 	private function settings_tabs() {
@@ -414,9 +413,11 @@ class Didar_Admin {
 		$output['didar_api_key'] = $submitted_api_key ?: $current_api_key;
 		$debug = isset( $input['didar_debug_logging'] ) && is_scalar( $input['didar_debug_logging'] ) ? sanitize_key( wp_unslash( $input['didar_debug_logging'] ) ) : 'off';
 		$output['didar_debug_logging'] = in_array( $debug, array( 'off', 'errors', 'verbose' ), true ) ? $debug : 'off';
-		foreach ( array( 'didar_default_owner_id', 'didar_default_pipeline_id', 'didar_public_status_field_id' ) as $key ) {
+		foreach ( array( 'didar_default_owner_id', 'didar_default_pipeline_id' ) as $key ) {
 			$output[ $key ] = isset( $input[ $key ] ) && is_scalar( $input[ $key ] ) ? sanitize_text_field( wp_unslash( $input[ $key ] ) ) : '';
 		}
+		// Retain the deprecated setting for import/export compatibility, but never render or use it.
+		$output['didar_public_status_field_id'] = isset( $current['didar_public_status_field_id'] ) ? sanitize_text_field( $current['didar_public_status_field_id'] ) : '';
 		$current_secret = isset( $current['didar_webhook_secret'] ) ? (string) $current['didar_webhook_secret'] : '';
 		// Webhook URL credentials are generated/rotated explicitly, never imported or edited via this form.
 		$output['didar_webhook_secret'] = preg_match( '/^[a-f0-9]{64}$/', $current_secret ) ? $current_secret : Didar_Settings::generate_webhook_secret();
@@ -445,7 +446,7 @@ class Didar_Admin {
 		}
 		$output['didar_default_owner_id'] = $this->normalize_didar_user_mapping( $output['didar_default_owner_id'], $current['didar_default_owner_id'] ?? '', 0, 'didar_default_owner_id' );
 		$system_pipelines = array(); foreach ( $output['didar_form_workflows'] as $workflow ) { if ( ! empty( $workflow['pipeline_id'] ) ) { $system_pipelines[] = $workflow['pipeline_id']; } } $system_pipelines = array_values( array_unique( $system_pipelines ) );
-		foreach ( array( 'didar_system_form_type_field_id', 'didar_system_submission_id_field_id', 'didar_system_user_id_field_id', 'didar_public_status_field_id' ) as $system_key ) { $field_key = $output[ $system_key ] ?? ''; if ( ! $field_key ) { continue; } $metadata = $this->workflow->custom_field( $field_key ); $valid = Didar_Custom_Field_Catalog::is_deal_field( $metadata ); foreach ( $system_pipelines as $pipeline_id ) { $valid = $valid && $this->workflow->custom_field_available_for_pipeline( $metadata, $pipeline_id ); } if ( ! $valid ) { $output[ $system_key ] = $current[ $system_key ] ?? ''; add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_system_custom_field_' . $system_key, __( 'کاستوم‌فیلد سیستمی انتخاب‌شده در همه کاریزهای فعال قابل استفاده نیست.', 'didar' ), 'error' ); $this->logger->log( 'WARNING', 'didar_custom_field_mapping_invalid', 'Rejected invalid system Deal Custom Field mapping.', array( 'setting' => $system_key, 'custom_field_key' => $field_key, 'custom_field_id' => $metadata['id'] ?? '', 'pipeline_ids' => $system_pipelines ) ); } }
+		foreach ( array( 'didar_system_form_type_field_id', 'didar_system_submission_id_field_id', 'didar_system_user_id_field_id' ) as $system_key ) { $field_key = $output[ $system_key ] ?? ''; if ( ! $field_key ) { continue; } $metadata = $this->workflow->custom_field( $field_key ); $valid = Didar_Custom_Field_Catalog::is_deal_field( $metadata ); foreach ( $system_pipelines as $pipeline_id ) { $valid = $valid && $this->workflow->custom_field_available_for_pipeline( $metadata, $pipeline_id ); } if ( ! $valid ) { $output[ $system_key ] = $current[ $system_key ] ?? ''; add_settings_error( Didar_Settings::OPTION_NAME, 'didar_invalid_system_custom_field_' . $system_key, __( 'کاستوم‌فیلد سیستمی انتخاب‌شده در همه کاریزهای فعال قابل استفاده نیست.', 'didar' ), 'error' ); $this->logger->log( 'WARNING', 'didar_custom_field_mapping_invalid', 'Rejected invalid system Deal Custom Field mapping.', array( 'setting' => $system_key, 'custom_field_key' => $field_key, 'custom_field_id' => $metadata['id'] ?? '', 'pipeline_ids' => $system_pipelines ) ); } }
 		$submitted_defaults = isset( $input['didar_form_default_assignees'] ) && is_array( $input['didar_form_default_assignees'] ) ? $input['didar_form_default_assignees'] : array();
 		$current_defaults = isset( $current['didar_form_default_assignees'] ) && is_array( $current['didar_form_default_assignees'] ) ? $current['didar_form_default_assignees'] : array();
 		$output['didar_form_default_assignees'] = $current_defaults;
@@ -1090,8 +1091,7 @@ class Didar_Admin {
 		if ( $this->registry->supports_applicant_note( get_post_meta( $post->ID, '_didar_form_type', true ) ) ) {
 			add_meta_box( 'didar-notes', __( 'یادداشت متقاضی', 'didar' ), array( $this, 'render_notes_box' ), Didar_Post_Type::POST_TYPE, 'normal', 'default' );
 		}
-		add_meta_box( 'didar-customer-workflow', __( 'اطلاعات نمایشی برای مشتری', 'didar' ), array( $this, 'render_customer_workflow_box' ), Didar_Post_Type::POST_TYPE, 'normal', 'default' );
-		add_meta_box( 'didar-internal-workflow', __( 'گردش کار داخلی', 'didar' ), array( $this, 'render_internal_workflow_box' ), Didar_Post_Type::POST_TYPE, 'normal', 'default' );
+		add_meta_box( 'didar-request-workflow', __( 'وضعیت و یادداشت درخواست', 'didar' ), array( $this, 'render_request_workflow_box' ), Didar_Post_Type::POST_TYPE, 'normal', 'default' );
 		add_meta_box( 'didar-activity', __( 'تاریخچه درخواست', 'didar' ), array( $this, 'render_activity_box' ), Didar_Post_Type::POST_TYPE, 'normal', 'low' );
 		add_meta_box( 'didar-details', __( 'مالکیت', 'didar' ), array( $this, 'render_details_box' ), Didar_Post_Type::POST_TYPE, 'side', 'high' );
 		add_meta_box( 'didar-sync-status', __( 'وضعیت همگام‌سازی دیدار', 'didar' ), array( $this, 'render_sync_status' ), Didar_Post_Type::POST_TYPE, 'side', 'default' );
@@ -1135,54 +1135,31 @@ class Didar_Admin {
 		echo '</div>';
 	}
 
-	public function render_customer_workflow_box( $post ) {
-		$status = $this->service->get_public_status( $post->ID );
-		$note   = $this->service->get_public_note( $post->ID );
-		echo '<div class="didar-admin-wrap didar-admin-workflow" dir="rtl">';
-		echo '<p>';
-		if ( current_user_can( 'didar_change_public_status' ) ) {
-			echo '<label class="didar-label" for="didar-public-status">' . esc_html__( 'وضعیت عمومی', 'didar' ) . '</label>';
-			$this->render_status_select( 'didar-public-status', 'didar_public_status', $status );
-		} else {
-			echo '<span class="didar-label">' . esc_html__( 'وضعیت عمومی', 'didar' ) . '</span>';
-			echo '<strong>' . esc_html( $this->service->get_status_label( $status ) ) . '</strong>';
-		}
-		echo '</p><p>';
-		if ( current_user_can( 'didar_edit_public_notes' ) ) {
-			echo '<label class="didar-label" for="didar-public-note">' . esc_html__( 'یادداشت عمومی', 'didar' ) . '</label>';
-			echo '<textarea id="didar-public-note" name="didar_public_note" rows="5">' . esc_textarea( $note ) . '</textarea>';
-		} else {
-			echo '<span class="didar-label">' . esc_html__( 'یادداشت عمومی', 'didar' ) . '</span>';
-			echo '<span class="didar-readonly-note">' . ( '' !== $note ? nl2br( esc_html( $note ) ) : '—' ) . '</span>';
-		}
-		echo '<span class="description">' . esc_html__( 'مالک درخواست این بخش را می‌بیند اما نمی‌تواند آن را تغییر دهد.', 'didar' ) . '</span></p></div>';
-	}
-
-	public function render_internal_workflow_box( $post ) {
+	public function render_request_workflow_box( $post ) {
 		if ( ! $this->service->can_view_internal( $post->ID ) ) {
 			echo '<p>' . esc_html__( 'شما اجازه مشاهده این بخش را ندارید.', 'didar' ) . '</p>';
 			return;
 		}
-		$status      = $this->service->get_internal_status( $post->ID );
-		$note        = $this->service->get_internal_note( $post->ID );
+		$status      = $this->service->get_request_status( $post->ID );
+		$note        = $this->service->get_request_note( $post->ID );
 		$assigned_id = $this->service->get_assigned_user_id( $post->ID );
 		echo '<div class="didar-admin-wrap didar-admin-workflow" dir="rtl"><p>';
 		$form_type = sanitize_key( (string) get_post_meta( $post->ID, '_didar_form_type', true ) );
 		if ( current_user_can( 'didar_change_internal_status' ) && $form_type ) {
-			echo '<label class="didar-label" for="didar-internal-status">' . esc_html__( 'وضعیت داخلی', 'didar' ) . '</label>';
-			$this->render_status_select( 'didar-internal-status', 'didar_internal_status', $status, $form_type );
+			echo '<label class="didar-label" for="didar-request-status">' . esc_html__( 'وضعیت درخواست', 'didar' ) . '</label>';
+			$this->render_status_select( 'didar-request-status', 'didar_request_status', $status, $form_type );
 		} elseif ( ! $form_type ) {
 			echo '<span class="description">' . esc_html__( 'پس از انتخاب و ذخیره نوع فرم، وضعیت پیش‌فرض گردش کار آن اعمال می‌شود.', 'didar' ) . '</span>';
 		} else {
-			echo '<span class="didar-label">' . esc_html__( 'وضعیت داخلی', 'didar' ) . '</span>';
-			echo '<strong>' . esc_html( $this->service->get_status_label( $status ) ) . '</strong>';
+			echo '<span class="didar-label">' . esc_html__( 'وضعیت درخواست', 'didar' ) . '</span>';
+			echo '<strong>' . esc_html( $this->workflow->status_label( $form_type, $status ) ) . '</strong>';
 		}
 		echo '</p><p>';
 		if ( current_user_can( 'didar_add_internal_notes' ) ) {
-			echo '<label class="didar-label" for="didar-internal-note">' . esc_html__( 'یادداشت داخلی', 'didar' ) . '</label>';
-			echo '<textarea id="didar-internal-note" name="didar_internal_note" rows="5">' . esc_textarea( $note ) . '</textarea>';
+			echo '<label class="didar-label" for="didar-request-note">' . esc_html__( 'یادداشت درخواست', 'didar' ) . '</label>';
+			echo '<textarea id="didar-request-note" name="didar_request_note" rows="5">' . esc_textarea( $note ) . '</textarea>';
 		} else {
-			echo '<span class="didar-label">' . esc_html__( 'یادداشت داخلی', 'didar' ) . '</span>';
+			echo '<span class="didar-label">' . esc_html__( 'یادداشت درخواست', 'didar' ) . '</span>';
 			echo '<span class="didar-readonly-note">' . ( '' !== $note ? nl2br( esc_html( $note ) ) : '—' ) . '</span>';
 		}
 		echo '</p><p>';
@@ -1211,7 +1188,10 @@ class Didar_Admin {
 
 	private function render_status_select( $id, $name, $selected_status, $form_type = '' ) {
 		echo '<select id="' . esc_attr( $id ) . '" name="' . esc_attr( $name ) . '">';
-		$statuses = 'didar_internal_status' === $name && $form_type ? $this->workflow->statuses( $form_type ) : Didar_Reference_Data::statuses();
+		$statuses = 'didar_request_status' === $name && $form_type ? $this->workflow->statuses( $form_type ) : Didar_Reference_Data::statuses();
+		if ( 'didar_request_status' === $name && ! $statuses ) {
+			$statuses = Didar_Reference_Data::statuses();
+		}
 		foreach ( $statuses as $key => $label ) {
 			$label = is_array( $label ) ? ( $label['label'] ?? $key ) : $label;
 			echo '<option value="' . esc_attr( $key ) . '" ' . selected( $selected_status, $key, false ) . '>' . esc_html( $label ) . '</option>';
@@ -1351,38 +1331,28 @@ class Didar_Admin {
 		}
 
 		$workflow_changes = array();
-		$public_status    = $this->service->get_public_status( $post_id );
-		if ( current_user_can( 'didar_change_public_status' ) && isset( $_POST['didar_public_status'] ) ) {
-			if ( is_array( $_POST['didar_public_status'] ) ) {
-				$note_errors['public_status'] = __( 'ساختار وضعیت عمومی معتبر نیست.', 'didar' );
+		$request_status   = $this->service->get_request_status( $post_id );
+		$status_key       = isset( $_POST['didar_request_status'] ) ? 'didar_request_status' : ( isset( $_POST['didar_internal_status'] ) ? 'didar_internal_status' : '' );
+		if ( current_user_can( 'didar_change_internal_status' ) && $status_key ) {
+			if ( is_array( $_POST[ $status_key ] ) ) {
+				$note_errors['request_status'] = __( 'ساختار وضعیت درخواست معتبر نیست.', 'didar' );
 			} else {
-				$public_status = sanitize_key( wp_unslash( $_POST['didar_public_status'] ) );
-				if ( ! isset( Didar_Reference_Data::statuses()[ $public_status ] ) ) {
-					$note_errors['public_status'] = __( 'وضعیت عمومی معتبر نیست.', 'didar' );
+				$request_status = sanitize_key( wp_unslash( $_POST[ $status_key ] ) );
+				$valid_statuses = $this->workflow->statuses( $form_type );
+				if ( ! $valid_statuses ) {
+					$valid_statuses = Didar_Reference_Data::statuses();
+				}
+				if ( ! isset( $valid_statuses[ $request_status ] ) ) {
+					$note_errors['request_status'] = __( 'وضعیت درخواست معتبر نیست.', 'didar' );
 				}
 			}
 		}
-		foreach ( array( 'public_note', 'internal_note' ) as $note_key ) {
-			$post_key = 'didar_' . $note_key;
-			$cap      = 'public_note' === $note_key ? 'didar_edit_public_notes' : 'didar_add_internal_notes';
-			if ( current_user_can( $cap ) && isset( $_POST[ $post_key ] ) ) {
-				if ( is_array( $_POST[ $post_key ] ) ) {
-					$note_errors[ $note_key ] = __( 'ساختار یادداشت معتبر نیست.', 'didar' );
-				} else {
-					$workflow_changes[ $note_key ] = sanitize_textarea_field( wp_unslash( $_POST[ $post_key ] ) );
-				}
-			}
-		}
-		if ( current_user_can( 'didar_change_internal_status' ) && isset( $_POST['didar_internal_status'] ) ) {
-			if ( is_array( $_POST['didar_internal_status'] ) ) {
-				$note_errors['internal_status'] = __( 'ساختار وضعیت داخلی معتبر نیست.', 'didar' );
+		$note_key = isset( $_POST['didar_request_note'] ) ? 'didar_request_note' : ( isset( $_POST['didar_internal_note'] ) ? 'didar_internal_note' : '' );
+		if ( current_user_can( 'didar_add_internal_notes' ) && $note_key ) {
+			if ( is_array( $_POST[ $note_key ] ) ) {
+				$note_errors['request_note'] = __( 'ساختار یادداشت درخواست معتبر نیست.', 'didar' );
 			} else {
-				$internal_status = sanitize_key( wp_unslash( $_POST['didar_internal_status'] ) );
-				if ( isset( $this->workflow->statuses( $form_type )[ $internal_status ] ) ) {
-					$workflow_changes['internal_status'] = $internal_status;
-				} else {
-					$note_errors['internal_status'] = __( 'وضعیت داخلی معتبر نیست.', 'didar' );
-				}
+				$workflow_changes['request_note'] = sanitize_textarea_field( wp_unslash( $_POST[ $note_key ] ) );
 			}
 		}
 		if ( current_user_can( 'didar_assign_requests' ) && isset( $_POST['didar_assigned_user_id'] ) ) {
@@ -1421,7 +1391,7 @@ class Didar_Admin {
 			return;
 		}
 
-		$status   = $public_status ? $public_status : $form['default_status'];
+		$status   = $request_status ? $request_status : $this->workflow->default_status( $form_type, $form['default_status'] );
 		$owner_id = $stored_type ? (int) $post->post_author : 0;
 		if ( current_user_can( 'didar_change_request_owner' ) && isset( $_POST['didar_owner'] ) && ! is_array( $_POST['didar_owner'] ) ) {
 			$requested_owner = absint( wp_unslash( $_POST['didar_owner'] ) );
@@ -1547,8 +1517,7 @@ class Didar_Admin {
 			'submission_id' => __( 'شماره درخواست', 'didar' ),
 			'form_type'     => __( 'نوع فرم', 'didar' ),
 			'user'          => __( 'کاربر', 'didar' ),
-			'status'        => __( 'وضعیت عمومی', 'didar' ),
-			'internal_status' => __( 'وضعیت داخلی', 'didar' ),
+			'status'        => __( 'وضعیت درخواست', 'didar' ),
 			'assigned_user' => __( 'مسئول', 'didar' ),
 			'date'          => __( 'تاریخ', 'didar' ),
 		);
@@ -1565,10 +1534,8 @@ class Didar_Admin {
 			$user = get_user_by( 'id', get_post_field( 'post_author', $post_id ) );
 			echo $user ? esc_html( $user->display_name . ' — ' . $user->user_email ) : '—';
 		} elseif ( 'status' === $column ) {
-			echo esc_html( $this->service->get_status_label( $this->service->get_public_status( $post_id ) ) );
-		} elseif ( 'internal_status' === $column ) {
 			$form_type = sanitize_key( (string) get_post_meta( $post_id, '_didar_form_type', true ) );
-			echo esc_html( $this->workflow->status_label( $form_type, $this->service->get_internal_status( $post_id ) ) );
+			echo esc_html( $this->workflow->status_label( $form_type, $this->service->get_request_status( $post_id ) ) );
 		} elseif ( 'assigned_user' === $column ) {
 			$assigned_id = $this->service->get_assigned_user_id( $post_id );
 			$user        = $assigned_id ? get_user_by( 'id', $assigned_id ) : false;
@@ -1611,7 +1578,15 @@ class Didar_Admin {
 			echo '<option value="' . esc_attr( $type ) . '" ' . selected( $selected_type, $type, false ) . '>' . esc_html( $form['label'] ) . '</option>';
 		}
 		echo '</select><select name="didar_status_filter"><option value="">' . esc_html__( 'همه وضعیت‌ها', 'didar' ) . '</option>';
-		foreach ( Didar_Reference_Data::statuses() as $key => $label ) {
+		$filter_statuses = Didar_Reference_Data::statuses();
+		foreach ( $this->registry->all() as $type => $form ) {
+			foreach ( $this->workflow->statuses( $type ) as $key => $definition ) {
+				if ( ! isset( $filter_statuses[ $key ] ) ) {
+					$filter_statuses[ $key ] = is_array( $definition ) ? ( $definition['label'] ?? $key ) : $definition;
+				}
+			}
+		}
+		foreach ( $filter_statuses as $key => $label ) {
 			echo '<option value="' . esc_attr( $key ) . '" ' . selected( $selected_status, $key, false ) . '>' . esc_html( $label ) . '</option>';
 		}
 		echo '</select>';
@@ -1634,10 +1609,16 @@ class Didar_Admin {
 		}
 		if ( ! empty( $_GET['didar_status_filter'] ) && ! is_array( $_GET['didar_status_filter'] ) ) {
 			$status = sanitize_key( wp_unslash( $_GET['didar_status_filter'] ) );
-			if ( isset( Didar_Reference_Data::statuses()[ $status ] ) ) {
+			$valid_statuses = Didar_Reference_Data::statuses();
+			foreach ( $this->registry->all() as $type => $form ) {
+				foreach ( $this->workflow->statuses( $type ) as $key => $definition ) {
+					$valid_statuses[ $key ] = is_array( $definition ) ? ( $definition['label'] ?? $key ) : $definition;
+				}
+			}
+			if ( isset( $valid_statuses[ $status ] ) ) {
 				$meta_query[] = array(
 					'relation' => 'OR',
-					array( 'key' => '_didar_public_status', 'value' => $status ),
+					array( 'key' => '_didar_internal_status', 'value' => $status ),
 					array( 'key' => '_didar_status', 'value' => $status ),
 				);
 			}

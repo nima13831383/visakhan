@@ -104,6 +104,23 @@ class Test_Didar_Webhook_Validation extends WP_UnitTestCase {
 		$this->assertArrayHasKey( 'deal-fields-absent-event', get_option( 'didar_seen_webhooks' ) );
 	}
 
+	public function test_deal_stage_webhook_updates_only_canonical_request_status() {
+		update_option( Didar_Settings::OPTION_NAME, array_merge( get_option( Didar_Settings::OPTION_NAME, array() ), array( 'didar_form_workflows' => array( 'consultation' => array( 'pipeline_id' => 'pipeline-webhook', 'statuses' => array( 'pending_review' => array( 'label' => 'در انتظار بررسی', 'stage_id' => 'stage-one', 'is_default' => true, 'order' => 10 ), 'initial_approval' => array( 'label' => 'تایید اولیه', 'stage_id' => 'stage-two', 'order' => 20 ) ) ) ) ) ), false );
+		$post_id = $this->create_submission( 'deal-stage-webhook' );
+		update_post_meta( $post_id, '_didar_internal_status', 'pending_review' );
+		update_post_meta( $post_id, '_didar_status', 'pending_review' );
+		$payload = $this->payload( 'deal-stage-event', 'Deal', array( 'PipelineId' => 'pipeline-webhook', 'PipelineStageId' => 'stage-two', 'Fields' => array() ), 'deal-stage-webhook' );
+
+		$result = $this->receive( $payload );
+		$this->assertSame( 200, $result->get_status() );
+		$this->assertSame( 'initial_approval', get_post_meta( $post_id, '_didar_internal_status', true ) );
+		$this->assertSame( 'initial_approval', get_post_meta( $post_id, '_didar_status', true ) );
+		$this->assertSame( '', get_post_meta( $post_id, '_didar_public_status', true ) );
+		$events = ( new Didar_Event_Log() )->get_for_submission( $post_id );
+		$status_events = array_values( array_filter( $events, function ( $event ) { return 'request_status_changed' === $event['event_type']; } ) );
+		$this->assertCount( 1, $status_events );
+	}
+
 	public function test_valid_person_and_duplicate_person_preserve_existing_dedupe_behavior() {
 		$user_id = self::factory()->user->create( array( 'user_email' => 'webhook-person@example.test' ) );
 		$this->users[] = $user_id;

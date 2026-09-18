@@ -22,6 +22,8 @@ class Didar_Event_Log {
 			'request_created',
 			'request_owner_changed',
 			'submission_data_updated',
+			'request_status_changed',
+			'request_note_changed',
 			'public_status_changed',
 			'public_note_changed',
 			'internal_status_changed',

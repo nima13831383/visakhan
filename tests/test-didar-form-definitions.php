@@ -384,7 +384,8 @@ class Test_Didar_Form_Definitions extends WP_UnitTestCase {
 		);
 		update_post_meta( $post_id, '_didar_fields', $legacy );
 
-		$this->assertTrue( $this->service->update_workflow( $post_id, array( 'public_status' => 'initial_approval' ) ) );
+		update_option( Didar_Settings::OPTION_NAME, array( 'didar_form_workflows' => array( 'consultation' => array( 'pipeline_id' => 'pipeline-legacy-test', 'statuses' => array( 'pending_review' => array( 'label' => 'در انتظار بررسی', 'stage_id' => 'stage-legacy-test', 'is_default' => true, 'order' => 10 ), 'initial_approval' => array( 'label' => 'تایید اولیه', 'stage_id' => 'stage-legacy-approval', 'order' => 20 ) ) ) ) ) );
+		$this->assertTrue( $this->service->update_workflow( $post_id, array( 'request_status' => 'initial_approval' ) ) );
 		$this->assertSame( $legacy, $this->service->get_fields( $post_id ) );
 
 		$legacy_edit               = $this->valid_consultation_data();

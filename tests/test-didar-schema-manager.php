@@ -21,6 +21,7 @@ class Test_Didar_Schema_Manager extends WP_UnitTestCase {
 			array(
 				Didar_Event_Log::table_name(),
 				Didar_File_Service::table_name(),
+				Didar_File_Service::references_table_name(),
 				Didar_Notification_Queue::table_name(),
 			),
 			Didar_Schema_Manager::required_tables()

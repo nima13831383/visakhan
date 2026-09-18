@@ -55,42 +55,44 @@ class Test_Didar_Phase6 extends WP_UnitTestCase {
 	public function test_list_and_details_show_post_owner_without_exposing_account_fields() {
 		$owner_id = self::factory()->user->create( array( 'role' => 'subscriber', 'display_name' => 'مالک درخواست' ) );
 		$post_id  = $this->create_submission( $owner_id );
+		$this->set_standard_workflow();
+		update_post_meta( $post_id, '_didar_internal_status', 'initial_approval' );
+		update_post_meta( $post_id, '_didar_public_status', 'pending_review' );
 		wp_set_current_user( $owner_id );
 		$list = $this->shortcodes->submissions_shortcode( array() );
 		$this->assertStringContainsString( 'ثبت‌کننده درخواست', $list );
 		$this->assertStringContainsString( 'مالک درخواست', $list );
 		$this->assertStringContainsString( 'مشتری', $list );
+		$this->assertStringContainsString( 'تایید اولیه', $list );
 		$this->assertStringNotContainsString( 'owner@example.com', $list );
 
 		$_GET['didar_submission'] = $post_id;
 		$details = $this->shortcodes->submission_details_shortcode();
 		$this->assertStringContainsString( 'مالک درخواست', $details );
 		$this->assertStringContainsString( 'class="didar-stage-progress"', $details );
-		$this->assertStringContainsString( 'در انتظار بررسی', $details );
+		$this->assertStringContainsString( 'تایید اولیه', $details );
 	}
 
-	public function test_authorized_agent_renders_public_progress_order_and_current_status() {
+	public function test_authorized_agent_renders_request_status_progress_order_and_current_status() {
 		$agent_id = self::factory()->user->create( array( 'role' => Didar_Access_Control::ROLE_BROKER, 'display_name' => 'کارگزار' ) );
 		$post_id  = $this->create_submission( self::factory()->user->create( array( 'role' => 'subscriber' ) ) );
-		update_post_meta( $post_id, '_didar_public_status', 'initial_approval' );
 		update_post_meta( $post_id, '_didar_internal_status', 'initial_approval' );
 		update_option( Didar_Settings::OPTION_NAME, array_merge( $this->settings_snapshot, array( 'didar_form_workflows' => array( 'consultation' => array( 'pipeline_id' => 'pipeline-phase6', 'statuses' => array( 'pending_review' => array( 'label' => 'بررسی', 'stage_id' => 'stage-one', 'is_default' => true, 'order' => 10 ), 'initial_approval' => array( 'label' => 'تأیید', 'stage_id' => 'stage-two', 'order' => 20 ) ) ) ) ) ) );
 		update_option( Didar_Workflow_Manager::PIPELINES_OPTION, array( 'pipelines' => array( array( 'id' => 'pipeline-phase6', 'title' => 'آزمایش', 'stages' => array( array( 'id' => 'stage-one', 'title' => 'مرحله اول' ), array( 'id' => 'stage-two', 'title' => 'مرحله دوم' ), array( 'id' => 'stage-three', 'title' => 'مرحله سوم' ) ) ) ) ) );
 		wp_set_current_user( $agent_id );
 		$_GET['didar_submission'] = $post_id;
 		$html = $this->shortcodes->submission_details_shortcode();
-		$this->assertStringContainsString( 'در انتظار بررسی', $html );
-		$this->assertStringContainsString( 'نیاز به اصلاح مدارک', $html );
-		$this->assertStringContainsString( 'تایید اولیه', $html );
-		$this->assertStringContainsString( 'تکمیل شده', $html );
+		$this->assertStringContainsString( 'بررسی', $html );
+		$this->assertStringContainsString( 'تأیید', $html );
 		$this->assertStringContainsString( 'aria-current="step"', $html );
 		$this->assertStringContainsString( 'is-completed', $html );
 		$this->assertStringContainsString( 'is-current', $html );
 		$this->assertStringContainsString( 'is-future', $html );
 	}
 
-	public function test_public_progress_classes_follow_public_status_order() {
+	public function test_request_status_progress_classes_follow_configured_order() {
 		$customer_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		$this->set_standard_workflow();
 		$cases       = array(
 			'pending_review'   => array( 1, 0, 3 ),
 			'needs_correction' => array( 1, 1, 2 ),
@@ -98,22 +100,21 @@ class Test_Didar_Phase6 extends WP_UnitTestCase {
 			'completed'        => array( 1, 3, 0 ),
 		);
 
-		foreach ( $cases as $public_status => $expected ) {
+		foreach ( $cases as $request_status => $expected ) {
 			$post_id = $this->create_submission( $customer_id );
-			update_post_meta( $post_id, '_didar_public_status', $public_status );
-			update_post_meta( $post_id, '_didar_internal_status', 'internal_review' );
+			update_post_meta( $post_id, '_didar_internal_status', $request_status );
 			wp_set_current_user( $customer_id );
 			$_GET['didar_submission'] = $post_id;
 			$html = $this->shortcodes->submission_details_shortcode();
 
-			$this->assertSame( $expected[0], substr_count( $html, 'aria-current="step"' ), $public_status );
-			$this->assertSame( $expected[1], substr_count( $html, 'didar-stage-progress__item is-completed' ), $public_status );
-			$this->assertSame( $expected[2], substr_count( $html, 'didar-stage-progress__item is-future' ), $public_status );
-			$this->assertMatchesRegularExpression( '/aria-current="step".*?didar-stage-progress__label">' . preg_quote( Didar_Reference_Data::statuses()[ $public_status ], '/' ) . '/s', $html );
+			$this->assertSame( $expected[0], substr_count( $html, 'aria-current="step"' ), $request_status );
+			$this->assertSame( $expected[1], substr_count( $html, 'didar-stage-progress__item is-completed' ), $request_status );
+			$this->assertSame( $expected[2], substr_count( $html, 'didar-stage-progress__item is-future' ), $request_status );
+			$this->assertMatchesRegularExpression( '/aria-current="step".*?didar-stage-progress__label">' . preg_quote( Didar_Reference_Data::statuses()[ $request_status ], '/' ) . '/s', $html );
 		}
 	}
 
-	public function test_details_main_status_stays_public_for_customer_and_operator_views() {
+	public function test_details_main_status_is_the_same_request_status_for_customer_and_operator_views() {
 		$customer_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
 		$agent_id    = self::factory()->user->create( array( 'role' => Didar_Access_Control::ROLE_BROKER ) );
 		$post_id     = $this->create_submission( $customer_id );
@@ -140,37 +141,46 @@ class Test_Didar_Phase6 extends WP_UnitTestCase {
 		wp_set_current_user( $customer_id );
 		$_GET['didar_submission'] = $post_id;
 		$customer_html = $this->shortcodes->submission_details_shortcode();
-		$this->assertStringContainsString( 'در انتظار بررسی', $customer_html );
-		$this->assertStringNotContainsString( 'وضعیت داخلی محرمانه', $customer_html );
+		$this->assertStringContainsString( 'وضعیت داخلی محرمانه', $customer_html );
 		$this->assertStringContainsString( 'class="didar-stage-progress"', $customer_html );
 
 		wp_set_current_user( $agent_id );
 		$operator_html = $this->shortcodes->submission_details_shortcode();
 		$this->assertStringContainsString( 'وضعیت داخلی محرمانه', $operator_html );
-		$this->assertMatchesRegularExpression( '/aria-current="step".*?didar-stage-progress__label">در انتظار بررسی/s', $operator_html );
-		$this->assertStringContainsString( 'class="didar-internal-workflow"', $operator_html );
-		$this->assertMatchesRegularExpression( '/class="didar-internal-workflow".*?وضعیت داخلی محرمانه/s', $operator_html );
-		$internal_section_pos = strpos( $operator_html, '<section class="didar-detail-section didar-internal-workflow"' );
-		$this->assertNotFalse( $internal_section_pos );
-		$main_html = substr( $operator_html, 0, $internal_section_pos );
-		$this->assertStringNotContainsString( 'وضعیت داخلی محرمانه', $main_html );
-		$this->assertStringNotContainsString( 'internal_review', $main_html );
+		$this->assertMatchesRegularExpression( '/aria-current="step".*?didar-stage-progress__label">وضعیت داخلی محرمانه/s', $operator_html );
+		$this->assertStringContainsString( 'وضعیت درخواست', $operator_html );
+		$this->assertStringNotContainsString( 'گردش کار داخلی', $operator_html );
 		$this->assertStringContainsString( 'class="didar-stage-progress"', $operator_html );
 	}
 
-	public function test_details_public_status_falls_back_without_exposing_internal_status() {
+	public function test_details_request_status_uses_legacy_internal_value_when_public_value_is_missing() {
 		$customer_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
 		$post_id     = $this->create_submission( $customer_id );
+		$this->set_standard_workflow();
 		delete_post_meta( $post_id, '_didar_public_status' );
 		delete_post_meta( $post_id, '_didar_status' );
-		update_post_meta( $post_id, '_didar_internal_status', 'internal_review' );
+		update_post_meta( $post_id, '_didar_internal_status', 'initial_approval' );
 
 		wp_set_current_user( $customer_id );
 		$_GET['didar_submission'] = $post_id;
 		$html = $this->shortcodes->submission_details_shortcode();
 
-		$this->assertStringContainsString( 'در انتظار بررسی', $html );
+		$this->assertStringContainsString( 'تایید اولیه', $html );
 		$this->assertStringNotContainsString( 'internal_review', $html );
+	}
+
+	private function set_standard_workflow() {
+		$workflow = array(
+			'pipeline_id' => 'pipeline-phase6',
+			'statuses'   => array(
+				'pending_review'   => array( 'label' => 'در انتظار بررسی', 'stage_id' => 'stage-one', 'is_default' => true, 'order' => 10 ),
+				'needs_correction' => array( 'label' => 'نیاز به اصلاح مدارک', 'stage_id' => 'stage-two', 'order' => 20 ),
+				'initial_approval' => array( 'label' => 'تایید اولیه', 'stage_id' => 'stage-three', 'order' => 30 ),
+				'completed'        => array( 'label' => 'تکمیل شده', 'stage_id' => 'stage-four', 'order' => 40 ),
+			),
+		);
+		$settings = array_merge( $this->settings_snapshot, array( 'didar_form_workflows' => array( 'consultation' => $workflow ) ) );
+		update_option( Didar_Settings::OPTION_NAME, $settings );
 	}
 
 	private function create_submission( $author_id ) {
@@ -178,7 +188,7 @@ class Test_Didar_Phase6 extends WP_UnitTestCase {
 		$this->posts[] = $post_id;
 		update_post_meta( $post_id, '_didar_form_type', 'consultation' );
 		update_post_meta( $post_id, '_didar_fields', array( 'first_name' => 'متقاضی', 'last_name' => 'آزمایشی' ) );
-		update_post_meta( $post_id, '_didar_public_status', 'pending_review' );
+		update_post_meta( $post_id, '_didar_internal_status', 'pending_review' );
 		return $post_id;
 	}
 }
