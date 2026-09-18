@@ -55,6 +55,7 @@ require_once DIDAR_PATH . 'includes/class-didar-workflow-manager.php';
 require_once DIDAR_PATH . 'includes/class-didar-settings-transfer.php';
 require_once DIDAR_PATH . 'includes/class-didar-field-mapper.php';
 require_once DIDAR_PATH . 'includes/class-didar-melipayamak-sms-channel.php';
+require_once DIDAR_PATH . 'includes/class-didar-wordpress-email-channel.php';
 require_once DIDAR_PATH . 'includes/class-didar-notification-recipient-resolver.php';
 require_once DIDAR_PATH . 'includes/class-didar-notification-manager.php';
 require_once DIDAR_PATH . 'includes/class-didar-sync-manager.php';

@@ -17,7 +17,7 @@ class Didar_Notification_Manager {
 	private $logger;
 	private $queue;
 	private $resolver;
-	private $channel;
+	private $channels = array();
 
 	public function __construct( Didar_Form_Registry $registry, Didar_Settings $settings, Didar_Submission_Service $service, Didar_Field_Mapper $mapper = null, Didar_Logger $logger = null, Didar_Notification_Queue $queue = null, Didar_Notification_Channel_Interface $channel = null ) {
 		$this->registry = $registry;
@@ -27,7 +27,10 @@ class Didar_Notification_Manager {
 		$this->queue    = $queue ? $queue : new Didar_Notification_Queue();
 		$mapper         = $mapper ? $mapper : new Didar_Field_Mapper( $registry, $settings, null, $this->logger );
 		$this->resolver = new Didar_Notification_Recipient_Resolver( $registry, $settings, $service, $mapper, $this->logger );
-		$this->channel   = $channel ? $channel : new Didar_Melipayamak_Sms_Channel();
+		$this->channels = array(
+			'sms'   => $channel ? $channel : new Didar_Melipayamak_Sms_Channel(),
+			'email' => new Didar_WordPress_Email_Channel(),
+		);
 
 		add_filter( 'cron_schedules', array( $this, 'cron_schedules' ) );
 		add_action( 'didar_submission_created', array( $this, 'on_submission_created' ), 30, 2 );
@@ -37,8 +40,11 @@ class Didar_Notification_Manager {
 		add_action( self::ITEM_HOOK, array( $this, 'process_job' ) );
 	}
 
-	public function set_channel( Didar_Notification_Channel_Interface $channel ) {
-		$this->channel = $channel;
+	public function set_channel( Didar_Notification_Channel_Interface $channel, $channel_name = 'sms' ) {
+		$channel_name = sanitize_key( (string) $channel_name );
+		if ( in_array( $channel_name, array( 'sms', 'email' ), true ) ) {
+			$this->channels[ $channel_name ] = $channel;
+		}
 	}
 
 	public function queue() { return $this->queue; }
@@ -79,7 +85,6 @@ class Didar_Notification_Manager {
 
 	public function emit( $event_key, $submission_id, $occurrence_id ) {
 		$config = $this->settings->notification_events();
-		if ( ! Didar_Notification_Event_Registry::configuration_ready( $config, $event_key ) ) { return array(); }
 		$jobs = $this->resolver->jobs_for_event( $event_key, absint( $submission_id ), $occurrence_id, $config );
 		$created = array();
 		foreach ( $jobs as $job ) {
@@ -101,7 +106,14 @@ class Didar_Notification_Manager {
 			$this->queue->mark_failed( $claimed['job_id'], 'attempt_limit', 'Maximum delivery attempts reached.' );
 			return false;
 		}
-		$result = $this->channel->send( $claimed, $this->settings->melipayamak_credentials() );
+		$channel_name = in_array( sanitize_key( (string) ( $claimed['channel'] ?? 'sms' ) ), array( 'sms', 'email' ), true ) ? sanitize_key( (string) $claimed['channel'] ) : '';
+		$channel = $channel_name && isset( $this->channels[ $channel_name ] ) ? $this->channels[ $channel_name ] : null;
+		if ( ! $channel ) {
+			$this->queue->mark_failed( $claimed['job_id'], 'notification_channel_invalid', 'The notification channel is not available.' );
+			return false;
+		}
+		$credentials = 'sms' === $channel_name ? $this->settings->melipayamak_credentials() : array();
+		$result = $channel->send( $claimed, $credentials );
 		$result = is_array( $result ) ? $result : array( 'success' => false, 'retryable' => false, 'provider_id' => '', 'provider_code' => '', 'error_code' => 'provider_result_invalid', 'error_message' => 'The notification provider returned an invalid result.' );
 		if ( ! empty( $result['success'] ) ) {
 			$this->queue->mark_success( $claimed['job_id'], $result['provider_id'] ?? '', $result['provider_code'] ?? '' );

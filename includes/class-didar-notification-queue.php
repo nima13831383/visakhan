@@ -4,9 +4,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-/** Durable SMS notification jobs, separate from the Didar synchronization queue. */
+/** Durable multi-channel notification jobs, separate from the Didar synchronization queue. */
 class Didar_Notification_Queue {
-	const SCHEMA_VERSION         = '1.0.0';
+	const SCHEMA_VERSION         = '1.1.0';
 	const SCHEMA_VERSION_OPTION  = 'didar_notification_queue_schema_version';
 	const SCHEMA_VERIFIED_OPTION = 'didar_notification_queue_schema_verified_version';
 	const MAX_ATTEMPTS           = 5;
@@ -24,10 +24,11 @@ class Didar_Notification_Queue {
 			job_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			idempotency_key varchar(190) NOT NULL,
 			event_key varchar(100) NOT NULL,
+			channel varchar(20) NOT NULL DEFAULT 'sms',
 			submission_id bigint(20) unsigned NOT NULL DEFAULT 0,
 			recipient_user_id bigint(20) unsigned NOT NULL DEFAULT 0,
 			recipient_role varchar(40) NOT NULL DEFAULT '',
-			destination varchar(32) NOT NULL DEFAULT '',
+			destination varchar(320) NOT NULL DEFAULT '',
 			body_id bigint(20) unsigned NOT NULL DEFAULT 0,
 			variable_mapping longtext NOT NULL,
 			variable_values longtext NOT NULL,
@@ -54,7 +55,7 @@ class Didar_Notification_Queue {
 		) {$wpdb->get_charset_collate()};";
 		dbDelta( $sql );
 		if ( ! self::schema_is_current() ) {
-			return new WP_Error( 'didar_notification_schema_failed', __( 'امکان آماده‌سازی صف اعلان‌های پیامکی وجود ندارد.', 'didar' ) );
+			return new WP_Error( 'didar_notification_schema_failed', __( 'امکان آماده‌سازی صف اعلان‌ها وجود ندارد.', 'didar' ) );
 		}
 		update_option( self::SCHEMA_VERSION_OPTION, self::SCHEMA_VERSION, false );
 		update_option( self::SCHEMA_VERIFIED_OPTION, self::SCHEMA_VERSION, false );
@@ -74,7 +75,8 @@ class Didar_Notification_Queue {
 		global $wpdb;
 		$table = self::table_name();
 		$indexes = wp_list_pluck( (array) $wpdb->get_results( "SHOW INDEX FROM {$table}", ARRAY_A ), 'Key_name' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		return ! array_diff( array( 'PRIMARY', 'idempotency_key', 'due_state', 'submission_id', 'event_key', 'recipient_user_id' ), array_unique( $indexes ) );
+		$columns = wp_list_pluck( (array) $wpdb->get_results( "SHOW COLUMNS FROM {$table}", ARRAY_A ), 'Field' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		return ! array_diff( array( 'PRIMARY', 'idempotency_key', 'due_state', 'submission_id', 'event_key', 'recipient_user_id' ), array_unique( $indexes ) ) && in_array( 'channel', $columns, true );
 	}
 
 	public function create( $job ) {
@@ -91,13 +93,17 @@ class Didar_Notification_Queue {
 		$now = current_time( 'mysql', true );
 		$next = ! empty( $job['next_attempt_at'] ) ? sanitize_text_field( (string) $job['next_attempt_at'] ) : $now;
 		$initial_state = isset( $job['state'] ) && is_scalar( $job['state'] ) ? sanitize_key( (string) $job['state'] ) : 'queued';
+		$channel = sanitize_key( (string) ( $job['channel'] ?? 'sms' ) );
+		$channel = in_array( $channel, array( 'sms', 'email' ), true ) ? $channel : 'sms';
+		$destination = 'email' === $channel ? strtolower( sanitize_email( (string) ( $job['destination'] ?? '' ) ) ) : sanitize_text_field( (string) ( $job['destination'] ?? '' ) );
 		$row = array(
 			'idempotency_key'   => $key,
 			'event_key'         => Didar_Notification_Event_Registry::normalize_key( $job['event_key'] ?? '' ),
+			'channel'           => $channel,
 			'submission_id'     => absint( $job['submission_id'] ?? 0 ),
 			'recipient_user_id' => absint( $job['recipient_user_id'] ?? 0 ),
 			'recipient_role'    => sanitize_key( (string) ( $job['recipient_role'] ?? '' ) ),
-			'destination'       => sanitize_text_field( (string) ( $job['destination'] ?? '' ) ),
+			'destination'       => $destination,
 			'body_id'           => absint( $job['body_id'] ?? 0 ),
 			'variable_mapping'  => wp_json_encode( array_values( (array) ( $job['variable_mapping'] ?? array() ) ), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ),
 			'variable_values'   => wp_json_encode( array_values( (array) ( $job['variable_values'] ?? array() ) ), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ),
@@ -113,7 +119,7 @@ class Didar_Notification_Queue {
 		$result = $wpdb->insert( self::table_name(), $row );
 		if ( false === $result ) {
 			$existing = $this->find_by_idempotency( $key );
-			return $existing ? $existing : new WP_Error( 'didar_notification_insert_failed', __( 'ذخیره اعلان پیامکی انجام نشد.', 'didar' ) );
+			return $existing ? $existing : new WP_Error( 'didar_notification_insert_failed', __( 'ذخیره اعلان انجام نشد.', 'didar' ) );
 		}
 		return $this->get( (int) $wpdb->insert_id );
 	}
@@ -138,6 +144,7 @@ class Didar_Notification_Queue {
 		$args = array();
 		if ( ! empty( $filters['state'] ) ) { $where[] = 'state = %s'; $args[] = sanitize_key( $filters['state'] ); }
 		if ( ! empty( $filters['event_key'] ) ) { $where[] = 'event_key = %s'; $args[] = Didar_Notification_Event_Registry::normalize_key( $filters['event_key'] ); }
+		if ( ! empty( $filters['channel'] ) ) { $where[] = 'channel = %s'; $args[] = in_array( sanitize_key( $filters['channel'] ), array( 'sms', 'email' ), true ) ? sanitize_key( $filters['channel'] ) : 'sms'; }
 		if ( ! empty( $filters['submission_id'] ) ) { $where[] = 'submission_id = %d'; $args[] = absint( $filters['submission_id'] ); }
 		$sql = 'SELECT * FROM ' . self::table_name() . ' WHERE ' . implode( ' AND ', $where ) . ' ORDER BY created_at DESC, job_id DESC LIMIT %d';
 		$args[] = $limit;
@@ -228,11 +235,15 @@ class Didar_Notification_Queue {
 
 	private function hydrate( $row ) {
 		if ( ! is_array( $row ) || ! isset( $row['job_id'] ) ) { return null; }
+		$channel = sanitize_key( (string) ( $row['channel'] ?? 'sms' ) );
+		$row['channel'] = in_array( $channel, array( 'sms', 'email' ), true ) ? $channel : 'sms';
 		foreach ( array( 'job_id', 'submission_id', 'recipient_user_id', 'body_id', 'attempts' ) as $key ) { $row[ $key ] = absint( $row[ $key ] ); }
 		foreach ( array( 'variable_mapping', 'variable_values', 'snapshot_json' ) as $key ) {
 			$value = json_decode( (string) ( $row[ $key ] ?? '' ), true );
 			$row[ $key ] = is_array( $value ) ? $value : array();
 		}
+		// Keep a convenient runtime alias while preserving the existing storage key.
+		$row['snapshot'] = $row['snapshot_json'];
 		return $row;
 	}
 }

@@ -5,9 +5,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Canonical notification events and the deliberately small SMS variable
+ * Canonical notification events and the deliberately small shared variable
  * vocabulary. Event definitions live here so admin, dispatch, and tests use
- * the same keys and eligibility rules.
+ * the same keys and eligibility rules for every delivery channel.
  */
 class Didar_Notification_Event_Registry {
 	const OPTION_NAME = 'didar_notification_events';
@@ -57,11 +57,15 @@ class Didar_Notification_Event_Registry {
 
 	public static function default_event_configuration() {
 		return array(
+			// `enabled` remains the legacy SMS setting for old imports and callers.
 			'enabled'         => false,
+			'sms_enabled'     => false,
+			'email_enabled'   => false,
 			'user_ids'        => array(),
 			'send_to_owner'   => false,
 			'send_to_assignee'=> false,
 			'body_id'         => '',
+			'email_template'  => '',
 			'variables'       => array(),
 		);
 	}
@@ -93,12 +97,18 @@ class Didar_Notification_Event_Registry {
 			}
 
 			$body_id = isset( $item['body_id'] ) && is_scalar( $item['body_id'] ) ? absint( $item['body_id'] ) : 0;
+			$legacy_sms_enabled = ! empty( $item['enabled'] );
+			$sms_enabled = array_key_exists( 'sms_enabled', $item ) ? ! empty( $item['sms_enabled'] ) : $legacy_sms_enabled;
+			$email_template = isset( $item['email_template'] ) && is_scalar( $item['email_template'] ) ? sanitize_textarea_field( (string) $item['email_template'] ) : '';
 			$out[ $event_key ] = array(
-				'enabled'          => ! empty( $item['enabled'] ),
+				'enabled'          => $sms_enabled,
+				'sms_enabled'      => $sms_enabled,
+				'email_enabled'    => ! empty( $item['email_enabled'] ),
 				'user_ids'         => $user_ids,
 				'send_to_owner'    => ! empty( $item['send_to_owner'] ),
 				'send_to_assignee' => ! empty( $item['send_to_assignee'] ),
 				'body_id'          => $body_id ? (string) $body_id : '',
+				'email_template'   => $email_template,
 				'variables'        => array_values( $variables ),
 			);
 		}
@@ -107,12 +117,62 @@ class Didar_Notification_Event_Registry {
 	}
 
 	public static function configuration_ready( $configuration, $event_key ) {
+		return self::channel_configuration_ready( $configuration, $event_key, 'sms' );
+	}
+
+	public static function channel_configuration_ready( $configuration, $event_key, $channel ) {
 		$configuration = self::normalize_configuration( $configuration );
 		$event_key = self::normalize_key( $event_key );
+		$channel = sanitize_key( (string) $channel );
 		$item = $configuration[ $event_key ] ?? array();
-		if ( empty( $item['enabled'] ) || '' === (string) ( $item['body_id'] ?? '' ) ) {
+		if ( ! in_array( $channel, array( 'sms', 'email' ), true ) ) {
+			return false;
+		}
+		if ( ( 'sms' === $channel && ( empty( $item['sms_enabled'] ) || '' === (string) ( $item['body_id'] ?? '' ) ) ) || ( 'email' === $channel && ( empty( $item['email_enabled'] ) || '' === (string) ( $item['email_template'] ?? '' ) ) ) ) {
 			return false;
 		}
 		return ! empty( $item['user_ids'] ) || ! empty( $item['send_to_owner'] ) || ! empty( $item['send_to_assignee'] );
+	}
+
+	/** Subject convention for Email jobs; no separate subject mapping is stored. */
+	public static function email_subject( $event_key, $request_number ) {
+		$definition = self::get( $event_key );
+		$label = sanitize_text_field( (string) ( $definition['label'] ?? $event_key ) );
+		return sprintf( 'اعلان درخواست #%d: %s', absint( $request_number ), $label );
+	}
+
+	/** Validate the numeric placeholder grammar used by Email templates. */
+	public static function validate_email_template( $template, $variable_mapping ) {
+		$template = is_scalar( $template ) ? (string) $template : '';
+		$mapping_count = count( (array) $variable_mapping );
+		if ( '' === trim( $template ) ) {
+			return array( 'valid' => false, 'code' => 'email_template_missing', 'message' => 'Email template is empty.' );
+		}
+		$matches = array();
+		if ( false === preg_match_all( '/\{([^{}]*)\}/u', $template, $matches ) ) {
+			return array( 'valid' => false, 'code' => 'email_template_encoding_invalid', 'message' => 'Email template encoding is invalid.' );
+		}
+		$without_tokens = preg_replace( '/\{[^{}]*\}/u', '', $template );
+		if ( false === $without_tokens || false !== strpos( $without_tokens, '{' ) || false !== strpos( $without_tokens, '}' ) ) {
+			return array( 'valid' => false, 'code' => 'email_placeholder_unbalanced', 'message' => 'Email template contains an unbalanced placeholder.' );
+		}
+		foreach ( (array) ( $matches[1] ?? array() ) as $token ) {
+			if ( '' === $token || ! ctype_digit( $token ) || absint( $token ) >= $mapping_count ) {
+				return array( 'valid' => false, 'code' => ctype_digit( (string) $token ) ? 'email_placeholder_index_invalid' : 'email_placeholder_invalid', 'message' => 'Email template contains an invalid placeholder.' );
+			}
+		}
+		return array( 'valid' => true, 'code' => '', 'message' => '' );
+	}
+
+	public static function render_email_template( $template, $values ) {
+		$value_count = count( (array) $values );
+		$validation = self::validate_email_template( $template, $value_count ? range( 0, $value_count - 1 ) : array() );
+		if ( empty( $validation['valid'] ) ) {
+			return new WP_Error( $validation['code'], $validation['message'] );
+		}
+		$rendered = preg_replace_callback( '/\{(\d+)\}/u', function ( $match ) use ( $values ) {
+			return sanitize_text_field( (string) ( $values[ absint( $match[1] ) ] ?? '' ) );
+		}, (string) $template );
+		return false === $rendered ? new WP_Error( 'email_template_render_failed', 'Email template could not be rendered.' ) : $rendered;
 	}
 }

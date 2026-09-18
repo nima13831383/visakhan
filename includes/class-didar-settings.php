@@ -194,7 +194,7 @@ class Didar_Settings {
 		return '' !== $override ? $override : sanitize_text_field( (string) $registry_default );
 	}
 
-	/** Return normalized SMS event configuration; credentials are intentionally separate. */
+	/** Return normalized notification event configuration; provider credentials are intentionally separate. */
 	public function notification_events() {
 		$settings = $this->all();
 		return class_exists( 'Didar_Notification_Event_Registry' ) ? Didar_Notification_Event_Registry::normalize_configuration( $settings['didar_notification_events'] ?? array() ) : array();

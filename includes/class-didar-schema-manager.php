@@ -8,7 +8,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Coordinates installation, upgrades, and runtime health checks for Didar tables.
  */
 class Didar_Schema_Manager {
-	const SCHEMA_VERSION      = '1.1.0';
+	const SCHEMA_VERSION      = '1.2.0';
 	const STATE_OPTION        = 'didar_schema_state';
 	const ERROR_OPTION        = 'didar_schema_last_error';
 	const FULL_CHECK_INTERVAL = DAY_IN_SECONDS;
