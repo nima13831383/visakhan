@@ -8,7 +8,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Coordinates installation, upgrades, and runtime health checks for Didar tables.
  */
 class Didar_Schema_Manager {
-	const SCHEMA_VERSION      = '1.0.0';
+	const SCHEMA_VERSION      = '1.1.0';
 	const STATE_OPTION        = 'didar_schema_state';
 	const ERROR_OPTION        = 'didar_schema_last_error';
 	const FULL_CHECK_INTERVAL = DAY_IN_SECONDS;
@@ -62,6 +62,7 @@ class Didar_Schema_Manager {
 		try {
 			$event_result = Didar_Event_Log::install_schema();
 			$file_result  = Didar_File_Service::install_schema();
+			$notification_result = Didar_Notification_Queue::install_schema();
 
 			if ( is_wp_error( $event_result ) ) {
 				return self::record_error( $event_result );
@@ -69,6 +70,10 @@ class Didar_Schema_Manager {
 
 			if ( is_wp_error( $file_result ) ) {
 				return self::record_error( $file_result );
+			}
+
+			if ( is_wp_error( $notification_result ) ) {
+				return self::record_error( $notification_result );
 			}
 
 			if ( ! self::schema_is_current() ) {
@@ -100,6 +105,7 @@ class Didar_Schema_Manager {
 			Didar_Event_Log::table_name(),
 			Didar_File_Service::table_name(),
 			Didar_File_Service::references_table_name(),
+			Didar_Notification_Queue::table_name(),
 		);
 	}
 
@@ -119,7 +125,7 @@ class Didar_Schema_Manager {
 	}
 
 	public static function schema_is_current() {
-		return Didar_Event_Log::schema_is_current() && Didar_File_Service::schema_is_current();
+		return Didar_Event_Log::schema_is_current() && Didar_File_Service::schema_is_current() && Didar_Notification_Queue::schema_is_current();
 	}
 
 	public static function render_admin_notice() {

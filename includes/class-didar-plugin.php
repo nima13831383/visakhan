@@ -19,6 +19,7 @@ final class Didar_Plugin {
 	public $sync_manager;
 	public $case_service;
 	public $pdf_service;
+	public $notification_manager;
 
 	public static function instance() {
 		if ( null === self::$instance ) {
@@ -54,6 +55,7 @@ final class Didar_Plugin {
 		$this->service   = new Didar_Submission_Service( $this->registry, $this->event_log, $this->settings, $this->file_service );
 		$this->file_service->set_submission_service( $this->service );
 		$this->sync_manager = new Didar_Sync_Manager( $this->registry, $this->settings, $this->event_log, $this->service, $this->file_service, $this->logger, $this->case_service );
+		$this->notification_manager = new Didar_Notification_Manager( $this->registry, $this->settings, $this->service, $profile_mapper, $this->logger );
 		$this->pdf_service = new Didar_Pdf_Service( $this->registry, $this->settings, $this->service, $this->file_service, $this->logger );
 		// File replacement does not run activation hooks. Keep background workers
 		// healthy on every normal bootstrap so pending durable work cannot strand.
@@ -79,6 +81,9 @@ final class Didar_Plugin {
 	/** Keep all recurring plugin workers healthy even when activation did not run. */
 	private function ensure_runtime_workers() {
 		$this->sync_manager->ensure_worker_schedule();
+		if ( $this->notification_manager ) {
+			$this->notification_manager->ensure_worker_schedule();
+		}
 		if ( wp_next_scheduled( 'didar_cleanup_temporary_uploads' ) ) {
 			return;
 		}
@@ -124,5 +129,7 @@ final class Didar_Plugin {
 		wp_clear_scheduled_hook( 'didar_cleanup_temporary_uploads' );
 		wp_clear_scheduled_hook( Didar_Sync_Manager::CRON_HOOK );
 		wp_clear_scheduled_hook( Didar_Sync_Manager::USER_HOOK );
+		wp_clear_scheduled_hook( Didar_Notification_Manager::CRON_HOOK );
+		wp_clear_scheduled_hook( Didar_Notification_Manager::ITEM_HOOK );
 	}
 }

@@ -62,7 +62,7 @@ class Didar_Submission_Service {
 			return new WP_Error( 'insert_failed', __( 'امکان ثبت درخواست وجود نداشت.', 'didar' ) );
 		}
 
-		$this->events->add(
+		$created_event_id = $this->events->add(
 			$post_id,
 			'request_created',
 			null,
@@ -71,7 +71,7 @@ class Didar_Submission_Service {
 		$this->apply_default_assignee( $post_id, $form_type );
 		$this->logger->log( 'INFO', 'submission_saved', 'WordPress submission saved.', array( 'entity_type' => 'submission', 'local_id' => $post_id, 'wp_user_id' => $author_id, 'form_type' => $form_type, 'source' => 'submission_service' ) );
 		$this->attach_files( $post_id, $form_type, $data, array(), true );
-		do_action( 'didar_submission_created', $post_id );
+		do_action( 'didar_submission_created', $post_id, $created_event_id );
 		return $post_id;
 	}
 
@@ -368,7 +368,16 @@ class Didar_Submission_Service {
 				$mapping = $this->workflow->mapping( $form_type, $new_value );
 				$meta = array( 'form_type' => $form_type, 'old_status_key' => $old_value, 'old_status_label' => $this->workflow->status_label( $form_type, $old_value ), 'new_status_key' => $new_value, 'new_status_label' => $this->workflow->status_label( $form_type, $new_value ), 'pipeline_id' => $mapping['pipeline_id'] ?? '', 'pipeline_stage_id' => $mapping['stage_id'] ?? '', 'source' => 'wordpress', 'actor' => get_current_user_id() );
 			}
-			$this->events->add( $post_id, $event_type, $old_value, $new_value, $meta );
+			$event_id = $this->events->add( $post_id, $event_type, $old_value, $new_value, $meta );
+			if ( 'request_status' === $key ) {
+				$notification_meta = is_array( $meta ) ? $meta : array();
+				$notification_meta['event_id'] = absint( $event_id );
+				do_action( 'didar_submission_request_status_changed', $post_id, $old_value, $new_value, $notification_meta );
+			} elseif ( 'assigned_user_id' === $key ) {
+				$notification_meta = is_array( $meta ) ? $meta : array();
+				$notification_meta['event_id'] = absint( $event_id );
+				do_action( 'didar_submission_assignee_changed', $post_id, $old_value, $new_value, $notification_meta );
+			}
 		}
 		if ( $changed_keys ) {
 			do_action( 'didar_submission_workflow_changed', $post_id, $changed_keys );

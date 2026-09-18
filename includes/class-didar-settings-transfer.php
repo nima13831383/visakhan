@@ -23,7 +23,7 @@ class Didar_Settings_Transfer {
 	}
 
 	private function portable_option_keys() {
-		return array( 'visa_companion_case_settings', 'case_form_settings', 'didar_form_workflows', 'didar_field_mappings', 'didar_form_field_placeholders', 'didar_form_access', 'didar_broker_user_map', 'didar_form_default_assignees', 'didar_default_owner_id', 'didar_default_pipeline_id', 'didar_system_form_type_field_id', 'didar_system_submission_id_field_id', 'didar_system_user_id_field_id', 'didar_public_status_field_id', 'field_required_overrides', 'profile_field_states', 'didar_user_person_mappings', 'colleague_can_view_internal_history', 'frontend_requests_per_page', 'file_download_mode', 'didar_debug_logging', 'pdf_settings' );
+		return array( 'visa_companion_case_settings', 'case_form_settings', 'didar_form_workflows', 'didar_field_mappings', 'didar_form_field_placeholders', 'didar_form_access', 'didar_broker_user_map', 'didar_form_default_assignees', 'didar_default_owner_id', 'didar_default_pipeline_id', 'didar_system_form_type_field_id', 'didar_system_submission_id_field_id', 'didar_system_user_id_field_id', 'didar_public_status_field_id', 'field_required_overrides', 'profile_field_states', 'didar_user_person_mappings', 'didar_notification_events', 'colleague_can_view_internal_history', 'frontend_requests_per_page', 'file_download_mode', 'didar_debug_logging', 'pdf_settings' );
 	}
 
 	/** Runtime-shaped portable values; unlike export, user maps remain keyed by local WP user ID. */
@@ -50,6 +50,7 @@ class Didar_Settings_Transfer {
 		$out['didar_form_default_assignees'] = $this->export_form_default_assignees( $out['didar_form_default_assignees'] ?? array() );
 		$out['didar_form_field_placeholders'] = $this->normalize_placeholders( $out['didar_form_field_placeholders'] ?? array() );
 		$out['pdf_settings'] = Didar_Settings::normalize_pdf_settings( $out['pdf_settings'] ?? array() );
+		$out['didar_notification_events'] = Didar_Notification_Event_Registry::normalize_configuration( $out['didar_notification_events'] ?? array() );
 		if ( isset( $out['didar_field_mappings'] ) && is_array( $out['didar_field_mappings'] ) ) {
 			$normalized_mappings = array();
 			foreach ( $out['didar_field_mappings'] as $form_type => $maps ) {
@@ -152,13 +153,14 @@ class Didar_Settings_Transfer {
 	public function latest_backup() { $all = get_option( self::BACKUPS_OPTION, array() ); return is_array( $all ) && $all ? end( $all ) : array(); }
 
 	private function normalize( $raw, &$warnings, &$errors ) {
-		$out = array(); $allowed = array_keys( $this->portable_settings( array_fill_keys( array( 'visa_companion_case_settings','case_form_settings','didar_form_workflows','didar_field_mappings','didar_form_field_placeholders','didar_form_access','didar_broker_user_map','didar_form_default_assignees','didar_default_owner_id','didar_default_pipeline_id','didar_system_form_type_field_id','didar_system_submission_id_field_id','didar_system_user_id_field_id','didar_public_status_field_id','field_required_overrides','profile_field_states','didar_user_person_mappings','colleague_can_view_internal_history','frontend_requests_per_page','file_download_mode','didar_debug_logging','pdf_settings' ), null ) ) );
+		$out = array(); $allowed = array_keys( $this->portable_settings( array_fill_keys( array( 'visa_companion_case_settings','case_form_settings','didar_form_workflows','didar_field_mappings','didar_form_field_placeholders','didar_form_access','didar_broker_user_map','didar_form_default_assignees','didar_default_owner_id','didar_default_pipeline_id','didar_system_form_type_field_id','didar_system_submission_id_field_id','didar_system_user_id_field_id','didar_public_status_field_id','field_required_overrides','profile_field_states','didar_user_person_mappings','didar_notification_events','colleague_can_view_internal_history','frontend_requests_per_page','file_download_mode','didar_debug_logging','pdf_settings' ), null ) ) );
 		foreach ( (array) $raw as $key => $value ) { if ( in_array( $key, $allowed, true ) ) { $out[$key] = $value; } else { $warnings[] = 'گزینه ناشناخته «' . sanitize_text_field( (string) $key ) . '» نادیده گرفته شد.'; } }
 		foreach ( array( 'didar_form_workflows','didar_field_mappings','didar_form_field_placeholders','field_required_overrides','profile_field_states','didar_user_person_mappings','pdf_settings' ) as $key ) { if ( isset( $out[$key] ) && ! is_array( $out[$key] ) ) { $errors[] = 'ساختار «' . $key . '» معتبر نیست.'; unset( $out[$key] ); } }
 		if ( isset( $out['didar_form_field_placeholders'] ) ) { $out['didar_form_field_placeholders'] = $this->normalize_placeholders( $out['didar_form_field_placeholders'] ); }
 		if ( isset( $out['didar_form_access'] ) && ! is_array( $out['didar_form_access'] ) ) { $errors[] = 'ساختار لینک و بارکد فرم‌ها معتبر نیست.'; unset( $out['didar_form_access'] ); }
 		if ( isset( $out['didar_form_access'] ) ) { $out['didar_form_access'] = $this->normalize_form_access( $out['didar_form_access'], $warnings ); }
 		if ( isset( $out['pdf_settings'] ) ) { $out['pdf_settings'] = Didar_Settings::normalize_pdf_settings( $out['pdf_settings'] ); }
+		if ( isset( $out['didar_notification_events'] ) ) { $out['didar_notification_events'] = Didar_Notification_Event_Registry::normalize_configuration( $out['didar_notification_events'] ); }
 		if ( isset( $out['visa_companion_case_settings'] ) && ! is_array( $out['visa_companion_case_settings'] ) ) { $errors[] = 'Visa companion Case settings structure is invalid.'; unset( $out['visa_companion_case_settings'] ); }
 		if ( isset( $out['case_form_settings'] ) && ! is_array( $out['case_form_settings'] ) ) { $errors[] = 'Per-form Case settings structure is invalid.'; unset( $out['case_form_settings'] ); }
 		$out = Didar_Settings::normalize_case_settings( $out );

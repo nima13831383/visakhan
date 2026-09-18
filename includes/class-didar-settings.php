@@ -193,4 +193,19 @@ class Didar_Settings {
 		$override  = is_scalar( $override ) ? sanitize_text_field( (string) $override ) : '';
 		return '' !== $override ? $override : sanitize_text_field( (string) $registry_default );
 	}
+
+	/** Return normalized SMS event configuration; credentials are intentionally separate. */
+	public function notification_events() {
+		$settings = $this->all();
+		return class_exists( 'Didar_Notification_Event_Registry' ) ? Didar_Notification_Event_Registry::normalize_configuration( $settings['didar_notification_events'] ?? array() ) : array();
+	}
+
+	/** Resolve protected provider credentials only at delivery time. Never serialize this result into a job. */
+	public function melipayamak_credentials() {
+		$settings = $this->all();
+		return array(
+			'username' => isset( $settings['melipayamak_username'] ) && is_scalar( $settings['melipayamak_username'] ) ? sanitize_text_field( (string) $settings['melipayamak_username'] ) : '',
+			'api_key'  => isset( $settings['melipayamak_api_key'] ) && is_scalar( $settings['melipayamak_api_key'] ) ? (string) $settings['melipayamak_api_key'] : '',
+		);
+	}
 }

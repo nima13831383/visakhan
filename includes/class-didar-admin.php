@@ -67,6 +67,10 @@ class Didar_Admin {
 		add_action( 'admin_post_didar_settings_import_apply', array( $this, 'settings_import_apply' ) );
 		add_action( 'admin_post_didar_save_case_settings', array( $this, 'save_case_settings' ) );
 		add_action( 'admin_post_didar_rotate_webhook_secret', array( $this, 'rotate_webhook_secret' ) );
+		add_action( 'admin_post_didar_save_notification_settings', array( $this, 'save_notification_settings' ) );
+		add_action( 'admin_post_didar_run_notification_job', array( $this, 'run_notification_job' ) );
+		add_action( 'admin_post_didar_retry_notification_job', array( $this, 'retry_notification_job' ) );
+		add_action( 'admin_post_didar_discard_notification_job', array( $this, 'discard_notification_job' ) );
 	}
 
 	public function render_form_default_assignees() {
@@ -1781,8 +1785,47 @@ class Didar_Admin {
 		exit;
 	}
 
+	public function save_notification_settings() {
+		if ( 'POST' !== strtoupper( (string) ( $_SERVER['REQUEST_METHOD'] ?? '' ) ) || ! current_user_can( 'didar_manage_settings' ) || ! check_admin_referer( 'didar_save_notification_settings' ) ) {
+			wp_die( esc_html__( 'درخواست نامعتبر است.', 'didar' ), '', array( 'response' => 403 ) );
+		}
+		$current = $this->settings->all();
+		$raw_events = isset( $_POST['didar_notification_events'] ) && is_array( $_POST['didar_notification_events'] ) ? wp_unslash( $_POST['didar_notification_events'] ) : array();
+		$current['didar_notification_events'] = Didar_Notification_Event_Registry::normalize_configuration( $raw_events );
+		if ( isset( $_POST['melipayamak_username'] ) && ! is_array( $_POST['melipayamak_username'] ) ) {
+			$current['melipayamak_username'] = sanitize_text_field( wp_unslash( $_POST['melipayamak_username'] ) );
+		}
+		$clear_key = ! empty( $_POST['melipayamak_clear_api_key'] );
+		$submitted_key = isset( $_POST['melipayamak_api_key'] ) && ! is_array( $_POST['melipayamak_api_key'] ) ? (string) wp_unslash( $_POST['melipayamak_api_key'] ) : '';
+		if ( $clear_key ) { $current['melipayamak_api_key'] = ''; }
+		elseif ( '' !== $submitted_key ) { $current['melipayamak_api_key'] = $submitted_key; }
+		update_option( Didar_Settings::OPTION_NAME, $current, false );
+		wp_safe_redirect( add_query_arg( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'page' => 'didar-diagnostics', 'didar_sms_tab' => 'sms', 'didar_sms_saved' => '1' ), admin_url( 'edit.php' ) ) );
+		exit;
+	}
+
+	public function run_notification_job() { $this->notification_job_request( 'didar_run_notification_job', 'run' ); }
+	public function retry_notification_job() { $this->notification_job_request( 'didar_retry_notification_job', 'retry' ); }
+	public function discard_notification_job() { $this->notification_job_request( 'didar_discard_notification_job', 'discard' ); }
+
+	private function notification_job_request( $nonce_action, $operation ) {
+		if ( 'POST' !== strtoupper( (string) ( $_SERVER['REQUEST_METHOD'] ?? '' ) ) || ! current_user_can( 'didar_manage_settings' ) || ! check_admin_referer( $nonce_action ) ) {
+			wp_die( esc_html__( 'درخواست نامعتبر است.', 'didar' ), '', array( 'response' => 403 ) );
+		}
+		$job_id = isset( $_POST['notification_job_id'] ) && ! is_array( $_POST['notification_job_id'] ) ? absint( $_POST['notification_job_id'] ) : 0;
+		if ( ! $job_id ) { wp_die( esc_html__( 'مورد صف معتبر نیست.', 'didar' ), '', array( 'response' => 400 ) ); }
+		$manager = Didar_Plugin::instance()->notification_manager;
+		if ( 'run' === $operation ) { $manager->process_job( $job_id ); }
+		elseif ( 'retry' === $operation ) { $manager->retry_job( $job_id ); }
+		else { $manager->queue()->discard( $job_id ); }
+		wp_safe_redirect( add_query_arg( array( 'post_type' => Didar_Post_Type::POST_TYPE, 'page' => 'didar-diagnostics', 'didar_sms_tab' => 'sms', 'didar_sms_action' => $operation ), admin_url( 'edit.php' ) ) );
+		exit;
+	}
+
 	public function render_diagnostics_page() {
 		if ( ! current_user_can( 'didar_manage_settings' ) ) { wp_die( esc_html__( 'دسترسی کافی نیست.', 'didar' ) ); }
+		$tab = isset( $_GET['didar_sms_tab'] ) && ! is_array( $_GET['didar_sms_tab'] ) ? sanitize_key( wp_unslash( $_GET['didar_sms_tab'] ) ) : 'diagnostics';
+		if ( 'sms' === $tab ) { $this->render_notification_settings_page(); return; }
 		$filters = array(); foreach ( array( 'level', 'form_type', 'operation', 'local_id', 'trace_id' ) as $key ) { $filters[ $key ] = isset( $_GET[ $key ] ) && ! is_array( $_GET[ $key ] ) ? sanitize_text_field( wp_unslash( $_GET[ $key ] ) ) : ''; }
 		$rows = $this->logger->recent( $filters, 100 ); $clear = wp_nonce_url( admin_url( 'admin-post.php?action=didar_clear_logs' ), 'didar_clear_logs' ); $next = wp_next_scheduled( Didar_Sync_Manager::CRON_HOOK ); $queue = Didar_Plugin::instance()->sync_manager->queue_status();
 		$queue_notice = isset( $_GET['didar_queue_purged'] ) && ! is_array( $_GET['didar_queue_purged'] ) ? sanitize_key( wp_unslash( $_GET['didar_queue_purged'] ) ) : '';
@@ -1791,6 +1834,7 @@ class Didar_Admin {
 		$purged_persons = isset( $_GET['didar_queue_persons'] ) && ! is_array( $_GET['didar_queue_persons'] ) ? absint( $_GET['didar_queue_persons'] ) : 0;
 		$purged_scheduled = isset( $_GET['didar_queue_scheduled'] ) && ! is_array( $_GET['didar_queue_scheduled'] ) ? absint( $_GET['didar_queue_scheduled'] ) : 0;
 		echo '<div class="wrap" dir="rtl"><h1>' . esc_html__( 'تشخیص دیدار', 'didar' ) . '</h1>';
+		$this->render_diagnostics_tabs( 'diagnostics' );
 		if ( 'purged' === $queue_notice ) { echo '<div class="notice notice-success is-dismissible"><p>صف همگام‌سازی پاک شد. درخواست‌ها: ' . esc_html( $purged_submissions ) . '، Caseها: ' . esc_html( $purged_cases ) . '، مخاطبین: ' . esc_html( $purged_persons ) . '، زمان‌بندی‌ها: ' . esc_html( $purged_scheduled ) . ' مورد بدون اجرا حذف شد.</p></div>'; }
 		if ( 'partial' === $queue_notice ) { echo '<div class="notice notice-warning"><p>بخشی از صف پاک شد؛ برخی آیتم‌ها در زمان عملیات دوباره ایجاد یا در حال اجرا بودند. وضعیت فعلی صف را بررسی کنید.</p></div>'; }
 		echo '<p>لاگ‌ها در جدول اختصاصی WordPress ذخیره می‌شوند و حداکثر ۵۰۰۰ رویداد نگه‌داری می‌شود. <a class="button" href="' . esc_url( $clear ) . '" onclick="return confirm(\'گزارش‌های دیدار پاک شود؟\');">پاک کردن گزارش‌ها</a></p><p><strong>WP-Cron دیدار:</strong> ' . esc_html( $next ? 'زمان‌بندی شده؛ ' . Didar_Logger::display_timestamp( $next ) : 'زمان‌بندی نشده' ) . '</p>';
@@ -1800,6 +1844,63 @@ class Didar_Admin {
 		echo '<table class="widefat striped" style="margin-top:12px"><thead><tr><th>Time</th><th>Level</th><th>Operation</th><th>Direction</th><th>Form</th><th>Local</th><th>External</th><th>Message</th><th>Trace</th></tr></thead><tbody>';
 		foreach ( $rows as $row ) { $details = isset( $row['context'] ) ? wp_json_encode( json_decode( $row['context'], true ), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) : ''; echo '<tr><td>' . esc_html( Didar_Logger::display_time( $row['created_at_gmt'] ) ) . '</td><td>' . esc_html( $row['level'] ) . '</td><td>' . esc_html( $row['operation'] ) . '</td><td>' . esc_html( $row['direction'] ) . '</td><td>' . esc_html( $row['form_type'] ) . '</td><td>' . esc_html( $row['local_id'] ) . '</td><td>' . esc_html( $row['external_id'] ) . '</td><td>' . esc_html( $row['message'] ) . '<details><summary>جزئیات</summary><code>' . esc_html( substr( (string) $details, 0, 1200 ) ) . '</code></details></td><td><code>' . esc_html( $row['trace_id'] ) . '</code></td></tr>'; }
 		if ( ! $rows ) { echo '<tr><td colspan="9">گزارشی ثبت نشده است.</td></tr>'; } echo '</tbody></table></div>';
+	}
+
+	private function render_diagnostics_tabs( $active ) {
+		$base = admin_url( 'edit.php?post_type=' . Didar_Post_Type::POST_TYPE . '&page=didar-diagnostics' );
+		$diagnostics = esc_url( $base );
+		$sms = esc_url( add_query_arg( 'didar_sms_tab', 'sms', $base ) );
+		echo '<nav class="nav-tab-wrapper" style="margin-bottom:16px"><a class="nav-tab ' . ( 'diagnostics' === $active ? 'nav-tab-active' : '' ) . '" href="' . $diagnostics . '">تشخیص و گزارش</a><a class="nav-tab ' . ( 'sms' === $active ? 'nav-tab-active' : '' ) . '" href="' . $sms . '">اعلان‌های پیامکی</a></nav>';
+	}
+
+	private function render_notification_settings_page() {
+		$settings = $this->settings->all();
+		$config = Didar_Notification_Event_Registry::normalize_configuration( $settings['didar_notification_events'] ?? array() );
+		$users = $this->service->eligible_assignees();
+		$jobs = Didar_Plugin::instance()->notification_manager->queue()->list_jobs( array(), 100 );
+		$action = isset( $_GET['didar_sms_action'] ) && ! is_array( $_GET['didar_sms_action'] ) ? sanitize_key( wp_unslash( $_GET['didar_sms_action'] ) ) : '';
+		echo '<div class="wrap" dir="rtl"><h1>تشخیص دیدار</h1>';
+		$this->render_diagnostics_tabs( 'sms' );
+		if ( isset( $_GET['didar_sms_saved'] ) ) { echo '<div class="notice notice-success is-dismissible"><p>تنظیمات اعلان پیامکی ذخیره شد.</p></div>'; }
+		if ( $action ) { echo '<div class="notice notice-success is-dismissible"><p>عملیات صف اعلان پیامکی انجام شد.</p></div>'; }
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '"><input type="hidden" name="action" value="didar_save_notification_settings">' . wp_nonce_field( 'didar_save_notification_settings', '_wpnonce', true, false );
+		echo '<section style="background:#fff;border:1px solid #ccd0d4;padding:16px;margin:0 0 18px"><h2 style="margin-top:0">اتصال ملی پیامک</h2><p class="description">ارسال با REST کلاسیک SendByBaseNumber2 انجام می‌شود. کلید API فقط در سمت سرور نگه‌داری می‌شود و در خروجی تنظیمات یا صف نمایش داده نمی‌شود.</p><p><label>نام کاربری<br><input type="text" class="regular-text" name="melipayamak_username" value="' . esc_attr( $settings['melipayamak_username'] ?? '' ) . '" autocomplete="off"></label></p><p><label>API Key<br><input type="password" class="regular-text" name="melipayamak_api_key" value="" placeholder="' . esc_attr( ! empty( $settings['melipayamak_api_key'] ) ? '••••••••' : '' ) . '" autocomplete="new-password"></label> <label><input type="checkbox" name="melipayamak_clear_api_key" value="1"> حذف کلید ذخیره‌شده</label></p><p class="description">خالی گذاشتن کلید، مقدار ذخیره‌شده را حفظ می‌کند.</p></section>';
+		echo '<section style="background:#fff;border:1px solid #ccd0d4;padding:16px;margin:0 0 18px"><h2 style="margin-top:0">رویدادها</h2><p class="description">همه رویدادها در ابتدا خاموش هستند. تنظیمات هر رویداد هنگام ایجاد کار صف در خود آن کار snapshot می‌شود.</p><table class="widefat striped"><thead><tr><th>رویداد</th><th>فعال</th><th>کاربران همکار</th><th>گیرنده درخواست</th><th>مسئول فعلی</th><th>Body ID</th><th>متغیرهای مرتب‌شده</th></tr></thead><tbody>';
+		foreach ( Didar_Notification_Event_Registry::all() as $event_key => $definition ) {
+			$item = $config[ $event_key ];
+			$base = 'didar_notification_events[' . $event_key . ']';
+			echo '<tr><td><strong>' . esc_html( $definition['label'] ) . '</strong><br><code>' . esc_html( $event_key ) . '</code></td><td><label><input type="checkbox" name="' . esc_attr( $base . '[enabled]' ) . '" value="1" ' . checked( ! empty( $item['enabled'] ), true, false ) . '> فعال</label></td><td><select multiple size="4" name="' . esc_attr( $base . '[user_ids][]' ) . '" style="min-width:180px">'; foreach ( $users as $user ) { echo '<option value="' . absint( $user->ID ) . '" ' . selected( in_array( (int) $user->ID, (array) $item['user_ids'], true ), true, false ) . '>' . esc_html( $user->display_name . ' #' . $user->ID ) . '</option>'; } echo '</select></td><td><label><input type="checkbox" name="' . esc_attr( $base . '[send_to_owner]' ) . '" value="1" ' . checked( ! empty( $item['send_to_owner'] ), true, false ) . '> بله</label></td><td><label><input type="checkbox" name="' . esc_attr( $base . '[send_to_assignee]' ) . '" value="1" ' . checked( ! empty( $item['send_to_assignee'] ), true, false ) . '> بله</label></td><td><input type="number" min="1" class="small-text" name="' . esc_attr( $base . '[body_id]' ) . '" value="' . esc_attr( $item['body_id'] ) . '"></td><td><div class="didar-notification-variable-list" data-event-key="' . esc_attr( $event_key ) . '">';
+			$variables = $item['variables'] ? $item['variables'] : array( '' );
+			foreach ( $variables as $variable ) { $this->render_notification_variable_row( $base, $variable ); }
+			echo '</div><button type="button" class="button didar-add-notification-variable">افزودن متغیر</button></td></tr>';
+		}
+		echo '</tbody></table><p><button class="button button-primary" type="submit">ذخیره تنظیمات اعلان</button></p></section></form>';
+		echo '<section style="background:#fff;border:1px solid #ccd0d4;padding:16px"><h2 style="margin-top:0">صف و تشخیص ارسال پیامکی</h2><p>شماره گیرنده فقط به‌صورت ماسک‌شده نمایش داده می‌شود. Body ID، متغیرها و مقصد داخل هر کار هنگام ایجاد snapshot شده‌اند و تغییرات بعدی تنظیمات روی آن‌ها اثر ندارد.</p><table class="widefat striped"><thead><tr><th>شناسه</th><th>رویداد</th><th>درخواست</th><th>گیرنده</th><th>Body ID</th><th>وضعیت</th><th>تلاش</th><th>ایجاد / تلاش بعدی</th><th>خطای امن</th><th>عملیات</th></tr></thead><tbody>';
+		foreach ( $jobs as $job ) {
+			$definition = Didar_Notification_Event_Registry::get( $job['event_key'] );
+			$masked = $this->mask_notification_destination( $job['destination'] );
+			$action_url = admin_url( 'admin-post.php' );
+			echo '<tr><td><code>#' . absint( $job['job_id'] ) . '</code></td><td>' . esc_html( $definition['label'] ?? $job['event_key'] ) . '</td><td>#' . absint( $job['submission_id'] ) . '</td><td>' . esc_html( $masked ?: '—' ) . '</td><td>' . absint( $job['body_id'] ) . '</td><td>' . esc_html( $job['state'] ) . '</td><td>' . absint( $job['attempts'] ) . ' / ' . absint( Didar_Notification_Queue::MAX_ATTEMPTS ) . '</td><td>' . esc_html( (string) $job['created_at'] . ' / ' . (string) $job['next_attempt_at'] ) . '</td><td>' . esc_html( $job['error_message'] ?: '—' ) . '</td><td>';
+			if ( in_array( $job['state'], array( 'queued', 'retry' ), true ) ) { echo '<form method="post" action="' . esc_url( $action_url ) . '" style="display:inline-block"><input type="hidden" name="action" value="didar_run_notification_job"><input type="hidden" name="notification_job_id" value="' . absint( $job['job_id'] ) . '">' . wp_nonce_field( 'didar_run_notification_job', '_wpnonce', true, false ) . '<button class="button button-secondary">اجرای فوری</button></form> '; }
+			if ( 'failed' === $job['state'] ) { echo '<form method="post" action="' . esc_url( $action_url ) . '" style="display:inline-block"><input type="hidden" name="action" value="didar_retry_notification_job"><input type="hidden" name="notification_job_id" value="' . absint( $job['job_id'] ) . '">' . wp_nonce_field( 'didar_retry_notification_job', '_wpnonce', true, false ) . '<button class="button">تلاش مجدد</button></form> '; }
+			if ( in_array( $job['state'], array( 'queued', 'retry', 'failed' ), true ) ) { echo '<form method="post" action="' . esc_url( $action_url ) . '" style="display:inline-block"><input type="hidden" name="action" value="didar_discard_notification_job"><input type="hidden" name="notification_job_id" value="' . absint( $job['job_id'] ) . '">' . wp_nonce_field( 'didar_discard_notification_job', '_wpnonce', true, false ) . '<button class="button button-link-delete">دور انداختن</button></form>'; }
+			echo '</td></tr>';
+		}
+		if ( ! $jobs ) { echo '<tr><td colspan="10">موردی در صف اعلان پیامکی نیست.</td></tr>'; }
+		echo '</tbody></table></section></div>';
+		echo '<script>(function(){var vars=' . wp_json_encode( Didar_Notification_Event_Registry::variables(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) . ';function row(base,value){var wrap=document.createElement("div");wrap.className="didar-notification-variable-row";var select=document.createElement("select");select.name=base+"[variables][]";select.innerHTML="<option value=\"\">— بدون متغیر —</option>";Object.keys(vars).forEach(function(key){var option=document.createElement("option");option.value=key;option.textContent=vars[key]+" ("+key+")";option.selected=key===value;select.appendChild(option);});var button=document.createElement("button");button.type="button";button.className="button-link-delete didar-remove-notification-variable";button.textContent="حذف";wrap.appendChild(select);wrap.appendChild(button);return wrap;}document.addEventListener("click",function(e){var add=e.target.closest(".didar-add-notification-variable"),remove=e.target.closest(".didar-remove-notification-variable");if(add){var list=add.parentNode.querySelector(".didar-notification-variable-list"),base="didar_notification_events["+list.getAttribute("data-event-key")+"]";list.appendChild(row(base,""));}if(remove){var list=remove.closest(".didar-notification-variable-list");if(list.children.length>1)remove.parentNode.remove();else remove.parentNode.querySelector("select").value="";}});document.querySelectorAll(".didar-notification-variable-list").forEach(function(list){list.querySelectorAll(".didar-notification-variable-row").forEach(function(item){if(!item.querySelector(".didar-remove-notification-variable")){var button=document.createElement("button");button.type="button";button.className="button-link-delete didar-remove-notification-variable";button.textContent="حذف";item.appendChild(button);}});});}());</script>';
+	}
+
+	private function render_notification_variable_row( $base, $selected ) {
+		echo '<div class="didar-notification-variable-row"><select name="' . esc_attr( $base . '[variables][]' ) . '"><option value="">— بدون متغیر —</option>';
+		foreach ( Didar_Notification_Event_Registry::variables() as $key => $label ) { echo '<option value="' . esc_attr( $key ) . '" ' . selected( $selected, $key, false ) . '>' . esc_html( $label . ' (' . $key . ')' ) . '</option>'; }
+		echo '</select> <button type="button" class="button-link-delete didar-remove-notification-variable">حذف</button></div>';
+	}
+
+	private function mask_notification_destination( $destination ) {
+	$destination = preg_replace( '/\D+/', '', (string) $destination );
+	if ( 11 !== strlen( $destination ) ) { return ''; }
+	return substr( $destination, 0, 2 ) . '******' . substr( $destination, -3 );
 	}
 
 	private function render_queue_manager() {

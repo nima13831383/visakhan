@@ -21,6 +21,7 @@ class Test_Didar_Schema_Manager extends WP_UnitTestCase {
 			array(
 				Didar_Event_Log::table_name(),
 				Didar_File_Service::table_name(),
+				Didar_Notification_Queue::table_name(),
 			),
 			Didar_Schema_Manager::required_tables()
 		);
@@ -49,6 +50,18 @@ class Test_Didar_Schema_Manager extends WP_UnitTestCase {
 		$this->assertContains( $table_name, Didar_Schema_Manager::missing_tables() );
 		$this->assertTrue( Didar_Schema_Manager::maybe_repair() );
 		$this->assertTrue( Didar_Event_Log::schema_is_current() );
+		$this->assertNotContains( $table_name, Didar_Schema_Manager::missing_tables() );
+	}
+
+	public function test_normal_plugin_check_recreates_a_deleted_notification_table() {
+		global $wpdb;
+
+		$table_name = Didar_Notification_Queue::table_name();
+		$wpdb->query( "DROP TABLE IF EXISTS {$table_name}" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		$this->assertContains( $table_name, Didar_Schema_Manager::missing_tables() );
+		$this->assertTrue( Didar_Schema_Manager::maybe_repair() );
+		$this->assertTrue( Didar_Notification_Queue::schema_is_current() );
 		$this->assertNotContains( $table_name, Didar_Schema_Manager::missing_tables() );
 	}
 
