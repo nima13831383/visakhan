@@ -53,8 +53,10 @@ try {
 
 	$defaults = Didar_Notification_Event_Registry::default_configuration();
 	$legacy = Didar_Notification_Event_Registry::normalize_configuration( array( 'visa_request.created' => array( 'enabled' => 1, 'body_id' => 8001, 'user_ids' => array( $user_id ) ) ) );
-	$assert( 6 === count( Didar_Notification_Event_Registry::all() ), 'Email reuses the six canonical events' );
-	$assert( 6 === count( $defaults ) && false === $defaults['visa_request.created']['email_enabled'], 'Email is disabled by default for every event' );
+	$all_notification_definitions = Didar_Notification_Event_Registry::all();
+	$assert( 10 === count( $all_notification_definitions ), 'Email reuses six canonical events plus four manager subscriptions' );
+	$assert( 6 === count( array_filter( $all_notification_definitions, function ( $definition ) { return empty( $definition['manager_only'] ); } ) ), 'Email still uses the six canonical domain event sources' );
+	$assert( 10 === count( $defaults ) && false === $defaults['visa_request.created']['email_enabled'] && false === $defaults['visa_request.created.managers']['email_enabled'], 'Email is disabled by default for every subscription' );
 	$assert( true === $legacy['visa_request.created']['sms_enabled'] && false === $legacy['visa_request.created']['email_enabled'], 'legacy enabled setting remains SMS-only' );
 
 	$mapping = array( 'first_name', 'request_number', 'form_type' );

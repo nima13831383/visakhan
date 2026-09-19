@@ -20,6 +20,10 @@ class Didar_Notification_Event_Registry {
 			'embassy_appointment.assignee_changed' => array( 'label' => 'تغییر مسئول درخواست وقت سفارت', 'form_type' => 'embassy_appointment', 'trigger' => 'assignee_changed' ),
 			'visa_request.status_changed'        => array( 'label' => 'تغییر وضعیت درخواست ویزا', 'form_type' => 'visa_request', 'trigger' => 'status_changed' ),
 			'embassy_appointment.status_changed' => array( 'label' => 'تغییر وضعیت درخواست وقت سفارت', 'form_type' => 'embassy_appointment', 'trigger' => 'status_changed' ),
+			'visa_request.created.managers' => array( 'label' => 'ایجاد درخواست ویزا — مدیران', 'form_type' => 'visa_request', 'trigger' => 'created', 'source_event' => 'visa_request.created', 'manager_only' => true ),
+			'embassy_appointment.created.managers' => array( 'label' => 'ایجاد درخواست وقت سفارت — مدیران', 'form_type' => 'embassy_appointment', 'trigger' => 'created', 'source_event' => 'embassy_appointment.created', 'manager_only' => true ),
+			'visa_request.status_changed.managers' => array( 'label' => 'تغییر وضعیت درخواست ویزا — مدیران', 'form_type' => 'visa_request', 'trigger' => 'status_changed', 'source_event' => 'visa_request.status_changed', 'manager_only' => true ),
+			'embassy_appointment.status_changed.managers' => array( 'label' => 'تغییر وضعیت درخواست وقت سفارت — مدیران', 'form_type' => 'embassy_appointment', 'trigger' => 'status_changed', 'source_event' => 'embassy_appointment.status_changed', 'manager_only' => true ),
 		);
 	}
 
@@ -34,6 +38,9 @@ class Didar_Notification_Event_Registry {
 			'request_status'     => 'وضعیت درخواست',
 			'request_number'     => 'شماره درخواست',
 			'request_assignee'   => 'مسئول درخواست',
+			'customer_phone'     => 'شماره موبایل مشتری',
+			'user_role'          => 'نقش کاربری مشتری',
+			'request_creator_phone' => 'شماره موبایل ایجادکننده درخواست',
 		);
 	}
 
@@ -105,8 +112,8 @@ class Didar_Notification_Event_Registry {
 				'sms_enabled'      => $sms_enabled,
 				'email_enabled'    => ! empty( $item['email_enabled'] ),
 				'user_ids'         => $user_ids,
-				'send_to_owner'    => ! empty( $item['send_to_owner'] ),
-				'send_to_assignee' => ! empty( $item['send_to_assignee'] ),
+				'send_to_owner'    => ! empty( $definition['manager_only'] ) ? false : ! empty( $item['send_to_owner'] ),
+				'send_to_assignee' => ! empty( $definition['manager_only'] ) ? false : ! empty( $item['send_to_assignee'] ),
 				'body_id'          => $body_id ? (string) $body_id : '',
 				'email_template'   => $email_template,
 				'variables'        => array_values( $variables ),

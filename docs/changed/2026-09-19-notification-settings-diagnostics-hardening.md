@@ -1,0 +1,17 @@
+# Notification settings and diagnostics hardening
+
+Notification configuration now has one canonical admin surface: the `اعلان‌ها` tab in the main ns-didar Settings page. It uses the existing WordPress Settings API and partial-tab sanitizer, so absent controls preserve saved values, explicit checkbox/field empties can clear their setting, and unrelated General, Forms, Profile, and Case settings remain intact.
+
+Melipayamak username and the event configuration are saved through `Didar_Admin::sanitize_didar_settings()`. The API key remains server-side and protected: a blank password field preserves the existing key, an explicit clear control removes it, and a replacement value is saved. Credentials remain excluded from Settings Transfer. The existing legacy admin-post save route delegates to the same sanitizer for compatibility and no longer owns a second persistence implementation.
+
+Diagnostics/Reporting is operational only. The Notification diagnostics tab separates retained terminal queue rows into **گزارش / تاریخچه ارسال** and actionable/in-flight rows into **صف فعال اعلان‌ها**. Both SMS and Email are supported, destinations are masked, filters include channel, and the view is paginated. WordPress mail acceptance and Melipayamak provider acceptance are operational results, not recipient delivery confirmation.
+
+The Notification Queue purge is POST-only, capability- and nonce-protected, and affects only queued, retry, and failed notification jobs. Those rows are marked `discarded` so history is retained; item-specific notification cron events are unscheduled. Processing jobs, the recurring notification worker, Didar synchronization queue/state/locks/events, submissions, users, CRM IDs, configuration, and history remain untouched.
+
+Local no-network coverage includes the notification Save/Reload/Edit/Reload contract, protected-key behavior, ordered mappings, multiline Email templates, Settings Transfer credential exclusion, diagnostics separation, and purge isolation. Existing SMS, Email, Settings, admin persistence, notification queue isolation, and sync recovery smoke checks also pass. No real SMS, Email, Melipayamak call, Didar API call, or CRM mutation was performed. Browser/manual QA remains pending when an authenticated local admin session is unavailable.
+
+## Manager notification subscriptions
+
+The six canonical domain events remain the only emitted request events. Four additional disabled-by-default configuration rows reuse those emissions for explicit manager recipients: Visa and Embassy creation, plus Visa and Embassy canonical Request Status changes. Their stable subscription keys are `visa_request.created.managers`, `embassy_appointment.created.managers`, `visa_request.status_changed.managers`, and `embassy_appointment.status_changed.managers`.
+
+Manager rows use the existing ordered variable whitelist, Body/Pattern ID, Email template, and shared SMS/Email queue. Owner and assignee delivery controls are omitted from the UI and forced off during normalization; only explicitly selected eligible staff users are resolved. Subscription identity is part of the job idempotency key and snapshot, so normal and manager deliveries remain independent while repeated delivery stays idempotent. Settings Transfer normalizes missing manager rows as disabled defaults, preserving older exports. The shared whitelist now includes `customer_phone`, `user_role`, and `request_creator_phone`, with owner/creator identity and Digits mobile resolution handled centrally.

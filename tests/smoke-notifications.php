@@ -57,9 +57,11 @@ try {
 	update_post_meta( $created_post, '_didar_internal_status', 'pending_review' );
 	update_post_meta( $created_post, '_didar_status', 'pending_review' );
 
-	$assert( 6 === count( Didar_Notification_Event_Registry::all() ), 'six canonical events are registered' );
+	$all_notification_definitions = Didar_Notification_Event_Registry::all();
+	$assert( 10 === count( $all_notification_definitions ), 'six canonical events plus four manager subscriptions are registered' );
+	$assert( 6 === count( array_filter( $all_notification_definitions, function ( $definition ) { return empty( $definition['manager_only'] ); } ) ), 'six canonical domain events remain the only emitted event sources' );
 	$defaults = Didar_Notification_Event_Registry::default_configuration();
-	$assert( 6 === count( $defaults ) && 0 === count( array_filter( $defaults, function ( $item ) { return ! empty( $item['enabled'] ); } ) ), 'all notification events are disabled by default' );
+	$assert( 10 === count( $defaults ) && 0 === count( array_filter( $defaults, function ( $item ) { return ! empty( $item['enabled'] ); } ) ), 'all notification subscriptions are disabled by default' );
 
 	$configuration = Didar_Notification_Event_Registry::default_configuration();
 	$configuration['visa_request.created'] = array( 'enabled' => 1, 'user_ids' => array( $user_id ), 'send_to_owner' => 1, 'send_to_assignee' => 0, 'body_id' => '8001', 'variables' => array( 'form_type', 'request_number', 'postal_code' ) );

@@ -105,6 +105,12 @@ try {
 	$assert( $recovered >= 1 && 'retry' === $recovery_after['state'] && (int) $recovery_after['attempts'] === (int) $recovery_before['attempts'], 'Recovery requeues stale work without consuming an attempt' );
 	$assert( ! in_array( (int) $future_job['job_id'], $due_ids, true ) && ! in_array( (int) $active_job['job_id'], $due_ids, true ) && ! in_array( (int) $sent_job['job_id'], $due_ids, true ) && ! in_array( (int) $discarded_job['job_id'], $due_ids, true ), 'Recovery skips future, active, sent, and discarded notification jobs' );
 	$assert( $didar_before_recovery === didar_notification_isolation_state( $created_post, $admin_id ) && $cron_before === didar_notification_isolation_cron_snapshot(), 'Recovery preserves Didar state and scheduled sync events' );
+	$before_purge = didar_notification_isolation_state( $created_post, $admin_id );
+	$settings_before_purge = get_option( Didar_Settings::OPTION_NAME, array() );
+	$purged_ids = $manager->purge_actionable_jobs();
+	$assert( is_array( $purged_ids ) && in_array( (int) $unrelated_job['job_id'], $purged_ids, true ) && 'discarded' === $queue->get( $unrelated_job['job_id'] )['state'], 'Purge discards actionable Notification jobs without executing them' );
+	$assert( 'processing' === $queue->get( $active_job['job_id'] )['state'] && $before_purge === didar_notification_isolation_state( $created_post, $admin_id ) && $settings_before_purge === get_option( Didar_Settings::OPTION_NAME, array() ), 'Notification purge preserves active locks, request/CRM state, and configuration' );
+	$assert( $cron_before === didar_notification_isolation_cron_snapshot(), 'Notification purge leaves Didar scheduled events unchanged' );
 
 	$admin_source = file_get_contents( dirname( __DIR__ ) . '/includes/class-didar-admin.php' );
 	$assert( substr_count( $admin_source, "'didar_run_notification_job'" ) >= 2 && substr_count( $admin_source, "'didar_retry_notification_job'" ) >= 2 && substr_count( $admin_source, "'didar_discard_notification_job'" ) >= 2, 'Each SMS action has a distinct admin-post and nonce action' );

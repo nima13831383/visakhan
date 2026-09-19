@@ -142,6 +142,34 @@ class Didar_Notification_Manager {
 		return $result;
 	}
 
+	public function purge_actionable_jobs() {
+		$ids = $this->queue->purge_actionable();
+		foreach ( $ids as $job_id ) {
+			$this->unschedule_job( $job_id );
+		}
+		return $ids;
+	}
+
+	public function unschedule_job( $job_id ) {
+		$job_id = absint( $job_id );
+		if ( ! $job_id || ! function_exists( '_get_cron_array' ) ) {
+			return 0;
+		}
+		$removed = 0;
+		foreach ( (array) _get_cron_array() as $timestamp => $hooks ) {
+			if ( empty( $hooks[ self::ITEM_HOOK ] ) || ! is_array( $hooks[ self::ITEM_HOOK ] ) ) {
+				continue;
+			}
+			foreach ( $hooks[ self::ITEM_HOOK ] as $event ) {
+				$args = isset( $event['args'] ) && is_array( $event['args'] ) ? $event['args'] : array();
+				if ( isset( $args[0] ) && absint( $args[0] ) === $job_id && wp_unschedule_event( (int) $timestamp, self::ITEM_HOOK, $args ) ) {
+					$removed++;
+				}
+			}
+		}
+		return $removed;
+	}
+
 	private function schedule_job( $job_id, $delay = 5 ) {
 		wp_schedule_single_event( time() + max( 1, absint( $delay ) ), self::ITEM_HOOK, array( absint( $job_id ) ), true );
 	}

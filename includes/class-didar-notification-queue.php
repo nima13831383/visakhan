@@ -136,24 +136,53 @@ class Didar_Notification_Queue {
 		return $this->hydrate( $row );
 	}
 
-	public function list_jobs( $filters = array(), $limit = 100 ) {
+	public function list_jobs( $filters = array(), $limit = 100, $offset = 0 ) {
 		global $wpdb;
 		$filters = is_array( $filters ) ? $filters : array();
 		$limit = min( 200, max( 1, absint( $limit ) ) );
+		$offset = max( 0, absint( $offset ) );
 		$where = array( '1=1' );
 		$args = array();
-		if ( ! empty( $filters['state'] ) ) { $where[] = 'state = %s'; $args[] = sanitize_key( $filters['state'] ); }
+		if ( ! empty( $filters['states'] ) && is_array( $filters['states'] ) ) {
+			$states = array_values( array_intersect( array( 'queued', 'processing', 'retry', 'sent', 'failed', 'discarded' ), array_map( 'sanitize_key', $filters['states'] ) ) );
+			if ( $states ) { $where[] = 'state IN (' . implode( ',', array_fill( 0, count( $states ), '%s' ) ) . ')'; foreach ( $states as $state ) { $args[] = $state; } }
+		} elseif ( ! empty( $filters['state'] ) ) { $where[] = 'state = %s'; $args[] = sanitize_key( $filters['state'] ); }
 		if ( ! empty( $filters['event_key'] ) ) { $where[] = 'event_key = %s'; $args[] = Didar_Notification_Event_Registry::normalize_key( $filters['event_key'] ); }
 		if ( ! empty( $filters['channel'] ) ) { $where[] = 'channel = %s'; $args[] = in_array( sanitize_key( $filters['channel'] ), array( 'sms', 'email' ), true ) ? sanitize_key( $filters['channel'] ) : 'sms'; }
 		if ( ! empty( $filters['submission_id'] ) ) { $where[] = 'submission_id = %d'; $args[] = absint( $filters['submission_id'] ); }
-		$sql = 'SELECT * FROM ' . self::table_name() . ' WHERE ' . implode( ' AND ', $where ) . ' ORDER BY created_at DESC, job_id DESC LIMIT %d';
+		$sql = 'SELECT * FROM ' . self::table_name() . ' WHERE ' . implode( ' AND ', $where ) . ' ORDER BY created_at DESC, job_id DESC LIMIT %d OFFSET %d';
 		$args[] = $limit;
+		$args[] = $offset;
 		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $args ), ARRAY_A );
 		return array_values( array_filter( array_map( array( $this, 'hydrate' ), (array) $rows ) ) );
 	}
 
 	public function count( $filters = array() ) {
-		return count( $this->list_jobs( $filters, 200 ) );
+		global $wpdb;
+		$filters = is_array( $filters ) ? $filters : array();
+		$where = array( '1=1' );
+		$args = array();
+		if ( ! empty( $filters['states'] ) && is_array( $filters['states'] ) ) {
+			$states = array_values( array_intersect( array( 'queued', 'processing', 'retry', 'sent', 'failed', 'discarded' ), array_map( 'sanitize_key', $filters['states'] ) ) );
+			if ( $states ) { $where[] = 'state IN (' . implode( ',', array_fill( 0, count( $states ), '%s' ) ) . ')'; foreach ( $states as $state ) { $args[] = $state; } }
+		} elseif ( ! empty( $filters['state'] ) ) { $where[] = 'state = %s'; $args[] = sanitize_key( $filters['state'] ); }
+		if ( ! empty( $filters['event_key'] ) ) { $where[] = 'event_key = %s'; $args[] = Didar_Notification_Event_Registry::normalize_key( $filters['event_key'] ); }
+		if ( ! empty( $filters['channel'] ) ) { $where[] = 'channel = %s'; $args[] = in_array( sanitize_key( $filters['channel'] ), array( 'sms', 'email' ), true ) ? sanitize_key( $filters['channel'] ) : 'sms'; }
+		if ( ! empty( $filters['submission_id'] ) ) { $where[] = 'submission_id = %d'; $args[] = absint( $filters['submission_id'] ); }
+		$sql = 'SELECT COUNT(*) FROM ' . self::table_name() . ' WHERE ' . implode( ' AND ', $where );
+		return (int) $wpdb->get_var( $wpdb->prepare( $sql, $args ) );
+	}
+
+	public function purge_actionable() {
+		$ids = array();
+		do {
+			$jobs = $this->list_jobs( array( 'states' => array( 'queued', 'retry', 'failed' ) ), 200 );
+			$discarded = 0;
+			foreach ( $jobs as $job ) {
+				if ( $this->discard( $job['job_id'] ) ) { $ids[] = absint( $job['job_id'] ); $discarded++; }
+			}
+		} while ( $jobs && $discarded );
+		return $ids;
 	}
 
 	/** Atomically claim one due job so overlapping workers cannot send twice. */

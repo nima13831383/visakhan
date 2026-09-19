@@ -192,6 +192,12 @@ Reusable profile document keys are `national_card_front`, `national_card_back`, 
 
 Current shortcodes registered by `Didar_Shortcodes` are `[didar_form type="FORM_TYPE"]`, `[didar_form_access form="FORM_TYPE" mode="link|qr"]`, `[didar_submissions]`, `[didar_submission_details]`, and `[didar_submission_edit]`. Form-access settings provide a form URL and safe public QR/barcode image. The event presentation layer localizes known events, statuses, Registry labels, and readable before/after values without rewriting stored raw event data; IDs and raw error/API codes remain available as technical diagnostics.
 
+## Notification subscriptions
+
+The notification system has six canonical domain event sources for Visa and Embassy creation, assignee changes, and canonical Request Status changes. Four additional disabled-by-default manager-only configuration rows reuse those source events: `visa_request.created.managers`, `embassy_appointment.created.managers`, `visa_request.status_changed.managers`, and `embassy_appointment.status_changed.managers`. They are configuration subscriptions, not new hooks or domain events, and legacy Public Status does not trigger them.
+
+Manager subscriptions independently snapshot SMS/Email settings, Body/Pattern IDs, ordered values, Email templates, subjects, and selected eligible staff recipients. Owner and assignee controls are omitted and normalized off; explicit manager selections are the only recipient source. Subscription identity is included in idempotency, so ordinary and manager jobs do not collide. Settings Transfer normalizes missing manager rows from older exports as disabled defaults. The approved variable whitelist now also includes `customer_phone`, `user_role`, and `request_creator_phone`; they resolve through canonical WordPress owner/creator identity and the existing Digits mobile helper. Local manager fanout, identity-source, idempotency, transfer, and settings-rendering smoke coverage passes without network or provider calls. Browser/manual QA and live provider verification remain pending.
+
 ## Settings transfer
 
 `Didar_Settings::OPTION_NAME` is `didar_settings`. `Didar_Settings_Transfer` uses a versioned allowlist (`ns-didar-settings`, schema 1), preview, merge/replace, backup, write verification, and rollback on a mismatch.

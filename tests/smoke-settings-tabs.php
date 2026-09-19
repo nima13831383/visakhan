@@ -280,7 +280,7 @@ try {
 	ob_start();
 	$admin->render_settings_page();
 	$html = ob_get_clean();
-	$assert( 4 === substr_count( $html, 'nav-tab ' ), 'four Settings tabs render' );
+	$assert( 5 === substr_count( $html, 'nav-tab ' ) && false !== strpos( $html, 'اعلان‌ها' ), 'five Settings tabs including Notifications render' );
 	$assert( false !== strpos( $html, 'tab=forms' ), 'Forms tab URL renders' );
 	$assert( false !== strpos( $html, 'didar_settings[_active_tab]' ), 'active tab marker renders' );
 	$assert( false === strpos( $html, '[field_mappings][companion_uid]' ), 'business companion_uid absent from rendered UI' );
